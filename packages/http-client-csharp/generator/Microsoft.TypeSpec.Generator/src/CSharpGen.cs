@@ -40,7 +40,6 @@ namespace Microsoft.TypeSpec.Generator
         {
             CodeModelGenerator.Instance.Emitter.Info("Starting code generation");
             CodeModelGenerator.Instance.Stopwatch.Start();
-            ProviderReferenceMapAnalyzer.ResetPreWriteAccessibility();
 
             var outputPath = CodeModelGenerator.Instance.Configuration.OutputDirectory;
             var generatedSourceOutputPath = CodeModelGenerator.Instance.Configuration.ProjectGeneratedDirectory;
@@ -121,48 +120,53 @@ namespace Microsoft.TypeSpec.Generator
                 }
             });
 
-            if (ProviderReferenceMapShadowAnalyzer.UseShadowMap)
+            ProviderReferenceMapSession? referenceMapSession = null;
+            try
             {
-                MeasureGenerationStep("Generation.ApplyPreWriteAccessibility", () => generatedCodeWorkspace.ApplyPreWriteAccessibility(output.TypeProviders));
-            }
+                referenceMapSession = MeasureGenerationStep(
+                    "Generation.PrepareProviderReferenceMap",
+                    () => ProviderReferenceMapAnalyzer.PrepareForGeneration(output.TypeProviders));
 
-            MeasureGenerationStep("Generation.WriteTypeProviders", () =>
-            {
-                foreach (var outputType in output.TypeProviders)
+                MeasureGenerationStep("Generation.WriteTypeProviders", () =>
                 {
-                    if (ProviderReferenceMapShadowAnalyzer.UseShadowMap && !ProviderReferenceMapAnalyzer.ShouldWriteProvider(outputType))
+                    foreach (var outputType in output.TypeProviders)
                     {
-                        continue;
-                    }
-
-                    if (outputType is ModelFactoryProvider && outputType.Methods.Count == 0)
-                    {
-                        continue;
-                    }
-
-                    var writer = CodeModelGenerator.Instance.GetWriter(outputType);
-                    generateFilesTasks.Add(generatedCodeWorkspace.AddGeneratedFile(writer.Write()));
-
-                    foreach (var serialization in outputType.SerializationProviders)
-                    {
-                        if (ProviderReferenceMapShadowAnalyzer.UseShadowMap && !ProviderReferenceMapAnalyzer.ShouldWriteProvider(serialization))
+                        if (!referenceMapSession.ShouldWriteProvider(outputType))
                         {
                             continue;
                         }
 
-                        writer = CodeModelGenerator.Instance.GetWriter(serialization);
+                        if (outputType is ModelFactoryProvider && outputType.Methods.Count == 0)
+                        {
+                            continue;
+                        }
+
+                        var writer = CodeModelGenerator.Instance.GetWriter(outputType);
                         generateFilesTasks.Add(generatedCodeWorkspace.AddGeneratedFile(writer.Write()));
+
+                        foreach (var serialization in outputType.SerializationProviders)
+                        {
+                            if (!referenceMapSession.ShouldWriteProvider(serialization))
+                            {
+                                continue;
+                            }
+
+                            writer = CodeModelGenerator.Instance.GetWriter(serialization);
+                            generateFilesTasks.Add(generatedCodeWorkspace.AddGeneratedFile(writer.Write()));
+                        }
                     }
-                }
-            });
+                });
 
-            // Add all the generated files to the workspace
-            await MeasureGenerationStepAsync("Generation.AddGeneratedFilesToWorkspace", () => Task.WhenAll(generateFilesTasks));
+                // Add all the generated files to the workspace
+                await MeasureGenerationStepAsync("Generation.AddGeneratedFilesToWorkspace", () => Task.WhenAll(generateFilesTasks));
 
-            if (ProviderReferenceMapShadowAnalyzer.UseShadowMap)
+                MeasureGenerationStep(
+                    "Generation.RestorePreWriteModelFactoryMethods",
+                    referenceMapSession.RestorePreWriteModelFactoryMethods);
+            }
+            finally
             {
-                MeasureGenerationStep("Generation.ProviderReferenceMapAnalysis", () => generatedCodeWorkspace.AnalyzeProviderReferenceMap(output.TypeProviders));
-                ProviderReferenceMapAnalyzer.RestorePreWriteModelFactoryMethods();
+                referenceMapSession?.Dispose();
             }
 
             LoggingHelpers.LogElapsedTime("All generated types have been written into memory");
@@ -171,9 +175,8 @@ namespace Microsoft.TypeSpec.Generator
             MeasureGenerationStep("Generation.DeleteOldGeneratedFiles", () => DeleteDirectory(generatedSourceOutputPath, GetFilesToKeep()));
 
             LoggingHelpers.LogElapsedTime("All old generated files have been deleted");
-
             await MeasureGenerationStepAsync("Generation.PostProcessAsync", generatedCodeWorkspace.PostProcessAsync);
-            ProviderReferenceMapAnalyzer.ResetPreWriteAccessibility();
+            await MeasureGenerationStepAsync("Generation.PostProcessAsync", generatedCodeWorkspace.PostProcessAsync);
 
             // Write the generated files to the output directory
             await MeasureGenerationStepAsync("Generation.WriteGeneratedFilesToDisk", async () =>

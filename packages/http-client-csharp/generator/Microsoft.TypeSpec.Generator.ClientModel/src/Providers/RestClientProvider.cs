@@ -1436,5 +1436,10 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
             return true;
         }
+
+        private static bool IsContentTypeParameter(InputParameter parameter, bool includeInputHeaderParameter = true) =>
+            includeInputHeaderParameter && parameter is InputHeaderParameter { IsContentType: true } ||
+                parameter is InputMethodParameter { Location: InputRequestLocation.Header } &&
+                string.Equals(parameter.SerializedName, "Content-Type", StringComparison.OrdinalIgnoreCase);
     }
 }

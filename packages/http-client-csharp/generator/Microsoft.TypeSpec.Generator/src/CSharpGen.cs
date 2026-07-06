@@ -123,15 +123,18 @@ namespace Microsoft.TypeSpec.Generator
             ProviderReferenceMapSession? referenceMapSession = null;
             try
             {
-                referenceMapSession = MeasureGenerationStep(
-                    "Generation.PrepareProviderReferenceMap",
-                    () => ProviderReferenceMapAnalyzer.PrepareForGeneration(output.TypeProviders));
+                if (ProviderReferenceMapShadowAnalyzer.UseShadowMap)
+                {
+                    referenceMapSession = MeasureGenerationStep(
+                        "Generation.PrepareProviderReferenceMap",
+                        () => ProviderReferenceMapAnalyzer.PrepareForGeneration(output.TypeProviders));
+                }
 
                 MeasureGenerationStep("Generation.WriteTypeProviders", () =>
                 {
                     foreach (var outputType in output.TypeProviders)
                     {
-                        if (!referenceMapSession.ShouldWriteProvider(outputType))
+                        if (referenceMapSession != null && !referenceMapSession.ShouldWriteProvider(outputType))
                         {
                             continue;
                         }
@@ -146,7 +149,7 @@ namespace Microsoft.TypeSpec.Generator
 
                         foreach (var serialization in outputType.SerializationProviders)
                         {
-                            if (!referenceMapSession.ShouldWriteProvider(serialization))
+                            if (referenceMapSession != null && !referenceMapSession.ShouldWriteProvider(serialization))
                             {
                                 continue;
                             }
@@ -160,23 +163,25 @@ namespace Microsoft.TypeSpec.Generator
                 // Add all the generated files to the workspace
                 await MeasureGenerationStepAsync("Generation.AddGeneratedFilesToWorkspace", () => Task.WhenAll(generateFilesTasks));
 
-                MeasureGenerationStep(
-                    "Generation.RestorePreWriteModelFactoryMethods",
-                    referenceMapSession.RestorePreWriteModelFactoryMethods);
+                if (referenceMapSession != null)
+                {
+                    MeasureGenerationStep(
+                        "Generation.RestorePreWriteModelFactoryMethods",
+                        referenceMapSession.RestorePreWriteModelFactoryMethods);
+                }
+
+                LoggingHelpers.LogElapsedTime("All generated types have been written into memory");
+
+                // Delete any old generated files
+                MeasureGenerationStep("Generation.DeleteOldGeneratedFiles", () => DeleteDirectory(generatedSourceOutputPath, GetFilesToKeep()));
+
+                LoggingHelpers.LogElapsedTime("All old generated files have been deleted");
+                await MeasureGenerationStepAsync("Generation.PostProcessAsync", generatedCodeWorkspace.PostProcessAsync);
             }
             finally
             {
                 referenceMapSession?.Dispose();
             }
-
-            LoggingHelpers.LogElapsedTime("All generated types have been written into memory");
-
-            // Delete any old generated files
-            MeasureGenerationStep("Generation.DeleteOldGeneratedFiles", () => DeleteDirectory(generatedSourceOutputPath, GetFilesToKeep()));
-
-            LoggingHelpers.LogElapsedTime("All old generated files have been deleted");
-            await MeasureGenerationStepAsync("Generation.PostProcessAsync", generatedCodeWorkspace.PostProcessAsync);
-            await MeasureGenerationStepAsync("Generation.PostProcessAsync", generatedCodeWorkspace.PostProcessAsync);
 
             // Write the generated files to the output directory
             await MeasureGenerationStepAsync("Generation.WriteGeneratedFilesToDisk", async () =>

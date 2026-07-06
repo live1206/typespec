@@ -349,13 +349,13 @@ namespace Microsoft.TypeSpec.Generator
                 case Configuration.UnreferencedTypesHandlingOption.KeepAll:
                     break;
                 case Configuration.UnreferencedTypesHandlingOption.Internalize:
-                    if (!ProviderReferenceMapAnalyzer.PreWriteAccessibilityApplied)
+                    if (!ProviderReferenceMapShadowAnalyzer.UseShadowMap)
                     {
                         _project = await MeasurePostProcessingStepAsync("PostProcess.InternalizeAsync", () => postProcessor.InternalizeAsync(_project));
                     }
                     break;
                 case Configuration.UnreferencedTypesHandlingOption.RemoveOrInternalize:
-                    if (!ProviderReferenceMapAnalyzer.PreWriteAccessibilityApplied)
+                    if (!ProviderReferenceMapShadowAnalyzer.UseShadowMap)
                     {
                         _project = await MeasurePostProcessingStepAsync("PostProcess.InternalizeAsync", () => postProcessor.InternalizeAsync(_project));
                     }

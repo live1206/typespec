@@ -80,12 +80,16 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
         protected override IReadOnlyList<CSharpType> BuildHelperDependencyTypes()
         {
-            var dependencies = new List<CSharpType> { new ClientUriBuilderDefinition().Type };
+            var uriBuilderType = ScmCodeModelGenerator.Instance.TypeFactory.HttpRequestApi.ToExpression().UriBuilderType;
+            var dependencies = uriBuilderType == typeof(ClientUriBuilderDefinition)
+                ? new List<CSharpType> { new ClientUriBuilderDefinition().Type }
+                : [];
             foreach (var serviceMethod in _inputClient.Methods)
             {
                 foreach (var parameter in serviceMethod.Operation.Parameters)
                 {
-                    if (parameter is not InputHeaderParameter and not InputQueryParameter)
+                    if (IsContentTypeParameter(parameter) ||
+                        parameter is not InputHeaderParameter and not InputQueryParameter)
                     {
                         continue;
                     }
@@ -93,11 +97,39 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                     var type = ScmCodeModelGenerator.Instance.TypeFactory.CreateCSharpType(parameter.Type);
                     if (type?.IsDictionary == true)
                     {
-                        AddDependency(dependencies, ChangeTrackingDictionaryType);
+                        AddDependency(dependencies, ScmCodeModelGenerator.Instance.TypeFactory.DictionaryInitializationType);
                     }
                     else if (type?.IsCollection == true)
                     {
-                        AddDependency(dependencies, ChangeTrackingListType);
+                        AddDependency(dependencies, ScmCodeModelGenerator.Instance.TypeFactory.ListInitializationType);
+                    }
+                }
+            }
+
+            return dependencies;
+        }
+
+        protected override IReadOnlyList<CSharpType> BuildBodyDependencyTypes()
+        {
+            var dependencies = new List<CSharpType>();
+            foreach (var serviceMethod in _inputClient.Methods)
+            {
+                if (!serviceMethod.Operation.GenerateConvenienceMethod)
+                {
+                    continue;
+                }
+
+                foreach (var parameter in serviceMethod.Operation.Parameters)
+                {
+                    if (parameter is not InputBodyParameter)
+                    {
+                        continue;
+                    }
+
+                    var type = ScmCodeModelGenerator.Instance.TypeFactory.CreateCSharpType(parameter.Type);
+                    if (type != null)
+                    {
+                        AddDependency(dependencies, type);
                     }
                 }
             }

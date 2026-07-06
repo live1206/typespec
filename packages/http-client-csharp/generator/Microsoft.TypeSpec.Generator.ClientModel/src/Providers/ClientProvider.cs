@@ -433,7 +433,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             {
                 if (method.BodyStatements != null)
                 {
-                    return [new CancellationTokenExtensionsDefinition().Type, new ClientPipelineExtensionsDefinition().Type];
+                    return [new ClientPipelineExtensionsDefinition().Type];
                 }
             }
 

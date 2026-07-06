@@ -311,7 +311,7 @@ namespace Microsoft.TypeSpec.Generator
                     continue;
                 }
 
-                var declarationMatch = Regex.Match(line, @"^    \S.*?\b(class|struct|interface|enum)\s+([A-Za-z_][A-Za-z0-9_]*)(?!\s*<)(?!\w)");
+                var declarationMatch = Regex.Match(line, @"^    \S.*?\b(class|struct|interface|enum)\s+([A-Za-z_][A-Za-z0-9_]*)(?!\w)");
                 if (declarationMatch.Success)
                 {
                     declaredTypeNames.Add($"{currentNamespace}.{declarationMatch.Groups[2].Value}");
@@ -323,7 +323,7 @@ namespace Microsoft.TypeSpec.Generator
 
         private static bool ContainsApiTypeReference(string apiText, HashSet<string> apiDeclaredTypeNames, string fullName, string simpleName)
         {
-            var fullNamePattern = $@"(?<![\w.]){Regex.Escape(fullName)}(?!\s*<)(?![\w.])";
+            var fullNamePattern = $@"(?<![\w.]){Regex.Escape(fullName)}(?![\w.])";
             if (Regex.IsMatch(apiText, fullNamePattern))
             {
                 return true;
@@ -460,7 +460,8 @@ namespace Microsoft.TypeSpec.Generator
         {
             var relativeFilePath = provider.DeclaringTypeProvider?.RelativeFilePath ?? provider.RelativeFilePath;
             var path = GetExistingSourcePath(projectDirectory, relativeFilePath);
-            if (!File.Exists(path))
+            if (!File.Exists(path) ||
+                IsGeneratedSourcePath(path))
             {
                 return false;
             }
@@ -478,6 +479,13 @@ namespace Microsoft.TypeSpec.Generator
             }
 
             return false;
+        }
+
+        private static bool IsGeneratedSourcePath(string path)
+        {
+            var generatedDirectory = Path.GetFullPath(CodeModelGenerator.Instance.Configuration.ProjectGeneratedDirectory);
+            var fullPath = Path.GetFullPath(path);
+            return fullPath.StartsWith(generatedDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string GetExistingSourcePath(string projectDirectory, string relativeFilePath)

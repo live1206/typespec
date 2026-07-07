@@ -32,6 +32,8 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
         protected override CSharpType BuildBaseType() => typeof(ModelReaderWriterContext);
 
+        protected override bool ShouldAnalyzeAttributesInReferenceMap => false;
+
         protected override IReadOnlyList<MethodBodyStatement> BuildAttributes()
         {
             var attributes = new Dictionary<string, MethodBodyStatement>();
@@ -56,6 +58,11 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             }
             foreach (var provider in buildableProviders)
             {
+                if (!IsGeneratedProjectType(provider.Type) || !CodeModelGenerator.Instance.ShouldWriteProvider(provider))
+                {
+                    continue;
+                }
+
                 // Use the full attribute type name to ensure proper compilation
                 var attributeType = new CSharpType(typeof(ModelReaderWriterBuildableAttribute));
                 var attributeStatement = new AttributeStatement(attributeType, TypeOf(provider.Type));
@@ -267,6 +274,13 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             // Check if the type is a framework type and implements the model reader/writer interface, also skip MRW interface types
             // If the type doesn't implement MRW, we don't need to process its properties, it can't apply MRW anyway
             return ImplementsModelReaderWriter(type.FrameworkType) && !IsModelReaderWriterInterfaceType(type);
+        }
+
+        private static bool IsGeneratedProjectType(CSharpType type)
+        {
+            var primaryNamespace = ScmCodeModelGenerator.Instance.TypeFactory.PrimaryNamespace;
+            return string.Equals(type.Namespace, primaryNamespace, StringComparison.Ordinal) ||
+                type.Namespace.StartsWith($"{primaryNamespace}.", StringComparison.Ordinal);
         }
 
         private static CSharpType GetInnerMostElement(CSharpType type)

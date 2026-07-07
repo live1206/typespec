@@ -380,6 +380,11 @@ namespace Microsoft.TypeSpec.Generator
             var proxyTypes = new HashSet<string>(StringComparer.Ordinal);
             foreach (var provider in GetGeneratedProviders(providers))
             {
+                if (!provider.ShouldAnalyzeAttributesInReferenceMap)
+                {
+                    continue;
+                }
+
                 if (provider.Attributes.Any(static attribute => IsAttributeNamed(attribute, "PersistableModelProxy")))
                 {
                     AddTypeReference(proxyTypes, provider.Type, generatedTypeNames);

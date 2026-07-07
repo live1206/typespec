@@ -32,9 +32,10 @@ namespace Microsoft.TypeSpec.Generator
             foreach (var provider in generatedProviders)
             {
                 var current = GetProviderTypeName(provider.Type);
-                AddTypeReference(references[current], provider.Type, nodes, serializationReferenceNamesByType);
-                AddTypeReference(references[current], provider.BaseType, nodes, serializationReferenceNamesByType);
-                AddTypeReference(references[current], provider.DeclaringTypeProvider?.Type, nodes, serializationReferenceNamesByType);
+                var providerNamespace = provider.Type.Namespace;
+                AddTypeReference(references[current], provider.Type, nodes, serializationReferenceNamesByType, providerNamespace);
+                AddTypeReference(references[current], provider.BaseType, nodes, serializationReferenceNamesByType, providerNamespace);
+                AddTypeReference(references[current], provider.DeclaringTypeProvider?.Type, nodes, serializationReferenceNamesByType, providerNamespace);
 
                 if (publicOnly && !provider.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public))
                 {
@@ -56,14 +57,14 @@ namespace Microsoft.TypeSpec.Generator
 
                 foreach (var implementedType in provider.Implements)
                 {
-                    AddTypeReference(references[current], implementedType, nodes, serializationReferenceNamesByType);
+                    AddTypeReference(references[current], implementedType, nodes, serializationReferenceNamesByType, providerNamespace);
                 }
 
                 if (!publicOnly)
                 {
                     foreach (var nestedType in provider.NestedTypes)
                     {
-                        AddTypeReference(references[current], nestedType.Type, nodes, serializationReferenceNamesByType);
+                        AddTypeReference(references[current], nestedType.Type, nodes, serializationReferenceNamesByType, providerNamespace);
                     }
                 }
 
@@ -71,8 +72,13 @@ namespace Microsoft.TypeSpec.Generator
                 {
                     foreach (var serializationProvider in provider.SerializationProviders)
                     {
-                        AddTypeReference(references[current], serializationProvider.Type, nodes, serializationReferenceNamesByType);
+                        AddTypeReference(references[current], serializationProvider.Type, nodes, serializationReferenceNamesByType, providerNamespace);
                     }
+                }
+
+                foreach (var signatureDependency in provider.SignatureDependencyTypes)
+                {
+                    AddTypeReference(references[current], signatureDependency, nodes, serializationReferenceNamesByType, providerNamespace);
                 }
 
                 foreach (var property in provider.Properties)
@@ -82,8 +88,8 @@ namespace Microsoft.TypeSpec.Generator
                         continue;
                     }
 
-                    AddTypeReference(references[current], property.Type, nodes, serializationReferenceNamesByType);
-                    AddTypeReference(references[current], property.ExplicitInterface, nodes, serializationReferenceNamesByType);
+                    AddTypeReference(references[current], property.Type, nodes, serializationReferenceNamesByType, providerNamespace);
+                    AddTypeReference(references[current], property.ExplicitInterface, nodes, serializationReferenceNamesByType, providerNamespace);
                     if (!publicOnly)
                     {
                         AddAttributes(references[current], property.Attributes, nodes, serializationReferenceNamesByType, includeArguments: false);
@@ -97,7 +103,7 @@ namespace Microsoft.TypeSpec.Generator
                         continue;
                     }
 
-                    AddTypeReference(references[current], field.Type, nodes, serializationReferenceNamesByType);
+                    AddTypeReference(references[current], field.Type, nodes, serializationReferenceNamesByType, providerNamespace);
                     if (!publicOnly)
                     {
                         AddAttributes(references[current], field.Attributes, nodes, serializationReferenceNamesByType, includeArguments: false);
@@ -111,7 +117,7 @@ namespace Microsoft.TypeSpec.Generator
                         continue;
                     }
 
-                    AddSignatureReferences(references[current], constructor.Signature, nodes, serializationReferenceNamesByType, includeAttributes: !publicOnly, includeAttributeArguments: false);
+                    AddSignatureReferences(references[current], constructor.Signature, nodes, serializationReferenceNamesByType, includeAttributes: !publicOnly, includeAttributeArguments: false, providerNamespace: providerNamespace);
                 }
 
                 foreach (var method in provider.Methods)
@@ -126,10 +132,10 @@ namespace Microsoft.TypeSpec.Generator
                         continue;
                     }
 
-                    AddSignatureReferences(references[current], method.Signature, nodes, serializationReferenceNamesByType, includeAttributes: !publicOnly, includeAttributeArguments: false);
+                    AddSignatureReferences(references[current], method.Signature, nodes, serializationReferenceNamesByType, includeAttributes: !publicOnly, includeAttributeArguments: false, providerNamespace: providerNamespace);
                     if (!publicOnly)
                     {
-                        AddTypeReference(references[current], GetCollectionDefinitionType(method), nodes, serializationReferenceNamesByType);
+                        AddTypeReference(references[current], GetCollectionDefinitionType(method), nodes, serializationReferenceNamesByType, providerNamespace);
                     }
                 }
             }

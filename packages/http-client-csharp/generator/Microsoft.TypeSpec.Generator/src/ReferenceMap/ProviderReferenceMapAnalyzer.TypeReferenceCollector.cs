@@ -18,9 +18,10 @@ namespace Microsoft.TypeSpec.Generator
             HashSet<string> nodes,
             IReadOnlyDictionary<string, string[]>? serializationProviderNamesByType,
             bool includeAttributes = true,
-            bool includeAttributeArguments = true)
+            bool includeAttributeArguments = true,
+            string? providerNamespace = null)
         {
-            AddTypeReference(references, signature.ReturnType, nodes, serializationProviderNamesByType);
+            AddTypeReference(references, signature.ReturnType, nodes, serializationProviderNamesByType, providerNamespace);
             if (includeAttributes)
             {
                 AddAttributes(references, signature.Attributes, nodes, serializationProviderNamesByType, includeAttributeArguments);
@@ -28,7 +29,7 @@ namespace Microsoft.TypeSpec.Generator
 
             foreach (var parameter in signature.Parameters)
             {
-                AddTypeReference(references, parameter.Type, nodes, serializationProviderNamesByType);
+                AddTypeReference(references, parameter.Type, nodes, serializationProviderNamesByType, providerNamespace);
                 if (includeAttributes)
                 {
                     AddAttributes(references, parameter.Attributes, nodes, serializationProviderNamesByType, includeAttributeArguments);
@@ -37,12 +38,12 @@ namespace Microsoft.TypeSpec.Generator
 
             if (signature is MethodSignature methodSignature)
             {
-                AddTypeReference(references, methodSignature.ExplicitInterface, nodes, serializationProviderNamesByType);
+                AddTypeReference(references, methodSignature.ExplicitInterface, nodes, serializationProviderNamesByType, providerNamespace);
                 if (methodSignature.GenericArguments != null)
                 {
                     foreach (var genericArgument in methodSignature.GenericArguments)
                     {
-                        AddTypeReference(references, genericArgument, nodes, serializationProviderNamesByType);
+                        AddTypeReference(references, genericArgument, nodes, serializationProviderNamesByType, providerNamespace);
                     }
                 }
 
@@ -50,14 +51,14 @@ namespace Microsoft.TypeSpec.Generator
                 {
                     foreach (var constraint in methodSignature.GenericParameterConstraints)
                     {
-                        AddTypeReference(references, constraint.Type, nodes, serializationProviderNamesByType);
+                        AddTypeReference(references, constraint.Type, nodes, serializationProviderNamesByType, providerNamespace);
                     }
                 }
             }
 
             if (signature is ConstructorSignature constructorSignature)
             {
-                AddTypeReference(references, constructorSignature.Type, nodes, serializationProviderNamesByType);
+                AddTypeReference(references, constructorSignature.Type, nodes, serializationProviderNamesByType, providerNamespace);
             }
         }
 
@@ -109,7 +110,8 @@ namespace Microsoft.TypeSpec.Generator
             HashSet<string> references,
             CSharpType? type,
             HashSet<string> nodes,
-            IReadOnlyDictionary<string, string[]>? serializationProviderNamesByType = null)
+            IReadOnlyDictionary<string, string[]>? serializationProviderNamesByType = null,
+            string? providerNamespace = null)
         {
             if (type == null)
             {
@@ -118,7 +120,7 @@ namespace Microsoft.TypeSpec.Generator
 
             if (type.IsArray)
             {
-                AddTypeReference(references, type.ElementType, nodes, serializationProviderNamesByType);
+                AddTypeReference(references, type.ElementType, nodes, serializationProviderNamesByType, providerNamespace);
                 return;
             }
 
@@ -134,12 +136,16 @@ namespace Microsoft.TypeSpec.Generator
                     }
                 }
             }
+            else if (string.IsNullOrEmpty(type.Namespace) && !string.IsNullOrEmpty(providerNamespace))
+            {
+                AddExactMetadataNameMatch(references, $"{providerNamespace}.{providerTypeName}", nodes);
+            }
 
-            AddTypeReference(references, type.BaseType, nodes, serializationProviderNamesByType);
-            AddTypeReference(references, type.DeclaringType, nodes, serializationProviderNamesByType);
+            AddTypeReference(references, type.BaseType, nodes, serializationProviderNamesByType, providerNamespace);
+            AddTypeReference(references, type.DeclaringType, nodes, serializationProviderNamesByType, providerNamespace);
             foreach (var argument in type.Arguments)
             {
-                AddTypeReference(references, argument, nodes, serializationProviderNamesByType);
+                AddTypeReference(references, argument, nodes, serializationProviderNamesByType, providerNamespace);
             }
         }
 

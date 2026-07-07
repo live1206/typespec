@@ -355,6 +355,50 @@ namespace Microsoft.TypeSpec.Generator.Tests.ReferenceMap
         }
 
         [Test]
+        public void PublicProviderSignatureDependencyKeepsNonRootTypePublic()
+        {
+            var client = new ClientProvider(
+                "SampleClient",
+                "Sample",
+                signatureDependencyTypes: CreateNamedType("GeneratedModel", "Sample.Models"));
+            var generatedModel = new GeneratedModelTestTypeProvider("GeneratedModel", TypeSignatureModifiers.Public, ns: "Sample.Models");
+            MockHelpers.LoadMockGenerator(createOutputLibrary: () => new TestOutputLibrary(client, generatedModel));
+            CodeModelGenerator.Instance.AddTypeToKeep(generatedModel.Type.FullyQualifiedName, isRoot: false);
+
+            ProviderReferenceMapAnalyzer.ApplyPreWriteAccessibility([client, generatedModel]);
+
+            Assert.IsTrue(generatedModel.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public));
+            Assert.IsFalse(generatedModel.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Internal));
+        }
+
+        [Test]
+        public void PublicProviderMethodWithNamespaceLessSignatureKeepsNonRootTypePublic()
+        {
+            var client = new ClientProvider("SampleClient", "Sample");
+            var generatedModel = new GeneratedModelTestTypeProvider("GeneratedModel", TypeSignatureModifiers.Public, ns: "Sample");
+            client.Update(methods:
+            [
+                new MethodProvider(
+                    new MethodSignature(
+                        "GetModel",
+                        $"",
+                        MethodSignatureModifiers.Public,
+                        CreateNamedType("GeneratedModel", string.Empty),
+                        $"",
+                        []),
+                    MethodBodyStatement.Empty,
+                    client)
+            ]);
+            MockHelpers.LoadMockGenerator(createOutputLibrary: () => new TestOutputLibrary(client, generatedModel));
+            CodeModelGenerator.Instance.AddTypeToKeep(generatedModel.Type.FullyQualifiedName, isRoot: false);
+
+            ProviderReferenceMapAnalyzer.ApplyPreWriteAccessibility([client, generatedModel]);
+
+            Assert.IsTrue(generatedModel.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public));
+            Assert.IsFalse(generatedModel.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Internal));
+        }
+
+        [Test]
         public void DependenciesOfInternalizedClientAreNotPublicizedFromClientRootTraversal()
         {
             var clientOptions = new TestTypeProvider("SampleClientOptions", TypeSignatureModifiers.Public, ns: "Sample");

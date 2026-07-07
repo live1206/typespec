@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
 
@@ -85,9 +86,10 @@ namespace Microsoft.TypeSpec.Generator
             foreach (var node in internalizeDeclaredNodes)
             {
                 var isNonRootKept = IsKeptName(node, CodeModelGenerator.Instance.NonRootTypes, nodes);
+                var isPublicReachableNonRootKept = isNonRootKept && publicizeReachable.Contains(node);
                 if (!publicizeReachable.Contains(node) ||
                     customInternalDeclarations.Contains(node) ||
-                    generatedInternalDeclarations.Contains(node) && !customPublicRoots.Contains(node) ||
+                    generatedInternalDeclarations.Contains(node) && !customPublicRoots.Contains(node) && !isPublicReachableNonRootKept ||
                     customInternalBoundaryNodes.Contains(node) && (!publicizeRoots.Contains(node) || isNonRootKept) ||
                     isNonRootKept &&
                         references.TryGetValue(node, out var nodeReferences) &&
@@ -125,6 +127,40 @@ namespace Microsoft.TypeSpec.Generator
             // exposing custom/internal types through a public surface.
             RemoveKeptNonRootNames(candidates, nodes, references, customInternalDeclarations, generatedInternalDeclarations, customInternalBoundaryNodes);
             return candidates;
+        }
+
+        private static void RemovePublicApiExposedCandidates(
+            HashSet<string> internalizeDeclaredNodes,
+            HashSet<string> candidates,
+            HashSet<string> customInternalDeclarations,
+            IReadOnlyDictionary<string, HashSet<string>> references)
+        {
+            var removedCandidate = true;
+            while (removedCandidate)
+            {
+                removedCandidate = false;
+                foreach (var candidate in candidates.ToArray())
+                {
+                    if (customInternalDeclarations.Contains(candidate))
+                    {
+                        continue;
+                    }
+
+                    foreach (var node in internalizeDeclaredNodes)
+                    {
+                        if (candidates.Contains(node) ||
+                            !references.TryGetValue(node, out var nodeReferences) ||
+                            !nodeReferences.Contains(candidate))
+                        {
+                            continue;
+                        }
+
+                        candidates.Remove(candidate);
+                        removedCandidate = true;
+                        break;
+                    }
+                }
+            }
         }
 
         private static void AddNestedInternalizeCandidates(

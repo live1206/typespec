@@ -230,6 +230,11 @@ namespace Microsoft.TypeSpec.Generator
                 customPublicRoots,
                 internalizeReferences,
                 generatedImplementationInternalDeclarations);
+            RemovePublicApiExposedCandidates(
+                internalizeDeclaredNodes,
+                internalizeCandidates,
+                customInternalDeclarations,
+                internalizeReferences);
             AddNestedInternalizeCandidates(generatedProviders, internalizeCandidates, graph.Nodes);
             publicizeRoots.ExceptWith(internalizeCandidates);
             publicizeReachable = GetReachableTypes(publicizeRoots, internalizeReferences, publicApiTraversalNodes);

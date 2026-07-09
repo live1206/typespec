@@ -113,7 +113,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
         }
 
         [Test]
-        public void RemovedProvidersOnlyContributeExternalBuildableDependencies()
+        public void RemovedProvidersDoNotContributeBuildableAttributes()
         {
             var keptProvider = new TestMrwSerialization(implementsPersistableModel: true, includeDepModelProperty: false);
             var removedProvider = new RemovedProviderWithFrameworkDependency();
@@ -131,11 +131,8 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
                     .Select(a => a.Arguments.First().ToDisplayString())
                     .ToList();
 
-                Assert.AreEqual(2, buildableAttributes.Count);
-                Assert.AreEqual(
-                    "typeof(global::Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions.ModelReaderWriterContextDefinitionTests.DependencyModel)",
-                    buildableAttributes[0]);
-                Assert.AreEqual("typeof(global::Sample.TestMrwSerialization)", buildableAttributes[1]);
+                Assert.AreEqual(1, buildableAttributes.Count);
+                Assert.AreEqual("typeof(global::Sample.TestMrwSerialization)", buildableAttributes[0]);
                 Assert.IsFalse(
                     buildableAttributes.Contains("typeof(global::Sample.RemovedProviderWithFrameworkDependency)"),
                     "Removed providers should not get standalone context entries.");

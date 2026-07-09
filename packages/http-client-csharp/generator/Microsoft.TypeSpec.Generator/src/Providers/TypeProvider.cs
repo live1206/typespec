@@ -538,8 +538,6 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         protected virtual IReadOnlyList<MethodBodyStatement> BuildAttributes() => [];
 
-        protected internal virtual bool ShouldAnalyzeAttributesInReferenceMap => true;
-
         private CSharpType? _enumUnderlyingType;
 
         public CSharpType EnumUnderlyingType => _enumUnderlyingType ??= BuildEnumUnderlyingType(); // Each member in the EnumProvider has to have this type

@@ -104,6 +104,21 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.RestClientPro
         }
 
         [Test]
+        public void BodyDependencyTypesDoNotRootRequestBodyModels()
+        {
+            var requestBody = InputFactory.Model("CreateWidgetRequest");
+            var operation = InputFactory.Operation(
+                "CreateWidget",
+                parameters: [InputFactory.BodyParameter("body", requestBody, isRequired: true)]);
+            var inputClient = InputFactory.Client(
+                "TestClient",
+                methods: [InputFactory.BasicServiceMethod("CreateWidget", operation)]);
+            var restClient = new ClientProvider(inputClient).RestClient;
+
+            Assert.IsFalse(restClient.BodyDependencyTypes.Any(t => t.Name == requestBody.Name));
+        }
+
+        [Test]
         public void Validate3xxRedirectStatusCode()
         {
             // Test that 3xx status codes (like 302 redirect) are handled correctly

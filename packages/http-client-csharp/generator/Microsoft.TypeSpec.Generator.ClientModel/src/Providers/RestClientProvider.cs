@@ -84,6 +84,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             var dependencies = uriBuilderType == typeof(ClientUriBuilderDefinition)
                 ? new List<CSharpType> { new ClientUriBuilderDefinition().Type }
                 : [];
+            var dependencyNames = new HashSet<string>(dependencies.Select(x => x.FullyQualifiedName), StringComparer.Ordinal);
             foreach (var serviceMethod in _inputClient.Methods)
             {
                 foreach (var parameter in serviceMethod.Operation.Parameters)
@@ -97,11 +98,11 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                     var type = ScmCodeModelGenerator.Instance.TypeFactory.CreateCSharpType(parameter.Type);
                     if (type?.IsDictionary == true)
                     {
-                        AddDependency(dependencies, ScmCodeModelGenerator.Instance.TypeFactory.DictionaryInitializationType);
+                        TryAddDependency(dependencies, dependencyNames, ScmCodeModelGenerator.Instance.TypeFactory.DictionaryInitializationType);
                     }
                     else if (type?.IsCollection == true)
                     {
-                        AddDependency(dependencies, ScmCodeModelGenerator.Instance.TypeFactory.ListInitializationType);
+                        TryAddDependency(dependencies, dependencyNames, ScmCodeModelGenerator.Instance.TypeFactory.ListInitializationType);
                     }
                 }
             }
@@ -112,36 +113,14 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
         protected override IReadOnlyList<CSharpType> BuildBodyDependencyTypes()
         {
             var dependencies = new List<CSharpType>();
-            foreach (var serviceMethod in _inputClient.Methods)
-            {
-                if (!serviceMethod.Operation.GenerateConvenienceMethod)
-                {
-                    continue;
-                }
-
-                foreach (var parameter in serviceMethod.Operation.Parameters)
-                {
-                    if (parameter is not InputBodyParameter)
-                    {
-                        continue;
-                    }
-
-                    var type = ScmCodeModelGenerator.Instance.TypeFactory.CreateCSharpType(parameter.Type);
-                    if (type != null)
-                    {
-                        AddDependency(dependencies, type);
-                    }
-                }
-            }
-
+            var dependencyNames = new HashSet<string>(StringComparer.Ordinal);
+            TryAddDependency(dependencies, dependencyNames, new TypeFormattersDefinition().Type);
             return dependencies;
         }
 
-        private static void AddDependency(List<CSharpType> dependencies, CSharpType dependency)
+        private static void TryAddDependency(List<CSharpType> dependencies, HashSet<string> dependencyNames, CSharpType dependency)
         {
-            if (!dependencies.Any(existing =>
-                existing.Name == dependency.Name &&
-                existing.Namespace == dependency.Namespace))
+            if (dependencyNames.Add(dependency.FullyQualifiedName))
             {
                 dependencies.Add(dependency);
             }

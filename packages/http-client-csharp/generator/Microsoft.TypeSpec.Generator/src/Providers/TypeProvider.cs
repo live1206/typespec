@@ -346,6 +346,12 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         internal void ClearCachedAttributes() => _attributes = null;
 
+        /// <summary>
+        /// Indicates whether this provider's attributes should contribute to the reference map. Providers whose
+        /// attributes depend on the final reference-map result can opt out so cached attributes are rebuilt after analysis.
+        /// </summary>
+        protected internal virtual bool ShouldAnalyzeAttributesInReferenceMap => true;
+
         protected virtual CSharpType[] GetTypeArguments() => [];
 
         internal PropertyProvider[] FilterCustomizedProperties(IEnumerable<PropertyProvider> specProperties)

@@ -100,7 +100,7 @@ namespace Microsoft.TypeSpec.Generator
                             // we only keep the type if it is not framework type and not literal
                             if (!unionInput.IsFrameworkType && !unionInput.IsLiteral)
                             {
-                                UnionVariantTypesToKeep.Add(unionInput.Name);
+                                UnionVariantTypesToKeep.Add(unionInput.FullyQualifiedName);
                             }
                         }
                     }

@@ -11,6 +11,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
+using Microsoft.TypeSpec.Generator.Tests.Common;
 using Microsoft.TypeSpec.Generator.Statements;
 using Microsoft.TypeSpec.Generator.Tests.Providers.NamedTypeSymbolProviders;
 using Microsoft.TypeSpec.Generator.Tests.TestHelpers;
@@ -120,6 +121,20 @@ namespace Microsoft.TypeSpec.Generator.Tests.ReferenceMap
 
             Assert.IsTrue(ProviderReferenceMapAnalyzer.ShouldWriteProvider(provider));
             Assert.IsTrue(ProviderReferenceMapAnalyzer.ShouldWriteProvider(errorResult));
+        }
+
+        [Test]
+        public void UnionVariantFallbackRootsOnlyMatchFullyQualifiedModelName()
+        {
+            var keptVariant = new ModelProvider(InputFactory.Model("Variant", "Sample"));
+            var collidingVariant = new ModelProvider(InputFactory.Model("Variant", "Other"));
+            MockHelpers.LoadMockGenerator(createOutputLibrary: () => new TestOutputLibrary(keptVariant, collidingVariant));
+            CodeModelGenerator.Instance.TypeFactory.UnionVariantTypesToKeep.Add(keptVariant.Type.FullyQualifiedName);
+
+            ProviderReferenceMapAnalyzer.ApplyPreWriteAccessibility([keptVariant, collidingVariant]);
+
+            Assert.IsTrue(keptVariant.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public));
+            Assert.IsFalse(collidingVariant.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public));
         }
 
         [Test]

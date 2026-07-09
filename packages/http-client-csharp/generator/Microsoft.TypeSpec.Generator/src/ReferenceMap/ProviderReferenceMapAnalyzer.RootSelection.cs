@@ -84,8 +84,7 @@ namespace Microsoft.TypeSpec.Generator
             foreach (var provider in GetGeneratedProviders(providers))
             {
                 if (provider is not ModelProvider ||
-                    !unionVariantTypesToKeep.Contains(provider.Type.Name) ||
-                    string.Equals(provider.Type.Namespace, "TypeSpec.Http", StringComparison.Ordinal))
+                    !unionVariantTypesToKeep.Contains(provider.Type.FullyQualifiedName))
                 {
                     continue;
                 }

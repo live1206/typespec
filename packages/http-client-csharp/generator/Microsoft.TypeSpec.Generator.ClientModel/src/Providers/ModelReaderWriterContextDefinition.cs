@@ -94,12 +94,6 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             var visitedBaseProviders = new HashSet<TypeProvider>(ReferenceEqualityComparer.Instance);
             var buildableProviders = new HashSet<TypeProvider>(s_typeProviderNameComparer);
             var buildableTypes = new HashSet<CSharpType>(s_cSharpTypeNameComparer);
-            var removedProviderTypes = new HashSet<string>(
-                ScmCodeModelGenerator.Instance.OutputLibrary.TypeProviders
-                    .Where(provider => !CodeModelGenerator.Instance.ShouldWriteProvider(provider))
-                    .Select(provider => provider.Type.FullyQualifiedName),
-                StringComparer.Ordinal);
-
             // Base-model traversal can encounter equivalent provider instances that are not reference-equal to
             // the output-library roots, so keep the output-library provider set name-comparable.
             var contextEligibleOutputProviders = new HashSet<TypeProvider>(
@@ -115,12 +109,12 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                 }
 
                 // Only output-library providers get standalone context entries.
-                if (ImplementsModelReaderWriter(provider))
+                if (ShouldAddStandaloneBuildableProvider(provider))
                 {
                     buildableProviders.Add(provider);
                 }
 
-                CollectBuildableTypeProvidersRecursive(provider, visitedTypes, visitedTypeProviders, visitedBaseProviders, buildableProviders, buildableTypes, removedProviderTypes);
+                CollectBuildableTypeProvidersRecursive(provider, visitedTypes, visitedTypeProviders, visitedBaseProviders, buildableProviders, buildableTypes);
             }
 
             return (buildableTypes, buildableProviders);
@@ -132,15 +126,14 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
         private void CollectBuildableTypesRecursive(
             CSharpType currentType,
             HashSet<CSharpType> visitedTypes,
-            HashSet<CSharpType> buildableTypes,
-            HashSet<string> removedProviderTypes)
+            HashSet<CSharpType> buildableTypes)
         {
             // Avoid duplicate processing
             if (!ShouldProcessCSharpType(currentType, visitedTypes))
             {
                 return;
             }
-            CollectBuildableTypesFromFrameworkType(currentType, visitedTypes, buildableTypes, removedProviderTypes);
+            CollectBuildableTypesFromFrameworkType(currentType, visitedTypes, buildableTypes);
         }
 
         /// <summary>
@@ -152,8 +145,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             HashSet<TypeProvider> visitedTypeProviders,
             HashSet<TypeProvider> visitedBaseProviders,
             HashSet<TypeProvider> buildableProviders,
-            HashSet<CSharpType> buildableTypes,
-            HashSet<string> removedProviderTypes)
+            HashSet<CSharpType> buildableTypes)
         {
             // Avoid duplicate processing
             if (!visitedTypeProviders.Add(currentProvider))
@@ -164,7 +156,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             // Process all providers to discover types from methods and properties
             if (currentProvider is not null)
             {
-                CollectBuildableTypesRecursiveCore(currentProvider, visitedTypes, visitedTypeProviders, visitedBaseProviders, buildableProviders, buildableTypes, removedProviderTypes);
+                CollectBuildableTypesRecursiveCore(currentProvider, visitedTypes, visitedTypeProviders, visitedBaseProviders, buildableProviders, buildableTypes);
             }
         }
 
@@ -174,8 +166,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             HashSet<TypeProvider> visitedTypeProviders,
             HashSet<TypeProvider> visitedBaseProviders,
             HashSet<TypeProvider> buildableProviders,
-            HashSet<CSharpType> buildableTypes,
-            HashSet<string> removedProviderTypes)
+            HashSet<CSharpType> buildableTypes)
         {
             // Process all properties of the provider (includes both generated and custom code properties)
             foreach (var property in provider.CanonicalView.Properties)
@@ -185,7 +176,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                 // we only care about types that is framework type
                 if (propertyType.IsFrameworkType)
                 {
-                    CollectBuildableTypesRecursive(propertyType.WithNullable(false), visitedTypes, buildableTypes, removedProviderTypes);
+                    CollectBuildableTypesRecursive(propertyType.WithNullable(false), visitedTypes, buildableTypes);
                 }
             }
 
@@ -201,7 +192,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
                     if (actualType != null && actualType.IsFrameworkType)
                     {
-                        CollectBuildableTypesRecursive(actualType.WithNullable(false), visitedTypes, buildableTypes, removedProviderTypes);
+                        CollectBuildableTypesRecursive(actualType.WithNullable(false), visitedTypes, buildableTypes);
                     }
                 }
             }
@@ -210,9 +201,10 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             {
                 // Traverse base model properties for discoverable types, but do not add the base model
                 // itself as a context entry unless it was in the output-library seed set.
-                if (visitedBaseProviders.Add(modelProvider.BaseModelProvider))
+                var baseModelProvider = modelProvider.BaseModelProvider;
+                if (visitedBaseProviders.Add(baseModelProvider))
                 {
-                    CollectBuildableTypesRecursiveCore(modelProvider.BaseModelProvider, visitedTypes, visitedTypeProviders, visitedBaseProviders, buildableProviders, buildableTypes, removedProviderTypes);
+                    CollectBuildableTypesRecursiveCore(baseModelProvider, visitedTypes, visitedTypeProviders, visitedBaseProviders, buildableProviders, buildableTypes);
                 }
             }
             else
@@ -222,7 +214,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                     // we only care about types that is framework type
                     if (implementedType.IsFrameworkType)
                     {
-                        CollectBuildableTypesRecursive(implementedType.WithNullable(false), visitedTypes, buildableTypes, removedProviderTypes);
+                        CollectBuildableTypesRecursive(implementedType.WithNullable(false), visitedTypes, buildableTypes);
                     }
                 }
             }
@@ -231,8 +223,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
         private void CollectBuildableTypesFromFrameworkType(
             CSharpType frameworkType,
             HashSet<CSharpType> visitedTypes,
-            HashSet<CSharpType> buildableTypes,
-            HashSet<string> removedProviderTypes)
+            HashSet<CSharpType> buildableTypes)
         {
             if (!frameworkType.IsFrameworkType)
             {
@@ -241,7 +232,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
             try
             {
-                if (removedProviderTypes.Contains(frameworkType.FullyQualifiedName))
+                if (!CodeModelGenerator.Instance.IsResolvableBuildableType(frameworkType))
                 {
                     return;
                 }
@@ -264,7 +255,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
                     if (typeToCheck.IsFrameworkType)
                     {
-                        CollectBuildableTypesRecursive(typeToCheck.WithNullable(false).FrameworkType, visitedTypes, buildableTypes, removedProviderTypes);
+                        CollectBuildableTypesRecursive(typeToCheck.WithNullable(false).FrameworkType, visitedTypes, buildableTypes);
                     }
                 }
 
@@ -272,7 +263,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                 if (type.BaseType != null && type.BaseType != typeof(object))
                 {
                     var baseFrameworkType = new CSharpType(type.BaseType);
-                    CollectBuildableTypesRecursive(baseFrameworkType, visitedTypes, buildableTypes, removedProviderTypes);
+                    CollectBuildableTypesRecursive(baseFrameworkType, visitedTypes, buildableTypes);
                 }
             }
             catch (Exception)
@@ -444,6 +435,26 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             }
 
             return false;
+        }
+
+        private static bool ShouldAddStandaloneBuildableProvider(TypeProvider provider)
+        {
+            var isResolvable = CodeModelGenerator.Instance.IsResolvableBuildableType(provider.Type);
+            var implementsMrw = ImplementsModelReaderWriter(provider);
+            var hasWritableSerialization = HasWritableModelReaderWriterSerialization(provider);
+            return isResolvable && implementsMrw && hasWritableSerialization;
+        }
+
+        private static bool HasWritableModelReaderWriterSerialization(TypeProvider provider)
+        {
+            if (provider is not ModelProvider)
+            {
+                return true;
+            }
+
+            return provider.SerializationProviders
+                .OfType<MrwSerializationTypeDefinition>()
+                .Any(CodeModelGenerator.Instance.ShouldWriteProvider);
         }
 
         private static void AddAttributeForType(

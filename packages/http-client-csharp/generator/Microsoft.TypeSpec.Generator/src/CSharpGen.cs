@@ -128,6 +128,16 @@ namespace Microsoft.TypeSpec.Generator
                     referenceMapSession = MeasureGenerationStep(
                         "Generation.PrepareProviderReferenceMap",
                         () => ProviderReferenceMapAnalyzer.PrepareForGeneration(output.TypeProviders));
+                    foreach (var outputType in output.TypeProviders)
+                    {
+                        if (!outputType.ShouldAnalyzeAttributesInReferenceMap)
+                        {
+                            // Attributes for providers excluded from reference-map attribute analysis can still depend
+                            // on the final reference-map result. Clear any attributes cached during pre-write setup so
+                            // the writer rebuilds them after PrepareForGeneration has finalized provider removals.
+                            outputType.ClearCachedAttributes();
+                        }
+                    }
                 }
 
                 MeasureGenerationStep("Generation.WriteTypeProviders", () =>

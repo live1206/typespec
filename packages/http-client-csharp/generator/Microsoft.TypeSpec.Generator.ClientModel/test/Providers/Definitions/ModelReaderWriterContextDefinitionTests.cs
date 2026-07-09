@@ -113,7 +113,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
         }
 
         [Test]
-        public void RemovedProvidersDoNotContributeBuildableAttributes()
+        public void RemovedProvidersOnlyContributeExternalBuildableDependencies()
         {
             var keptProvider = new TestMrwSerialization(implementsPersistableModel: true, includeDepModelProperty: false);
             var removedProvider = new RemovedProviderWithFrameworkDependency();
@@ -131,13 +131,72 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
                     .Select(a => a.Arguments.First().ToDisplayString())
                     .ToList();
 
-                Assert.AreEqual(1, buildableAttributes.Count);
-                Assert.AreEqual("typeof(global::Sample.TestMrwSerialization)", buildableAttributes[0]);
+                Assert.AreEqual(2, buildableAttributes.Count);
+                Assert.AreEqual(
+                    "typeof(global::Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions.ModelReaderWriterContextDefinitionTests.DependencyModel)",
+                    buildableAttributes[0]);
+                Assert.AreEqual("typeof(global::Sample.TestMrwSerialization)", buildableAttributes[1]);
+                Assert.IsFalse(
+                    buildableAttributes.Contains("typeof(global::Sample.RemovedProviderWithFrameworkDependency)"),
+                    "Removed providers should not get standalone context entries.");
             }
             finally
             {
                 ProviderReferenceMapAnalyzer.ResetPreWriteAccessibility();
             }
+        }
+
+        [Test]
+        public void RemovedFrameworkTypeIsNotMatchedToKeptProviderWithSameSimpleName()
+        {
+            var keptProvider = new ShadowedBuildableProvider("Sample");
+            var removedProvider = new RemovedShadowedBuildableProvider();
+            var outputLibrary = new TestOutputLibrary([keptProvider, removedProvider]);
+            MockHelpers.LoadMockGenerator(createOutputLibrary: () => outputLibrary);
+
+            try
+            {
+                CodeModelGenerator.Instance.AddTypeToKeep(keptProvider);
+                ProviderReferenceMapAnalyzer.Analyze(ScmCodeModelGenerator.Instance.OutputLibrary.TypeProviders);
+
+                var contextDefinition = new ModelReaderWriterContextDefinition();
+                var buildableAttributes = contextDefinition.Attributes
+                    .Where(a => a.Type.IsFrameworkType && a.Type.FrameworkType == typeof(ModelReaderWriterBuildableAttribute))
+                    .Select(a => a.Arguments.First().ToDisplayString())
+                    .ToList();
+
+                Assert.AreEqual(1, buildableAttributes.Count);
+                Assert.AreEqual("typeof(global::Sample.ShadowedModel)", buildableAttributes[0]);
+                Assert.IsFalse(
+                    buildableAttributes.Contains("typeof(global::Sample.Agents.ShadowedModel)"),
+                    "Removed source types should not be resolved through a kept provider with the same simple name.");
+            }
+            finally
+            {
+                ProviderReferenceMapAnalyzer.ResetPreWriteAccessibility();
+            }
+        }
+
+        [Test]
+        public void ExternalModelProvidersDoNotContributeStandaloneBuildableAttributes()
+        {
+            MockHelpers.LoadMockGenerator(
+                inputModels: () =>
+                [
+                    InputFactory.Model(
+                        "File",
+                        @namespace: "External.Library",
+                        usage: InputModelTypeUsage.Json,
+                        external: new InputExternalTypeMetadata("External.Library.File", package: null, minVersion: null))
+                ]);
+
+            var contextDefinition = new ModelReaderWriterContextDefinition();
+            var buildableAttributes = contextDefinition.Attributes
+                .Where(a => a.Type.IsFrameworkType && a.Type.FrameworkType == typeof(ModelReaderWriterBuildableAttribute))
+                .Select(a => a.Arguments.First().ToDisplayString())
+                .ToList();
+
+            Assert.IsEmpty(buildableAttributes);
         }
 
         [Test]
@@ -1078,6 +1137,11 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
         {
             protected override string BuildName() => "RemovedProviderWithFrameworkDependency";
 
+            protected internal override CSharpType[] BuildImplements()
+            {
+                return [new CSharpType(typeof(IPersistableModel<object>))];
+            }
+
             protected internal override PropertyProvider[] BuildProperties()
             {
                 return [new PropertyProvider(null, MethodSignatureModifiers.Public, new CSharpType(typeof(DependencyModel)), "p1", new AutoPropertyBody(false), this)];
@@ -1086,6 +1150,42 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
             protected override string BuildRelativeFilePath()
             {
                 return Path.Combine("src", "Generated", $"{Name}.cs");
+            }
+        }
+
+        private class ShadowedBuildableProvider : TypeProvider
+        {
+            private readonly string _namespace;
+
+            public ShadowedBuildableProvider(string ns)
+            {
+                _namespace = ns;
+            }
+
+            protected override string BuildName() => "ShadowedModel";
+
+            protected override string BuildNamespace() => _namespace;
+
+            protected internal override CSharpType[] BuildImplements()
+            {
+                return [new CSharpType(typeof(IPersistableModel<object>))];
+            }
+
+            protected override string BuildRelativeFilePath()
+            {
+                return Path.Combine("src", "Generated", $"{Name}.cs");
+            }
+        }
+
+        private class RemovedShadowedBuildableProvider : ShadowedBuildableProvider
+        {
+            public RemovedShadowedBuildableProvider() : base("Sample.Agents")
+            {
+            }
+
+            protected internal override PropertyProvider[] BuildProperties()
+            {
+                return [new PropertyProvider(null, MethodSignatureModifiers.Public, new CSharpType(typeof(Sample.Agents.ShadowedModel)), "p1", new AutoPropertyBody(false), this)];
             }
         }
 
@@ -1737,6 +1837,69 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
                     new MethodProvider(signature, Statements.MethodBodyStatement.Empty, this)
                 ];
             }
+        }
+    }
+
+}
+
+namespace Azure
+{
+    public class ResponseError : IJsonModel<ResponseError>
+    {
+        ResponseError? IJsonModel<ResponseError>.Create(ref Utf8JsonReader reader, ModelReaderWriterOptions options)
+        {
+            throw new NotImplementedException();
+        }
+
+        ResponseError? IPersistableModel<ResponseError>.Create(BinaryData data, ModelReaderWriterOptions options)
+        {
+            throw new NotImplementedException();
+        }
+
+        string IPersistableModel<ResponseError>.GetFormatFromOptions(ModelReaderWriterOptions options)
+        {
+            throw new NotImplementedException();
+        }
+
+        void IJsonModel<ResponseError>.Write(Utf8JsonWriter writer, ModelReaderWriterOptions options)
+        {
+            throw new NotImplementedException();
+        }
+
+        BinaryData IPersistableModel<ResponseError>.Write(ModelReaderWriterOptions options)
+        {
+            throw new NotImplementedException();
+        }
+    }
+}
+
+namespace Sample.Agents
+{
+    public class ShadowedModel : IJsonModel<ShadowedModel>
+    {
+        ShadowedModel? IJsonModel<ShadowedModel>.Create(ref Utf8JsonReader reader, ModelReaderWriterOptions options)
+        {
+            throw new NotImplementedException();
+        }
+
+        ShadowedModel? IPersistableModel<ShadowedModel>.Create(BinaryData data, ModelReaderWriterOptions options)
+        {
+            throw new NotImplementedException();
+        }
+
+        string IPersistableModel<ShadowedModel>.GetFormatFromOptions(ModelReaderWriterOptions options)
+        {
+            throw new NotImplementedException();
+        }
+
+        void IJsonModel<ShadowedModel>.Write(Utf8JsonWriter writer, ModelReaderWriterOptions options)
+        {
+            throw new NotImplementedException();
+        }
+
+        BinaryData IPersistableModel<ShadowedModel>.Write(ModelReaderWriterOptions options)
+        {
+            throw new NotImplementedException();
         }
     }
 }

@@ -36,6 +36,90 @@ namespace Microsoft.TypeSpec.Generator
         public static bool ShouldWriteProvider(TypeProvider provider) =>
             _latestResult?.RemoveCandidates.Contains(GetProviderTypeName(provider.Type)) != true;
 
+        public static bool IsResolvableBuildableType(CSharpType type)
+        {
+            if (TryGetProvider(type, exact: true, out var provider))
+            {
+                return IsResolvableBuildableProvider(provider);
+            }
+
+            if (MatchesRemovedProvider(type))
+            {
+                return false;
+            }
+
+            return !TryGetProvider(type, exact: false, out provider) ||
+                IsResolvableBuildableProvider(provider);
+        }
+
+        private static bool IsResolvableBuildableProvider(TypeProvider provider) =>
+            provider is not SystemObjectModelProvider &&
+            provider is not ModelProvider { IsExternal: true } &&
+            ShouldWriteProvider(provider);
+
+        private static bool TryGetProvider(CSharpType type, bool exact, out TypeProvider provider)
+        {
+            var outputProvider = FindOutputProviderByName(CodeModelGenerator.Instance.OutputLibrary.TypeProviders, type, exact);
+            if (outputProvider != null)
+            {
+                provider = outputProvider;
+                return true;
+            }
+
+            if (!exact && CodeModelGenerator.Instance.TypeFactory.TypeProvidersByName.TryGetValue(type.Name, out var mappedProvider))
+            {
+                provider = mappedProvider;
+                return true;
+            }
+
+            provider = null!;
+            return false;
+        }
+
+        private static TypeProvider? FindOutputProviderByName(IEnumerable<TypeProvider> providers, CSharpType type, bool exact)
+        {
+            var name = GetProviderTypeName(type);
+            foreach (var provider in providers)
+            {
+                if (string.Equals(GetProviderTypeName(provider.Type), name, StringComparison.Ordinal) ||
+                    !exact && string.Equals(provider.Type.Name, type.Name, StringComparison.Ordinal))
+                {
+                    return provider;
+                }
+
+                var nestedProvider = FindOutputProviderByName(provider.NestedTypes, type, exact);
+                if (nestedProvider != null)
+                {
+                    return nestedProvider;
+                }
+
+                var serializationProvider = FindOutputProviderByName(provider.SerializationProviders, type, exact);
+                if (serializationProvider != null)
+                {
+                    return serializationProvider;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool MatchesRemovedProvider(CSharpType type)
+        {
+            if (_latestResult == null || _latestResult.RemoveCandidates.Count == 0)
+            {
+                return false;
+            }
+
+            var providerName = GetProviderTypeName(type);
+            if (_latestResult.RemoveCandidates.Contains(providerName))
+            {
+                return true;
+            }
+
+            var simpleNameLookup = _simpleNameLookupCache.GetValue(_latestResult.RemoveCandidates, BuildSimpleNameLookup);
+            return simpleNameLookup.TryGetValue(type.Name, out var matches) && matches.Length == 1;
+        }
+
         public static void ResetPreWriteAccessibility()
         {
             RestorePreWriteModelFactoryMethods();

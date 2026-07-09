@@ -5,6 +5,7 @@ using System;
 using System.ClientModel.Primitives;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -109,6 +110,34 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
                 buildableAttributes[0].Arguments.First().ToDisplayString());
             Assert.AreEqual("typeof(global::Sample.TestMrwSerialization)", buildableAttributes[1].Arguments.First().ToDisplayString(),
                 "The ModelReaderWriterBuildableAttribute should be generated for TestMrwSerialization");
+        }
+
+        [Test]
+        public void RemovedProvidersDoNotContributeBuildableAttributes()
+        {
+            var keptProvider = new TestMrwSerialization(implementsPersistableModel: true, includeDepModelProperty: false);
+            var removedProvider = new RemovedProviderWithFrameworkDependency();
+            var outputLibrary = new TestOutputLibrary([keptProvider, removedProvider]);
+            MockHelpers.LoadMockGenerator(createOutputLibrary: () => outputLibrary);
+
+            try
+            {
+                CodeModelGenerator.Instance.AddTypeToKeep(keptProvider);
+                ProviderReferenceMapAnalyzer.Analyze(ScmCodeModelGenerator.Instance.OutputLibrary.TypeProviders);
+
+                var contextDefinition = new ModelReaderWriterContextDefinition();
+                var buildableAttributes = contextDefinition.Attributes
+                    .Where(a => a.Type.IsFrameworkType && a.Type.FrameworkType == typeof(ModelReaderWriterBuildableAttribute))
+                    .Select(a => a.Arguments.First().ToDisplayString())
+                    .ToList();
+
+                Assert.AreEqual(1, buildableAttributes.Count);
+                Assert.AreEqual("typeof(global::Sample.TestMrwSerialization)", buildableAttributes[0]);
+            }
+            finally
+            {
+                ProviderReferenceMapAnalyzer.ResetPreWriteAccessibility();
+            }
         }
 
         [Test]
@@ -1041,7 +1070,22 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
 
             protected override string BuildRelativeFilePath()
             {
-                throw new NotImplementedException();
+                return Path.Combine("src", "Generated", $"{Name}.cs");
+            }
+        }
+
+        private class RemovedProviderWithFrameworkDependency : TypeProvider
+        {
+            protected override string BuildName() => "RemovedProviderWithFrameworkDependency";
+
+            protected internal override PropertyProvider[] BuildProperties()
+            {
+                return [new PropertyProvider(null, MethodSignatureModifiers.Public, new CSharpType(typeof(DependencyModel)), "p1", new AutoPropertyBody(false), this)];
+            }
+
+            protected override string BuildRelativeFilePath()
+            {
+                return Path.Combine("src", "Generated", $"{Name}.cs");
             }
         }
 

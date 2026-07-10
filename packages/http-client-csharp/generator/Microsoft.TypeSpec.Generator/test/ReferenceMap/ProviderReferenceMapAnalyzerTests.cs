@@ -93,6 +93,21 @@ namespace Microsoft.TypeSpec.Generator.Tests.ReferenceMap
         }
 
         [Test]
+        public void NamespaceLessCustomCodeBodyDependencyRootsGeneratedTypeInParentNamespace()
+        {
+            var customCodeView = new BodyDependencyTestTypeProvider("CustomType", "Sample.Child", CreateNamedType("ReferencedModel", string.Empty));
+            var customType = new CustomizableTestTypeProvider("CustomType", TypeSignatureModifiers.Public, customCodeView, ns: "Sample.Child");
+            var referencedModel = new TestTypeProvider("ReferencedModel", TypeSignatureModifiers.Public, ns: "Sample");
+            MockHelpers.LoadMockGenerator(createOutputLibrary: () => new TestOutputLibrary(customType, referencedModel));
+            CodeModelGenerator.Instance.AddTypeToKeep(customType.Type.FullyQualifiedName);
+
+            ProviderReferenceMapAnalyzer.Analyze([customType, referencedModel]);
+
+            Assert.IsTrue(ProviderReferenceMapAnalyzer.ShouldWriteProvider(customType));
+            Assert.IsTrue(ProviderReferenceMapAnalyzer.ShouldWriteProvider(referencedModel));
+        }
+
+        [Test]
         public void NamespaceLessCustomCodeGenericBodyDependencyRootsGeneratedTypeInCustomCodeNamespace()
         {
             var genericArgument = CreateNamedType("T", string.Empty);

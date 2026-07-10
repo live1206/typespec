@@ -227,11 +227,19 @@ namespace Microsoft.TypeSpec.Generator
                 return;
             }
 
+            var dependencyName = GetProviderTypeName(dependency);
+            var simpleDependencyName = StripGenericArity(GetSimpleName(dependencyName));
             if (string.IsNullOrEmpty(dependency.Namespace) &&
-                dependency.Arguments.Count == 0 &&
-                !customMemberNames.Contains(dependency.Name))
+                !customMemberNames.Contains(simpleDependencyName))
             {
-                AddExactMetadataNameMatch(roots, $"{customNamespace}.{dependency.Name}", generatedTypeNames);
+                for (var namespaceCandidate = customNamespace; namespaceCandidate != null; namespaceCandidate = GetNamespaceName(namespaceCandidate))
+                {
+                    AddExactMetadataNameMatch(roots, $"{namespaceCandidate}.{dependencyName}", generatedTypeNames);
+                    if (!string.Equals(simpleDependencyName, dependencyName, StringComparison.Ordinal))
+                    {
+                        AddExactMetadataNameMatch(roots, $"{namespaceCandidate}.{simpleDependencyName}", generatedTypeNames);
+                    }
+                }
             }
 
             foreach (var argument in dependency.Arguments)

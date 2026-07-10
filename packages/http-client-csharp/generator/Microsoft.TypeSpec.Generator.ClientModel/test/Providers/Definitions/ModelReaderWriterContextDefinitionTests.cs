@@ -1671,6 +1671,46 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
         }
 
         [Test]
+        public void ValidateFrameworkReturnTypesAreDiscoveredFromGenericResponseWrappers()
+        {
+            var clientProvider = new TestClientProviderWithWrappedFrameworkReturnType();
+            var outputLibrary = new TestOutputLibrary([clientProvider]);
+            var mockGenerator = MockHelpers.LoadMockGenerator(
+                createOutputLibrary: () => outputLibrary);
+
+            var contextDefinition = new ModelReaderWriterContextDefinition();
+            var attributes = contextDefinition.Attributes;
+
+            Assert.IsNotNull(attributes);
+            Assert.IsTrue(attributes.Count > 0);
+
+            var buildableAttributes = attributes.Where(a => a.Type.IsFrameworkType &&
+                a.Type.FrameworkType == typeof(ModelReaderWriterBuildableAttribute)).ToList();
+
+            Assert.IsTrue(buildableAttributes.Any(a => a.Arguments.First().ToDisplayString().Contains("FrameworkModelWithMRW")),
+                "FrameworkModelWithMRW should be discovered from generic response wrapper return type");
+        }
+
+        [Test]
+        public void ValidateFrameworkBodyDependencyTypesAreDiscovered()
+        {
+            var clientProvider = new TestClientProviderWithFrameworkBodyDependency();
+            var outputLibrary = new TestOutputLibrary([clientProvider]);
+            var mockGenerator = MockHelpers.LoadMockGenerator(
+                createOutputLibrary: () => outputLibrary);
+
+            var contextDefinition = new ModelReaderWriterContextDefinition();
+            var attributes = contextDefinition.Attributes;
+
+            Assert.IsNotNull(attributes);
+            var buildableAttributes = attributes.Where(a => a.Type.IsFrameworkType &&
+                a.Type.FrameworkType == typeof(ModelReaderWriterBuildableAttribute)).ToList();
+
+            Assert.IsTrue(buildableAttributes.Any(a => a.Arguments.First().ToDisplayString().Contains("ResponseError")),
+                "Framework MRW types referenced from kept provider bodies should be discovered");
+        }
+
+        [Test]
         public async Task ValidateCustomPropertiesOnModelsAreDiscovered()
         {
             // Test that properties added via custom code are discovered
@@ -1833,6 +1873,44 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
                 [
                     new MethodProvider(signature, Statements.MethodBodyStatement.Empty, this)
                 ];
+            }
+        }
+
+        // Test client provider that returns a framework MRW type wrapped in a generic response type
+        private class TestClientProviderWithWrappedFrameworkReturnType : TypeProvider
+        {
+            protected override string BuildName() => "TestClient";
+
+            protected override string BuildRelativeFilePath() => "TestClient.cs";
+
+            protected internal override MethodProvider[] BuildMethods()
+            {
+                var returnType = new CSharpType(typeof(FrameworkResponse<>), new CSharpType(typeof(FrameworkModelWithMRW)));
+
+                var signature = new MethodSignature(
+                    Name: "GetFrameworkModel",
+                    Description: null,
+                    Modifiers: MethodSignatureModifiers.Public,
+                    ReturnType: returnType,
+                    ReturnDescription: null,
+                    Parameters: []);
+
+                return
+                [
+                    new MethodProvider(signature, Statements.MethodBodyStatement.Empty, this)
+                ];
+            }
+        }
+
+        private class TestClientProviderWithFrameworkBodyDependency : TypeProvider
+        {
+            protected override string BuildName() => "TestClient";
+
+            protected override string BuildRelativeFilePath() => "TestClient.cs";
+
+            protected internal override IReadOnlyList<CSharpType> BuildBodyDependencyTypes()
+            {
+                return [new CSharpType(typeof(Azure.ResponseError))];
             }
         }
     }

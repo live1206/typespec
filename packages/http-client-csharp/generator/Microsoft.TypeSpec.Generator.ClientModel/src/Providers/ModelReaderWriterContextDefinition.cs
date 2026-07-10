@@ -218,6 +218,50 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                     }
                 }
             }
+
+            CollectBuildableDependencyTypes(provider, visitedTypes, buildableTypes);
+            if (provider.CustomCodeView is { } customCodeView)
+            {
+                CollectBuildableDependencyTypes(customCodeView, visitedTypes, buildableTypes);
+            }
+        }
+
+        private void CollectBuildableDependencyTypes(
+            TypeProvider provider,
+            HashSet<CSharpType> visitedTypes,
+            HashSet<CSharpType> buildableTypes)
+        {
+            foreach (var dependencyType in provider.SignatureDependencyTypes)
+            {
+                CollectBuildableDependencyType(dependencyType, visitedTypes, buildableTypes);
+            }
+
+            foreach (var dependencyType in provider.BodyDependencyTypes)
+            {
+                CollectBuildableDependencyType(dependencyType, visitedTypes, buildableTypes);
+            }
+        }
+
+        private void CollectBuildableDependencyType(
+            CSharpType? dependencyType,
+            HashSet<CSharpType> visitedTypes,
+            HashSet<CSharpType> buildableTypes)
+        {
+            if (dependencyType == null)
+            {
+                return;
+            }
+
+            var typeToCheck = dependencyType.IsCollection ? GetInnerMostElement(dependencyType) : dependencyType;
+            if (typeToCheck.IsFrameworkType)
+            {
+                CollectBuildableTypesRecursive(typeToCheck.WithNullable(false), visitedTypes, buildableTypes);
+            }
+
+            foreach (var argument in dependencyType.Arguments)
+            {
+                CollectBuildableDependencyType(argument, visitedTypes, buildableTypes);
+            }
         }
 
         private void CollectBuildableTypesFromFrameworkType(

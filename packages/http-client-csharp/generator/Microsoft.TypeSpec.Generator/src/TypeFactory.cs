@@ -97,11 +97,7 @@ namespace Microsoft.TypeSpec.Generator
                         if (unionInput != null)
                         {
                             unionInputs.Add(unionInput);
-                            // we only keep the type if it is not framework type and not literal
-                            if (!unionInput.IsFrameworkType && !unionInput.IsLiteral)
-                            {
-                                UnionVariantTypesToKeep.Add(unionInput.FullyQualifiedName);
-                            }
+                            AddUnionVariantTypesToKeep(unionInput);
                         }
                     }
                     type = CSharpType.FromUnion(unionInputs);
@@ -129,6 +125,24 @@ namespace Microsoft.TypeSpec.Generator
             }
 
             return type;
+        }
+
+        private void AddUnionVariantTypesToKeep(CSharpType type)
+        {
+            if (!type.IsFrameworkType && !type.IsLiteral)
+            {
+                UnionVariantTypesToKeep.Add(type.FullyQualifiedName);
+            }
+
+            if (type.IsArray && type.ElementType is { } elementType)
+            {
+                AddUnionVariantTypesToKeep(elementType);
+            }
+
+            foreach (var argument in type.Arguments)
+            {
+                AddUnionVariantTypesToKeep(argument);
+            }
         }
 
         /// <summary>

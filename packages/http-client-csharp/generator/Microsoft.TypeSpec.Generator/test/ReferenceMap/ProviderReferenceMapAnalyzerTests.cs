@@ -153,6 +153,21 @@ namespace Microsoft.TypeSpec.Generator.Tests.ReferenceMap
         }
 
         [Test]
+        public void CollectionUnionVariantFallbackRootsOnlyMatchFullyQualifiedModelName()
+        {
+            var keptInput = InputFactory.Model("Variant", "Sample");
+            var keptVariant = new ModelProvider(keptInput);
+            var collidingVariant = new ModelProvider(InputFactory.Model("Variant", "Other"));
+            MockHelpers.LoadMockGenerator(createOutputLibrary: () => new TestOutputLibrary(keptVariant, collidingVariant));
+            CodeModelGenerator.Instance.TypeFactory.CreateCSharpType(InputFactory.Union([InputFactory.Array(keptInput)]));
+
+            ProviderReferenceMapAnalyzer.ApplyPreWriteAccessibility([keptVariant, collidingVariant]);
+
+            Assert.IsTrue(keptVariant.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public));
+            Assert.IsFalse(collidingVariant.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public));
+        }
+
+        [Test]
         public void HelperRootBodyDependencyRootsGeneratedGenericDependency()
         {
             var genericArgument = CreateNamedType("T", string.Empty);

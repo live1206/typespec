@@ -13,7 +13,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.PostProcessing
     public class ClientBodyDependencyPostProcessingTests
     {
         [Test]
-        public async Task OperationBodyParameterModelDoesNotBecomePublic()
+        public async Task OperationBodyParameterModelIsRemovedWhenNotOtherwiseReferenced()
         {
             var requestModel = InputFactory.Model("RequestBody");
             var parameter = InputFactory.BodyParameter("body", requestModel, isRequired: true);
@@ -21,7 +21,16 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.PostProcessing
             var method = InputFactory.BasicServiceMethod("Create", operation);
             var client = InputFactory.Client("TestClient", methods: [method]);
 
-            await GenerateAndAssertInternalModels([requestModel], [client], ["RequestBody"]);
+            await GenerateAndAssertFiles(
+                enums: [],
+                models: [requestModel],
+                clients: [client],
+                customFiles: [],
+                expectedFiles: [],
+                unexpectedFiles: [
+                    Path.Combine("src", "Generated", "Models", "RequestBody.cs"),
+                    Path.Combine("src", "Generated", "Models", "RequestBody.Serialization.cs")
+                ]);
         }
 
         [Test]
@@ -71,7 +80,18 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.PostProcessing
             var method = InputFactory.BasicServiceMethod("Configure", operation);
             var client = InputFactory.Client("TestClient", methods: [method]);
 
-            await GenerateAndAssertInternalModels([toolModel, nestedModel], [client], ["ToolConfig", "NestedToolParameter"]);
+            await GenerateAndAssertFiles(
+                enums: [],
+                models: [toolModel, nestedModel],
+                clients: [client],
+                customFiles: [],
+                expectedFiles: [],
+                unexpectedFiles: [
+                    Path.Combine("src", "Generated", "Models", "ToolConfig.cs"),
+                    Path.Combine("src", "Generated", "Models", "ToolConfig.Serialization.cs"),
+                    Path.Combine("src", "Generated", "Models", "NestedToolParameter.cs"),
+                    Path.Combine("src", "Generated", "Models", "NestedToolParameter.Serialization.cs")
+                ]);
         }
 
         [Test]
@@ -327,7 +347,10 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.PostProcessing
                         """)
                 ],
                 expectedFiles: [],
-                internalModelNames: ["RequestBody"]);
+                unexpectedFiles: [
+                    Path.Combine("src", "Generated", "Models", "RequestBody.cs"),
+                    Path.Combine("src", "Generated", "Models", "RequestBody.Serialization.cs")
+                ]);
         }
 
         private static async Task GenerateAndAssertInternalModels(

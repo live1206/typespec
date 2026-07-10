@@ -24,6 +24,10 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers.Definitions
 {
     public class ModelReaderWriterContextDefinitionTests
     {
+        public class FrameworkResponse<T>
+        {
+        }
+
         [Test]
         public void ValidateModelReaderWriterContextIsGenerated()
         {

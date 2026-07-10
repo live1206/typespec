@@ -8,9 +8,9 @@ using Microsoft.TypeSpec.Generator.Input;
 using Microsoft.TypeSpec.Generator.Tests.Common;
 using NUnit.Framework;
 
-namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.PostProcessing
+namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.ReferenceMap
 {
-    public class ClientBodyDependencyPostProcessingTests
+    public class ClientBodyDependencyReferenceMapTests
     {
         [Test]
         public async Task OperationBodyParameterModelIsRemovedWhenNotOtherwiseReferenced()

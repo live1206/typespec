@@ -146,7 +146,7 @@ namespace Microsoft.TypeSpec.Generator
                 symbolsToInternalize = Measure("PostProcessor.Internalize.UseShadowCandidates", () =>
                     GetSymbolsByName(definitions.DeclaredSymbols, referenceMapResult.InternalizeCandidates).ToArray());
                 symbolsToPublicize = Measure("PostProcessor.Internalize.UseShadowPublicizeCandidates", () =>
-                    GetSymbolsByName(definitions.DeclaredSymbols, referenceMapResult.PublicizeCandidates).ToArray());
+                    GetSymbolsByName(definitions.DeclaredSymbols, referenceMapResult.PublicCandidates).ToArray());
             }
             else
             {

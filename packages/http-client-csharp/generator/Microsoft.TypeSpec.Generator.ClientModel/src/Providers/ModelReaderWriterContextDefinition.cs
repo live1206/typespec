@@ -58,7 +58,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             }
             foreach (var provider in buildableProviders)
             {
-                if (!CodeModelGenerator.Instance.ShouldWriteProvider(provider))
+                if (!ShouldWriteProvider(provider))
                 {
                     continue;
                 }
@@ -103,7 +103,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             // Process each output-library provider recursively to discover types from methods and properties.
             foreach (var provider in contextEligibleOutputProviders)
             {
-                if (!CodeModelGenerator.Instance.ShouldWriteProvider(provider))
+                if (!ShouldWriteProvider(provider))
                 {
                     continue;
                 }
@@ -276,7 +276,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
             try
             {
-                if (!CodeModelGenerator.Instance.IsResolvableBuildableType(frameworkType))
+                if (!IsResolvableBuildableType(frameworkType))
                 {
                     return;
                 }
@@ -483,7 +483,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
         private static bool ShouldAddStandaloneBuildableProvider(TypeProvider provider)
         {
-            var isResolvable = CodeModelGenerator.Instance.IsResolvableBuildableType(provider.Type);
+            var isResolvable = IsResolvableBuildableType(provider.Type);
             var implementsMrw = ImplementsModelReaderWriter(provider);
             var hasWritableSerialization = HasWritableModelReaderWriterSerialization(provider);
             return isResolvable && implementsMrw && hasWritableSerialization;
@@ -498,7 +498,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
             return provider.SerializationProviders
                 .OfType<MrwSerializationTypeDefinition>()
-                .Any(CodeModelGenerator.Instance.ShouldWriteProvider);
+                .Any(ShouldWriteProvider);
         }
 
         private static void AddAttributeForType(

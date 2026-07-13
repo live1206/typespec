@@ -214,6 +214,8 @@ namespace Microsoft.TypeSpec.Generator
 
             if (modelProvider != null)
             {
+                // Input accessibility alone does not make a model part of the emitted public API.
+                // The provider reference map roots models from actual generated/custom signatures.
                 CSharpTypeMap[modelProvider.Type] = modelProvider;
                 TypeProvidersByName[modelProvider.Type.Name] = modelProvider;
             }

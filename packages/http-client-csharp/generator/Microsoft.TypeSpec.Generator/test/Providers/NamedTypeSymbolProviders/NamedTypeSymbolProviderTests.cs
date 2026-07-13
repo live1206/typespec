@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.TypeSpec.Generator.Expressions;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
@@ -373,26 +372,9 @@ namespace Microsoft.TypeSpec.Generator.Tests.Providers.NamedTypeSymbolProviders
         }
 
         [Test]
-        public void BodyDependenciesIncludeUsingNamespaceCandidatesForUnresolvedTypeSyntax()
+        public async Task BodyDependenciesIncludeUsingNamespaceCandidatesForUnresolvedTypeSyntax()
         {
-            var tree = CSharpSyntaxTree.ParseText("""
-                using Sample.Models;
-
-                namespace Sample
-                {
-                    public partial class CustomClient
-                    {
-                        public void Test(object response)
-                        {
-                            ReferencedModel result = (ReferencedModel)response;
-                        }
-                    }
-                }
-                """);
-            var compilation = CSharpCompilation.Create(
-                "TestAssembly",
-                [tree],
-                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+            var compilation = await Helpers.GetCompilationFromDirectoryAsync();
             var symbol = CompilationHelper.GetSymbol(compilation.Assembly.Modules.First().GlobalNamespace, "CustomClient")!;
             var provider = new NamedTypeSymbolProvider(symbol, compilation);
 
@@ -400,23 +382,9 @@ namespace Microsoft.TypeSpec.Generator.Tests.Providers.NamedTypeSymbolProviders
         }
 
         [Test]
-        public void PublicInterfaceMemberSignatureDependenciesAreIncluded()
+        public async Task PublicInterfaceMemberSignatureDependenciesAreIncluded()
         {
-            var tree = CSharpSyntaxTree.ParseText("""
-                using Sample.Models;
-
-                namespace Sample
-                {
-                    public partial interface ICustomApi
-                    {
-                        GeneratedModel Item { get; }
-                    }
-                }
-                """);
-            var compilation = CSharpCompilation.Create(
-                "TestAssembly",
-                [tree],
-                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+            var compilation = await Helpers.GetCompilationFromDirectoryAsync();
             var symbol = CompilationHelper.GetSymbol(compilation.Assembly.Modules.First().GlobalNamespace, "ICustomApi")!;
             var provider = new NamedTypeSymbolProvider(symbol, compilation);
 
@@ -424,26 +392,9 @@ namespace Microsoft.TypeSpec.Generator.Tests.Providers.NamedTypeSymbolProviders
         }
 
         [Test]
-        public void PublicNestedMemberSignatureDependenciesAreIncluded()
+        public async Task PublicNestedMemberSignatureDependenciesAreIncluded()
         {
-            var tree = CSharpSyntaxTree.ParseText("""
-                using Sample.Models;
-
-                namespace Sample
-                {
-                    public partial class CustomApi
-                    {
-                        public class Nested
-                        {
-                            public GeneratedModel Item { get; }
-                        }
-                    }
-                }
-                """);
-            var compilation = CSharpCompilation.Create(
-                "TestAssembly",
-                [tree],
-                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+            var compilation = await Helpers.GetCompilationFromDirectoryAsync();
             var symbol = CompilationHelper.GetSymbol(compilation.Assembly.Modules.First().GlobalNamespace, "CustomApi")!;
             var provider = new NamedTypeSymbolProvider(symbol, compilation);
 
@@ -451,23 +402,9 @@ namespace Microsoft.TypeSpec.Generator.Tests.Providers.NamedTypeSymbolProviders
         }
 
         [Test]
-        public void SourceInputHelperYieldsNestedSymbols()
+        public async Task SourceInputHelperYieldsNestedSymbols()
         {
-            var tree = CSharpSyntaxTree.ParseText("""
-                namespace Sample
-                {
-                    public partial class CustomApi
-                    {
-                        public class Nested
-                        {
-                        }
-                    }
-                }
-                """);
-            var compilation = CSharpCompilation.Create(
-                "TestAssembly",
-                [tree],
-                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+            var compilation = await Helpers.GetCompilationFromDirectoryAsync();
 
             var symbols = Microsoft.TypeSpec.Generator.SourceInput.SourceInputHelper.GetSymbols(compilation.Assembly.Modules.First().GlobalNamespace);
 
@@ -475,33 +412,9 @@ namespace Microsoft.TypeSpec.Generator.Tests.Providers.NamedTypeSymbolProviders
         }
 
         [Test]
-        public void SourceInputLookupUsesFullNestedDeclaringTypeName()
+        public async Task SourceInputLookupUsesFullNestedDeclaringTypeName()
         {
-            var tree = CSharpSyntaxTree.ParseText("""
-                namespace Sample
-                {
-                    public partial class Outer
-                    {
-                        public partial class Middle
-                        {
-                            public class Target
-                            {
-                            }
-                        }
-                    }
-
-                    public partial class Other
-                    {
-                        public class Target
-                        {
-                        }
-                    }
-                }
-                """);
-            var compilation = CSharpCompilation.Create(
-                "TestAssembly",
-                [tree],
-                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+            var compilation = await Helpers.GetCompilationFromDirectoryAsync();
             var sourceInputModel = new SourceInputModel(compilation, lastContract: null);
 
             var nestedType = sourceInputModel.FindForTypeInCustomization("Sample", "Target", "Outer+Middle");
@@ -511,20 +424,9 @@ namespace Microsoft.TypeSpec.Generator.Tests.Providers.NamedTypeSymbolProviders
         }
 
         [Test]
-        public void MetadataNamePreservesGenericArity()
+        public async Task MetadataNamePreservesGenericArity()
         {
-            var tree = CSharpSyntaxTree.ParseText("""
-                namespace Sample.Models
-                {
-                    public partial class CustomModel<T>
-                    {
-                    }
-                }
-                """);
-            var compilation = CSharpCompilation.Create(
-                "TestAssembly",
-                [tree],
-                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+            var compilation = await Helpers.GetCompilationFromDirectoryAsync();
             var symbol = CompilationHelper.GetSymbol(compilation.Assembly.Modules.First().GlobalNamespace, "CustomModel`1")!;
             var provider = new NamedTypeSymbolProvider(symbol, compilation);
 

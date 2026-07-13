@@ -32,18 +32,16 @@ namespace Microsoft.TypeSpec.Generator
             return boundaryNodes;
         }
 
-        private static HashSet<string> GetPublicizeDeclaredNodes(
+        private static HashSet<string> GetPublicDeclaredNodes(
             IReadOnlyList<TypeProvider> generatedProviders,
-            HashSet<string> nodes,
-            HashSet<string> internalizeDeclaredNodes)
+            HashSet<string> nodes)
         {
-            var publicizeDeclaredNodes = GetPostProcessorDeclaredNodes(generatedProviders, nodes, publicOnly: false);
-            return publicizeDeclaredNodes;
+            return GetGeneratedDeclaredNodes(generatedProviders, nodes, publicOnly: false);
         }
 
         private static HashSet<string> GetPublicApiTraversalNodes(
             HashSet<string> internalizeDeclaredNodes,
-            HashSet<string> publicizeDeclaredNodes,
+            HashSet<string> publicDeclaredNodes,
             HashSet<string> generatedInternalDeclarations,
             HashSet<string> generatedImplementationInternalDeclarations)
         {
@@ -59,7 +57,7 @@ namespace Microsoft.TypeSpec.Generator
                 traversalNodes.Add(node);
             }
 
-            foreach (var node in publicizeDeclaredNodes)
+            foreach (var node in publicDeclaredNodes)
             {
                 if (!generatedInternalDeclarations.Contains(node) &&
                     !generatedImplementationInternalDeclarations.Contains(node))
@@ -73,12 +71,12 @@ namespace Microsoft.TypeSpec.Generator
 
         private static HashSet<string> GetInternalizeCandidates(
             HashSet<string> internalizeDeclaredNodes,
-            HashSet<string> publicizeReachable,
+            HashSet<string> publicReachable,
             HashSet<string> customInternalDeclarations,
             HashSet<string> generatedInternalDeclarations,
             HashSet<string> customInternalBoundaryNodes,
             HashSet<string> customPublicRoots,
-            HashSet<string> publicizeRoots,
+            HashSet<string> publicRoots,
             HashSet<string> nodes,
             IReadOnlyDictionary<string, HashSet<string>> references)
         {
@@ -86,11 +84,11 @@ namespace Microsoft.TypeSpec.Generator
             foreach (var node in internalizeDeclaredNodes)
             {
                 var isNonRootKept = IsKeptName(node, CodeModelGenerator.Instance.NonRootTypes, nodes);
-                var isPublicReachableNonRootKept = isNonRootKept && publicizeReachable.Contains(node);
-                if (!publicizeReachable.Contains(node) ||
+                var isPublicReachableNonRootKept = isNonRootKept && publicReachable.Contains(node);
+                if (!publicReachable.Contains(node) ||
                     customInternalDeclarations.Contains(node) ||
                     generatedInternalDeclarations.Contains(node) && !customPublicRoots.Contains(node) && !isPublicReachableNonRootKept ||
-                    customInternalBoundaryNodes.Contains(node) && (!publicizeRoots.Contains(node) || isNonRootKept) ||
+                    customInternalBoundaryNodes.Contains(node) && (!publicRoots.Contains(node) || isNonRootKept) ||
                     isNonRootKept &&
                         references.TryGetValue(node, out var nodeReferences) &&
                         (nodeReferences.Overlaps(customInternalDeclarations) ||
@@ -110,7 +108,7 @@ namespace Microsoft.TypeSpec.Generator
                 {
                     var isNonRootKept = IsKeptName(node, CodeModelGenerator.Instance.NonRootTypes, nodes);
                     if (candidates.Contains(node) ||
-                        publicizeRoots.Contains(node) && !isNonRootKept ||
+                        publicRoots.Contains(node) && !isNonRootKept ||
                         !references.TryGetValue(node, out var nodeReferences) ||
                         !nodeReferences.Overlaps(candidates))
                     {
@@ -190,6 +188,10 @@ namespace Microsoft.TypeSpec.Generator
             }
         }
 
+        /// <summary>
+        /// Internalizes dependencies whose generated predecessors are all internal, unless the dependency
+        /// is an explicit public root. Repeats until transitive internal-only dependencies are included.
+        /// </summary>
         private static void AddInternalOnlyDependencyCandidates(
             HashSet<string> internalizeDeclaredNodes,
             HashSet<string> candidates,
@@ -239,40 +241,44 @@ namespace Microsoft.TypeSpec.Generator
             }
         }
 
-        private static HashSet<string> GetPublicizeCandidates(
-            HashSet<string> publicizeDeclaredNodes,
-            HashSet<string> publicizeReachable,
+        /// <summary>
+        /// Finds generated declarations that must be promoted to public because they are exposed by a
+        /// reachable public API, while respecting explicit internal boundaries and helper-only roots.
+        /// </summary>
+        private static HashSet<string> GetPublicCandidates(
+            HashSet<string> publicDeclaredNodes,
+            HashSet<string> publicReachable,
             HashSet<string> customInternalDeclarations,
             HashSet<string> customInternalBoundaryNodes,
             HashSet<string> internalizeHelperRoots,
-            HashSet<string> publicizeRootExclusions,
+            HashSet<string> publicRootExclusions,
             HashSet<string> generatedInternalDeclarations,
-            HashSet<string> publicizeRoots,
+            HashSet<string> publicRoots,
             Dictionary<string, HashSet<string>> publicApiReferences,
             Dictionary<string, HashSet<string>> internalizeReferences,
             HashSet<string> generatedImplementationInternalDeclarations)
         {
             var candidates = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var node in publicizeDeclaredNodes)
+            foreach (var node in publicDeclaredNodes)
             {
                 if (customInternalDeclarations.Contains(node) ||
                     customInternalBoundaryNodes.Contains(node) ||
                     internalizeHelperRoots.Contains(node) ||
-                    publicizeRootExclusions.Contains(node) ||
-                    !publicizeReachable.Contains(node))
+                    publicRootExclusions.Contains(node) ||
+                    !publicReachable.Contains(node))
                 {
                     continue;
                 }
 
                 if (generatedInternalDeclarations.Contains(node) &&
-                    !publicizeRoots.Contains(node) &&
-                    !HasPublicApiPredecessor(node, publicApiReferences, publicizeReachable, generatedImplementationInternalDeclarations))
+                    !publicRoots.Contains(node) &&
+                    !HasPublicApiPredecessor(node, publicApiReferences, publicReachable, generatedImplementationInternalDeclarations))
                 {
                     continue;
                 }
 
-                if (!publicizeRoots.Contains(node) &&
-                    !HasPublicApiPredecessor(node, internalizeReferences, publicizeReachable, generatedInternalDeclarations, generatedImplementationInternalDeclarations))
+                if (!publicRoots.Contains(node) &&
+                    !HasPublicApiPredecessor(node, internalizeReferences, publicReachable, generatedInternalDeclarations, generatedImplementationInternalDeclarations))
                 {
                     continue;
                 }
@@ -319,7 +325,7 @@ namespace Microsoft.TypeSpec.Generator
             var removeReachable = GetReachableTypes(removeRoots, graph.References);
             AddBasePreservedReferences(generatedProviders, graph.Nodes, graph.References, removeReachable);
 
-            var removeDeclaredNodes = GetPostProcessorDeclaredNodes(generatedProviders, graph.Nodes, publicOnly: false);
+            var removeDeclaredNodes = GetGeneratedDeclaredNodes(generatedProviders, graph.Nodes, publicOnly: false);
             removeDeclaredNodes.ExceptWith(removeReachable);
             return removeDeclaredNodes;
         }

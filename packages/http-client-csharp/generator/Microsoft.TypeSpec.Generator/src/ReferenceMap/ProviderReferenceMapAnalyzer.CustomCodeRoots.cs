@@ -268,6 +268,10 @@ namespace Microsoft.TypeSpec.Generator
             return memberNames;
         }
 
+        /// <summary>
+        /// Matches internal custom declarations to the generated provider identities whose accessibility
+        /// they constrain. Metadata names preserve nested-type identity when available.
+        /// </summary>
         private static HashSet<string> GetCustomCodeInternalGeneratedTypeDeclarations(IReadOnlyList<TypeProvider> providers, HashSet<string> generatedTypeNames)
         {
             var declarations = new HashSet<string>(StringComparer.Ordinal);

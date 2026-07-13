@@ -47,9 +47,8 @@ namespace Microsoft.TypeSpec.Generator
                     continue;
                 }
 
-                // Model factory signatures mention many models. The existing Roslyn post-processor
-                // removes factory methods for unreachable models, so model factory should only
-                // contribute helper dependencies, not model reachability edges.
+                // Model factory signatures mention many models, but methods for unreachable models
+                // are removed with those models. Only helper dependencies contribute reachability.
                 if (IsModelFactoryProvider(provider))
                 {
                     continue;

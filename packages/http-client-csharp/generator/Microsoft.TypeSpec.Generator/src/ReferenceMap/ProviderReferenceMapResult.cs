@@ -7,7 +7,7 @@ namespace Microsoft.TypeSpec.Generator
 {
     internal sealed record ProviderReferenceMapResult(
         HashSet<string> InternalizeCandidates,
-        HashSet<string> PublicizeCandidates,
+        HashSet<string> PublicCandidates,
         HashSet<string> RemoveCandidates)
     {
     }

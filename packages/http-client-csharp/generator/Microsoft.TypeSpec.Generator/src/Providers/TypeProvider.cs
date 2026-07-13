@@ -364,6 +364,18 @@ namespace Microsoft.TypeSpec.Generator.Providers
         /// </summary>
         protected internal virtual bool ShouldAnalyzeAttributesInReferenceMap => true;
 
+        /// <summary>
+        /// Determines whether a provider remains in the generated output after reference-map analysis.
+        /// </summary>
+        protected static bool ShouldWriteProvider(TypeProvider provider) =>
+            ProviderReferenceMapAnalyzer.ShouldWriteProvider(provider);
+
+        /// <summary>
+        /// Determines whether a type remains resolvable after reference-map analysis.
+        /// </summary>
+        protected static bool IsResolvableBuildableType(CSharpType type) =>
+            ProviderReferenceMapAnalyzer.IsResolvableBuildableType(type);
+
         protected virtual CSharpType[] GetTypeArguments() => [];
 
         internal PropertyProvider[] FilterCustomizedProperties(IEnumerable<PropertyProvider> specProperties)

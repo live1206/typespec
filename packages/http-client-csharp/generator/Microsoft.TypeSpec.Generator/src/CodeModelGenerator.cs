@@ -268,15 +268,6 @@ namespace Microsoft.TypeSpec.Generator
             }
         }
 
-        /// Determines whether the provider should be written for the current generation pass.
-        /// </summary>
-        public bool ShouldWriteProvider(TypeProvider provider) => ProviderReferenceMapAnalyzer.ShouldWriteProvider(provider);
-
-        /// <summary>
-        /// Determines whether the type can be referenced as a ModelReaderWriter buildable type.
-        /// </summary>
-        public bool IsResolvableBuildableType(CSharpType type) => ProviderReferenceMapAnalyzer.IsResolvableBuildableType(type);
-
         /// <summary>
         /// Writes additional output files (e.g. configuration schemas) after the main code generation is complete.
         /// Override this method to generate non-C# output files.

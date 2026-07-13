@@ -444,6 +444,71 @@ namespace Microsoft.TypeSpec.Generator.Tests.ReferenceMap
         }
 
         [Test]
+        public async Task LastContractGenericDeclarationKeepsOnlyMatchingGeneratedGenericTypePublic()
+        {
+            var lastContractCompilation = CSharpCompilation.Create(
+                "LastContract",
+                [CSharpSyntaxTree.ParseText("""
+                    namespace Sample.Models
+                    {
+                        public partial class PageResult<T>
+                        {
+                        }
+                    }
+                    """)],
+                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+
+            var genericArgument = CreateNamedType("T", string.Empty);
+            var genericPageResult = new GenericTestTypeProvider("PageResult", TypeSignatureModifiers.Public, "Sample.Models", genericArgument);
+            var nonGenericPageResult = new GeneratedModelTestTypeProvider("PageResult", TypeSignatureModifiers.Public, ns: "Sample.Models");
+            await MockHelpers.LoadMockGeneratorAsync(
+                createOutputLibrary: () => new TestOutputLibrary(genericPageResult, nonGenericPageResult),
+                configuration: "{\"unreferenced-types-handling\":\"removeOrInternalize\"}",
+                lastContractCompilation: () => Task.FromResult<Compilation>(lastContractCompilation));
+
+            ProviderReferenceMapAnalyzer.ApplyPreWriteAccessibility([genericPageResult, nonGenericPageResult]);
+
+            Assert.IsTrue(genericPageResult.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public));
+            Assert.IsFalse(genericPageResult.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Internal));
+            Assert.IsTrue(nonGenericPageResult.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Internal));
+            Assert.IsFalse(nonGenericPageResult.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public));
+        }
+
+        [Test]
+        public async Task LastContractNestedPublicDeclarationKeepsGeneratedNestedTypePublic()
+        {
+            var lastContractCompilation = CSharpCompilation.Create(
+                "LastContract",
+                [CSharpSyntaxTree.ParseText("""
+                    namespace Sample.Models
+                    {
+                        public partial class OuterModel
+                        {
+                            public partial class InnerModel
+                            {
+                            }
+                        }
+                    }
+                    """)],
+                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+
+            var outerModel = new TestTypeProvider("OuterModel", TypeSignatureModifiers.Public, ns: "Sample.Models");
+            var innerModel = new NestedTestTypeProvider("InnerModel", TypeSignatureModifiers.Public, outerModel, ns: "Sample.Models");
+            outerModel.NestedTypesInternal = [innerModel];
+            await MockHelpers.LoadMockGeneratorAsync(
+                createOutputLibrary: () => new TestOutputLibrary(outerModel),
+                configuration: "{\"unreferenced-types-handling\":\"removeOrInternalize\"}",
+                lastContractCompilation: () => Task.FromResult<Compilation>(lastContractCompilation));
+
+            ProviderReferenceMapAnalyzer.ApplyPreWriteAccessibility([outerModel]);
+
+            Assert.IsTrue(outerModel.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public));
+            Assert.IsFalse(outerModel.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Internal));
+            Assert.IsTrue(innerModel.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public));
+            Assert.IsFalse(innerModel.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Internal));
+        }
+
+        [Test]
         public void DependenciesOfInternalizedClientAreNotPublicizedFromClientRootTraversal()
         {
             var clientOptions = new TestTypeProvider("SampleClientOptions", TypeSignatureModifiers.Public, ns: "Sample");

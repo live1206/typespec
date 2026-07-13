@@ -5,7 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -269,77 +268,6 @@ namespace Microsoft.TypeSpec.Generator
             return memberNames;
         }
 
-        private static HashSet<string> GetApiBaselineGeneratedTypeRoots(HashSet<string> generatedTypeNames)
-        {
-            var roots = new HashSet<string>(StringComparer.Ordinal);
-            var projectDirectory = CodeModelGenerator.Instance.Configuration.ProjectDirectory;
-            if (string.IsNullOrEmpty(projectDirectory))
-            {
-                return roots;
-            }
-
-            var apiDirectory = Path.GetFullPath(Path.Combine(projectDirectory, "..", "api"));
-            if (!Directory.Exists(apiDirectory))
-            {
-                return roots;
-            }
-
-            var apiText = string.Join("\n", Directory.GetFiles(apiDirectory, "*.cs", SearchOption.AllDirectories).Select(File.ReadAllText));
-            var apiDeclaredTypeNames = GetApiDeclaredTypeNames(apiText);
-            foreach (var fullName in generatedTypeNames)
-            {
-                var simpleName = StripGenericArity(GetSimpleName(fullName));
-                var normalizedFullName = StripGenericArity(fullName);
-                if (!ContainsApiTypeReference(apiText, apiDeclaredTypeNames, normalizedFullName, simpleName))
-                {
-                    continue;
-                }
-
-                roots.Add(fullName);
-            }
-
-            return roots;
-        }
-
-        private static HashSet<string> GetApiDeclaredTypeNames(string apiText)
-        {
-            var declaredTypeNames = new HashSet<string>(StringComparer.Ordinal);
-            string? currentNamespace = null;
-            foreach (var line in apiText.Split('\n'))
-            {
-                var namespaceMatch = Regex.Match(line, @"^namespace\s+([\w.]+)\s*\{?\s*$");
-                if (namespaceMatch.Success)
-                {
-                    currentNamespace = namespaceMatch.Groups[1].Value;
-                    continue;
-                }
-
-                if (currentNamespace == null)
-                {
-                    continue;
-                }
-
-                var declarationMatch = Regex.Match(line, @"^    \S.*?\b(class|struct|interface|enum)\s+([A-Za-z_][A-Za-z0-9_]*)(?!\w)");
-                if (declarationMatch.Success)
-                {
-                    declaredTypeNames.Add($"{currentNamespace}.{declarationMatch.Groups[2].Value}");
-                }
-            }
-
-            return declaredTypeNames;
-        }
-
-        private static bool ContainsApiTypeReference(string apiText, HashSet<string> apiDeclaredTypeNames, string fullName, string simpleName)
-        {
-            var fullNamePattern = $@"(?<![\w.]){Regex.Escape(fullName)}(?![\w.])";
-            if (Regex.IsMatch(apiText, fullNamePattern))
-            {
-                return true;
-            }
-
-            return apiDeclaredTypeNames.Contains(fullName);
-        }
-
         private static HashSet<string> GetCustomCodeInternalGeneratedTypeDeclarations(IReadOnlyList<TypeProvider> providers, HashSet<string> generatedTypeNames)
         {
             var declarations = new HashSet<string>(StringComparer.Ordinal);
@@ -416,9 +344,7 @@ namespace Microsoft.TypeSpec.Generator
             => GetGeneratedTypeDeclarationsByLastContractAccessibility(providers, generatedTypeNames, TypeSignatureModifiers.Public);
 
         private static HashSet<string> GetGeneratedPublicTypeDeclarationsFromLastContract(IReadOnlyList<TypeProvider> providers, HashSet<string> generatedTypeNames)
-            => HasApiBaselineDirectory()
-                ? new HashSet<string>(StringComparer.Ordinal)
-                : GetGeneratedPublicTypeDeclarations(providers, generatedTypeNames);
+            => GetGeneratedPublicTypeDeclarations(providers, generatedTypeNames);
 
         private static HashSet<string> GetGeneratedTypeDeclarationsByLastContractAccessibility(
             IReadOnlyList<TypeProvider> providers,
@@ -430,8 +356,10 @@ namespace Microsoft.TypeSpec.Generator
             {
                 var lastContractView = CodeModelGenerator.Instance.SourceInputModel.FindForTypeInLastContractIncludingInternal(
                     provider.Type.Namespace,
-                    provider.Type.Name,
-                    provider.DeclaringTypeProvider?.Type.Name);
+                    GetSimpleName(GetProviderTypeName(provider.Type)),
+                    provider.DeclaringTypeProvider is { } declaringTypeProvider
+                        ? GetSimpleName(GetProviderTypeName(declaringTypeProvider.Type))
+                        : null);
                 if (lastContractView?.DeclarationModifiers.HasFlag(accessibility) != true)
                 {
                     continue;

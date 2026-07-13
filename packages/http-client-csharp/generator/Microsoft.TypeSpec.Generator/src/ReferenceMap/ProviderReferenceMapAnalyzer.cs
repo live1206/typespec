@@ -178,13 +178,10 @@ namespace Microsoft.TypeSpec.Generator
             var publicGraph = BuildGraph(generatedProviders, publicOnly: true);
 
             var customPublicRoots = GetCustomCodePublicGeneratedTypeRoots(generatedProviders, graph.Nodes);
-            var apiBaselineGeneratedTypeRoots = GetApiBaselineGeneratedTypeRoots(graph.Nodes);
-            customPublicRoots.UnionWith(apiBaselineGeneratedTypeRoots);
             var generatedPublicDeclarations = GetGeneratedPublicTypeDeclarationsFromLastContract(generatedProviders, graph.Nodes);
             customPublicRoots.UnionWith(generatedPublicDeclarations);
             var customCodeRemovalRoots = GetCustomCodeGeneratedTypeRoots(generatedProviders, graph.Nodes);
             var customRemovalRoots = new HashSet<string>(customCodeRemovalRoots, StringComparer.Ordinal);
-            customRemovalRoots.UnionWith(apiBaselineGeneratedTypeRoots);
             customRemovalRoots.UnionWith(generatedPublicDeclarations);
             var customInternalDeclarations = GetCustomCodeInternalGeneratedTypeDeclarations(generatedProviders, graph.Nodes);
             var generatedInternalDeclarations = GetGeneratedInternalTypeDeclarations(generatedProviders, graph.Nodes);
@@ -234,8 +231,6 @@ namespace Microsoft.TypeSpec.Generator
             var graph = BuildGraph(generatedProviders);
             var publicGraph = BuildGraph(generatedProviders, publicOnly: true);
             var customPublicRoots = GetCustomCodePublicGeneratedTypeRoots(generatedProviders, graph.Nodes);
-            var apiBaselineGeneratedTypeRoots = GetApiBaselineGeneratedTypeRoots(graph.Nodes);
-            customPublicRoots.UnionWith(apiBaselineGeneratedTypeRoots);
             var generatedPublicDeclarations = GetGeneratedPublicTypeDeclarationsFromLastContract(generatedProviders, graph.Nodes);
             customPublicRoots.UnionWith(generatedPublicDeclarations);
             var customInternalDeclarations = GetCustomCodeInternalGeneratedTypeDeclarations(generatedProviders, graph.Nodes);

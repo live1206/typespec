@@ -1228,8 +1228,8 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                         break;
                     case ParameterLocation.Query:
                     case ParameterLocation.Header:
-                        if (inputParam is InputHeaderParameter { IsContentType: true }
-                            && !HasContentTypeBeforeBodyInLastContract(serviceMethod.Name, client.BackCompatProvider))
+                        if (IsContentTypeParameter(inputParam)
+                            && !ShouldPreserveContentTypeBeforeBody(methodType, serviceMethod, client.BackCompatProvider))
                         {
                             sortedParams.Add(contentType++, parameter);
                         }
@@ -1337,8 +1337,6 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
         private static bool HasContentTypeBeforeBodyInLastContract(InputServiceMethod serviceMethod, TypeProvider backCompatProvider)
         {
             const string contentTypeParamName = "contentType";
-            const string contentParamName = "content";
-
             var lastContractMethods = backCompatProvider.LastContractView?.Methods;
             if (lastContractMethods == null || lastContractMethods.Count == 0)
             {

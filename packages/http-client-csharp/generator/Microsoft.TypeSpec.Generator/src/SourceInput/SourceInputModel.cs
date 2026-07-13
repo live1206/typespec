@@ -148,8 +148,16 @@ namespace Microsoft.TypeSpec.Generator.SourceInput
 
             var fullyQualifiedMetadataName = GetFullyQualifiedMetadataName(ns, name, declaringTypeName);
 
-            // Either find by the CodeGenType attribute or by the actual type name.
-            if (!_nameMap.Value.TryGetValue(name, out var type))
+            // Either find by the CodeGenType attribute in customization or by the actual type name.
+            INamedTypeSymbol? type = null;
+            if (ReferenceEquals(compilation, Customization) &&
+                _nameMap.Value.TryGetValue(name, out var mappedType) &&
+                IsContainingTypeMatch(mappedType, ns, declaringTypeName))
+            {
+                type = mappedType;
+            }
+
+            if (type == null)
             {
                 type = FindNamedTypeSymbol(compilation, includeReferencedAssemblies, fullyQualifiedMetadataName);
             }
@@ -181,5 +189,48 @@ namespace Microsoft.TypeSpec.Generator.SourceInput
 
             return name != null;
         }
+
+        private static INamedTypeSymbol? FindNestedNamedTypeSymbol(Compilation compilation, string ns, string name, string? declaringTypeName)
+        {
+            if (declaringTypeName == null)
+            {
+                return null;
+            }
+
+            foreach (var module in compilation.Assembly.Modules)
+            {
+                foreach (var type in SourceInputHelper.GetSymbols(module.GlobalNamespace))
+                {
+                    if (type is not INamedTypeSymbol namedTypeSymbol ||
+                        !string.Equals(namedTypeSymbol.Name, name, StringComparison.Ordinal) ||
+                        !string.Equals(GetContainingTypeName(namedTypeSymbol), declaringTypeName, StringComparison.Ordinal) ||
+                        !string.Equals(namedTypeSymbol.ContainingNamespace.ToDisplayString(), ns, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    return namedTypeSymbol;
+                }
+            }
+
+            return null;
+        }
+
+        private static string? GetContainingTypeName(INamedTypeSymbol symbol)
+        {
+            if (symbol.ContainingType is null)
+            {
+                return null;
+            }
+
+            var parentName = GetContainingTypeName(symbol.ContainingType);
+            return parentName is null
+                ? symbol.ContainingType.MetadataName
+                : $"{parentName}+{symbol.ContainingType.MetadataName}";
+        }
+
+        private static bool IsContainingTypeMatch(INamedTypeSymbol symbol, string ns, string? declaringTypeName)
+            => string.Equals(symbol.ContainingNamespace.ToDisplayString(), ns, StringComparison.Ordinal) &&
+                string.Equals(GetContainingTypeName(symbol), declaringTypeName, StringComparison.Ordinal);
     }
 }

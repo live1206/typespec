@@ -41,7 +41,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 }
 
                 var ns = _namedTypeSymbol.ContainingNamespace.GetFullyQualifiedNameFromDisplayString();
-                _metadataName = string.IsNullOrEmpty(ns) ? _namedTypeSymbol.MetadataName : $"{ns}.{_namedTypeSymbol.MetadataName}";
+                var typeName = GetMetadataName(_namedTypeSymbol);
+                _metadataName = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
                 return _metadataName;
             }
         }
@@ -50,6 +51,16 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         private protected sealed override NamedTypeSymbolProvider? BuildCustomCodeView(string? generatedTypeName = default, string? generatedTypeNamespace = default) => null;
         private protected sealed override TypeProvider? BuildLastContractView(string? generatedTypeName = default, string? generatedTypeNamespace = default) => null;
+
+        private static string GetMetadataName(INamedTypeSymbol symbol)
+        {
+            if (symbol.ContainingType is null)
+            {
+                return symbol.MetadataName;
+            }
+
+            return $"{GetMetadataName(symbol.ContainingType)}+{symbol.MetadataName}";
+        }
 
         protected override string BuildRelativeFilePath() => throw new InvalidOperationException("This type should not be writing in generation");
 
@@ -444,6 +455,23 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 case BaseTypeDeclarationSyntax type:
                     AddSyntaxTypeReferences(type.BaseList, dependencies, semanticModel, namespaceCandidates);
                     break;
+            }
+        }
+
+        private void AddPublicTypeSignatureDependencyTypes(
+            TypeDeclarationSyntax typeDeclaration,
+            HashSet<CSharpType> dependencies,
+            SemanticModel semanticModel,
+            IReadOnlyList<string> namespaceCandidates)
+        {
+            AddSyntaxTypeReferences(typeDeclaration.BaseList, dependencies, semanticModel, namespaceCandidates);
+            AddSyntaxTypeReferences(typeDeclaration.ConstraintClauses, dependencies, semanticModel, namespaceCandidates);
+            foreach (var member in typeDeclaration.Members)
+            {
+                if (IsPublicApiMember(member))
+                {
+                    AddPublicSignatureDependencyTypes(member, dependencies);
+                }
             }
         }
 

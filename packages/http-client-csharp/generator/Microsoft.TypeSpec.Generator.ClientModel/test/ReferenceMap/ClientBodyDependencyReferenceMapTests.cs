@@ -201,9 +201,53 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.ReferenceMap
         }
 
         [Test]
+        public async Task PublicCustomCodeTypeConstraintsStayPublic()
+        {
+            var generatedModel = InputFactory.Model("GeneratedModel", access: "internal");
+
+            await GenerateAndAssertFiles(
+                enums: [],
+                models: [generatedModel],
+                clients: [],
+                customFiles: [
+                    (Path.Combine("src", "PublicCustomApi.cs"), """
+                        using Sample.Models;
+
+                        namespace Sample;
+
+                        public partial class PublicCustomApi<T> where T : GeneratedModel
+                        {
+                        }
+                        """)
+                ],
+                expectedFiles: [],
+                publicModelNames: ["GeneratedModel"]);
+        }
+
+        [Test]
         public async Task GeneratedRequestHeaderSetDelimitedReferenceKeepsExtensions()
         {
             var header = InputFactory.HeaderParameter("x-ms-custom", InputFactory.Array(InputPrimitiveType.String), isRequired: true);
+            var operation = InputFactory.Operation("Create", parameters: [header]);
+            var method = InputFactory.BasicServiceMethod("Create", operation);
+            var client = InputFactory.Client("TestClient", methods: [method]);
+
+            await GenerateAndAssertFiles(
+                enums: [],
+                models: [],
+                clients: [client],
+                customFiles: [],
+                expectedFiles: [Path.Combine("src", "Generated", "Internal", "PipelineRequestHeadersExtensions.cs")]);
+        }
+
+        [Test]
+        public async Task GeneratedPrefixedDictionaryHeaderKeepsExtensions()
+        {
+            var header = InputFactory.HeaderParameter(
+                "x-ms-meta",
+                InputFactory.Dictionary(InputPrimitiveType.String),
+                isRequired: true,
+                collectionHeaderPrefix: "x-ms-meta-");
             var operation = InputFactory.Operation("Create", parameters: [header]);
             var method = InputFactory.BasicServiceMethod("Create", operation);
             var client = InputFactory.Client("TestClient", methods: [method]);

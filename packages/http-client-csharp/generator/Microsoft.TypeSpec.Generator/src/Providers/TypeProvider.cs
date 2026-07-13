@@ -44,14 +44,26 @@ namespace Microsoft.TypeSpec.Generator.Providers
             => CodeModelGenerator.Instance.SourceInputModel.FindForTypeInCustomization(
                 generatedTypeNamespace ?? BuildNamespace(),
                 generatedTypeName ?? BuildName(),
-                // Use the Type.Name so that any customizations to the declaring type are applied for the lookup.
-                DeclaringTypeProvider?.Type.Name);
+                GetDeclaringTypeName(DeclaringTypeProvider));
 
         private protected virtual TypeProvider? BuildLastContractView(string? generatedTypeName = null, string? generatedTypeNamespace = null)
             => CodeModelGenerator.Instance.SourceInputModel.FindForTypeInLastContract(
                 generatedTypeNamespace ?? CustomCodeView?.Type.Namespace ?? BuildNamespace(),
                 generatedTypeName ?? CustomCodeView?.Name ?? BuildName(),
-                DeclaringTypeProvider?.Type.Name);
+                GetDeclaringTypeName(DeclaringTypeProvider));
+
+        private static string? GetDeclaringTypeName(TypeProvider? declaringTypeProvider)
+        {
+            if (declaringTypeProvider is null)
+            {
+                return null;
+            }
+
+            var parentName = GetDeclaringTypeName(declaringTypeProvider.DeclaringTypeProvider);
+            return parentName is null
+                ? declaringTypeProvider.Type.Name
+                : $"{parentName}+{declaringTypeProvider.Type.Name}";
+        }
 
         private protected virtual TypeProvider BuildSpecView() => new SpecTypeProvider(this);
 

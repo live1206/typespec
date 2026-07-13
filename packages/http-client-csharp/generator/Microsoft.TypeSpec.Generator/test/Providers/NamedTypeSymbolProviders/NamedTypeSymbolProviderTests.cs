@@ -10,6 +10,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.TypeSpec.Generator.Expressions;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
+using Microsoft.TypeSpec.Generator.SourceInput;
 using Microsoft.TypeSpec.Generator.Tests.Common;
 using NUnit.Framework;
 using static Microsoft.TypeSpec.Generator.Snippets.Snippet;
@@ -396,6 +397,117 @@ namespace Microsoft.TypeSpec.Generator.Tests.Providers.NamedTypeSymbolProviders
             var provider = new NamedTypeSymbolProvider(symbol, compilation);
 
             Assert.IsTrue(provider.BodyDependencyTypes.Any(type => type.FullyQualifiedName == "Sample.Models.ReferencedModel"));
+        }
+
+        [Test]
+        public void PublicInterfaceMemberSignatureDependenciesAreIncluded()
+        {
+            var tree = CSharpSyntaxTree.ParseText("""
+                using Sample.Models;
+
+                namespace Sample
+                {
+                    public partial interface ICustomApi
+                    {
+                        GeneratedModel Item { get; }
+                    }
+                }
+                """);
+            var compilation = CSharpCompilation.Create(
+                "TestAssembly",
+                [tree],
+                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+            var symbol = CompilationHelper.GetSymbol(compilation.Assembly.Modules.First().GlobalNamespace, "ICustomApi")!;
+            var provider = new NamedTypeSymbolProvider(symbol, compilation);
+
+            Assert.IsTrue(provider.SignatureDependencyTypes.Any(type => type.FullyQualifiedName == "Sample.Models.GeneratedModel"));
+        }
+
+        [Test]
+        public void PublicNestedMemberSignatureDependenciesAreIncluded()
+        {
+            var tree = CSharpSyntaxTree.ParseText("""
+                using Sample.Models;
+
+                namespace Sample
+                {
+                    public partial class CustomApi
+                    {
+                        public class Nested
+                        {
+                            public GeneratedModel Item { get; }
+                        }
+                    }
+                }
+                """);
+            var compilation = CSharpCompilation.Create(
+                "TestAssembly",
+                [tree],
+                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+            var symbol = CompilationHelper.GetSymbol(compilation.Assembly.Modules.First().GlobalNamespace, "CustomApi")!;
+            var provider = new NamedTypeSymbolProvider(symbol, compilation);
+
+            Assert.IsTrue(provider.SignatureDependencyTypes.Any(type => type.FullyQualifiedName == "Sample.Models.GeneratedModel"));
+        }
+
+        [Test]
+        public void SourceInputHelperYieldsNestedSymbols()
+        {
+            var tree = CSharpSyntaxTree.ParseText("""
+                namespace Sample
+                {
+                    public partial class CustomApi
+                    {
+                        public class Nested
+                        {
+                        }
+                    }
+                }
+                """);
+            var compilation = CSharpCompilation.Create(
+                "TestAssembly",
+                [tree],
+                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+
+            var symbols = Microsoft.TypeSpec.Generator.SourceInput.SourceInputHelper.GetSymbols(compilation.Assembly.Modules.First().GlobalNamespace);
+
+            Assert.IsTrue(symbols.Any(symbol => symbol.MetadataName == "Nested"));
+        }
+
+        [Test]
+        public void SourceInputLookupUsesFullNestedDeclaringTypeName()
+        {
+            var tree = CSharpSyntaxTree.ParseText("""
+                namespace Sample
+                {
+                    public partial class Outer
+                    {
+                        public partial class Middle
+                        {
+                            public class Target
+                            {
+                            }
+                        }
+                    }
+
+                    public partial class Other
+                    {
+                        public class Target
+                        {
+                        }
+                    }
+                }
+                """);
+            var compilation = CSharpCompilation.Create(
+                "TestAssembly",
+                [tree],
+                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+            var sourceInputModel = new SourceInputModel(compilation, lastContract: null);
+
+            var nestedType = sourceInputModel.FindForTypeInCustomization("Sample", "Target", "Outer+Middle");
+
+            Assert.IsNotNull(nestedType);
+            Assert.AreEqual("Sample.Outer+Middle+Target", ((NamedTypeSymbolProvider)nestedType!).MetadataName);
         }
 
         [Test]

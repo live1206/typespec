@@ -66,7 +66,9 @@ namespace Microsoft.TypeSpec.Generator
                 return true;
             }
 
-            if (!exact && CodeModelGenerator.Instance.TypeFactory.TypeProvidersByName.TryGetValue(type.Name, out var mappedProvider))
+            if (!exact &&
+                string.IsNullOrEmpty(type.Namespace) &&
+                CodeModelGenerator.Instance.TypeFactory.TypeProvidersByName.TryGetValue(type.Name, out var mappedProvider))
             {
                 provider = mappedProvider;
                 return true;
@@ -82,7 +84,9 @@ namespace Microsoft.TypeSpec.Generator
             foreach (var provider in providers)
             {
                 if (string.Equals(GetProviderTypeName(provider.Type), name, StringComparison.Ordinal) ||
-                    !exact && string.Equals(provider.Type.Name, type.Name, StringComparison.Ordinal))
+                    !exact &&
+                    string.IsNullOrEmpty(type.Namespace) &&
+                    string.Equals(provider.Type.Name, type.Name, StringComparison.Ordinal))
                 {
                     return provider;
                 }
@@ -117,7 +121,9 @@ namespace Microsoft.TypeSpec.Generator
             }
 
             var simpleNameLookup = _simpleNameLookupCache.GetValue(_latestResult.RemoveCandidates, BuildSimpleNameLookup);
-            return simpleNameLookup.TryGetValue(type.Name, out var matches) && matches.Length == 1;
+            return string.IsNullOrEmpty(type.Namespace) &&
+                simpleNameLookup.TryGetValue(type.Name, out var matches) &&
+                matches.Length == 1;
         }
 
         public static void ResetPreWriteAccessibility()

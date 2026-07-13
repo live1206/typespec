@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Microsoft.TypeSpec.Generator.Expressions;
 using Microsoft.TypeSpec.Generator.Providers;
 using Microsoft.TypeSpec.Generator.Statements;
 
@@ -100,6 +101,41 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             }
         }
 
+        private IReadOnlyList<MethodBodyStatement> GetTypeAttributes()
+        {
+            var attributes = _provider.GetAttributes();
+            if (_provider.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public))
+            {
+                return attributes;
+            }
+
+            var seen = attributes.Select(static attribute => attribute.ToDisplayString()).ToHashSet();
+            var lastContractAttributes = _provider.LastContractView?.Attributes
+                .Where(attribute =>
+                    ShouldPreserveLastContractAttribute(attribute) &&
+                    IsResolvableLastContractAttribute(attribute) &&
+                    seen.Add(attribute.ToDisplayString())) ?? [];
+            return [.. attributes, .. lastContractAttributes];
+        }
+
+        private static bool ShouldPreserveLastContractAttribute(AttributeStatement attribute)
+        {
+            var attributeName = attribute.Data?.AttributeClass?.Name;
+            return attributeName is not
+                (CodeGenAttributes.CodeGenSuppressAttributeName or
+                CodeGenAttributes.CodeGenMemberAttributeName or
+                CodeGenAttributes.CodeGenTypeAttributeName or
+                CodeGenAttributes.CodeGenSerializationAttributeName);
+        }
+
+        private static bool IsResolvableLastContractAttribute(AttributeStatement attribute) =>
+            ProviderReferenceMapAnalyzer.IsResolvableBuildableType(attribute.Type) &&
+            attribute.Arguments.All(IsResolvableLastContractAttributeArgument) &&
+            attribute.PositionalArguments.All(static argument => IsResolvableLastContractAttributeArgument(argument.Value));
+
+        private static bool IsResolvableLastContractAttributeArgument(ValueExpression argument) =>
+            argument is not TypeOfExpression typeOf ||
+            ProviderReferenceMapAnalyzer.IsResolvableBuildableType(typeOf.Type);
         private void WriteClassOrStructContent(CodeWriter writer)
         {
             using (writer.Scope())

@@ -99,6 +99,10 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                     if (type?.IsDictionary == true)
                     {
                         TryAddDependency(dependencies, dependencyNames, ScmCodeModelGenerator.Instance.TypeFactory.DictionaryInitializationType);
+                        if (parameter is InputHeaderParameter { CollectionHeaderPrefix: not null and not "" })
+                        {
+                            TryAddDependency(dependencies, dependencyNames, new PipelineRequestHeadersExtensionsDefinition().Type);
+                        }
                     }
                     else if (type?.IsCollection == true)
                     {
@@ -323,7 +327,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             }
             else
             {
-                var contentParam = signature.Parameters.FirstOrDefault(p => p.Name == "content" && p.Location == ParameterLocation.Body);
+                var contentParam = GetBodyContentParameter(signature.Parameters);
                 statements.AddRange(AppendHeaderParameters(request, operation, paramMap, contentParam: contentParam));
                 statements.AddRange(GetSetContent(request, signature.Parameters));
             }
@@ -390,10 +394,13 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
         private IReadOnlyList<MethodBodyStatement> GetSetContent(HttpRequestApi request, IReadOnlyList<ParameterProvider> parameters)
         {
-            var contentParam = parameters.FirstOrDefault(
-                p => p.Location == ParameterLocation.Body);
+            var contentParam = GetBodyContentParameter(parameters);
             return contentParam is null ? [] : [request.Content().Assign(contentParam).Terminate()];
         }
+
+        private static ParameterProvider? GetBodyContentParameter(IReadOnlyList<ParameterProvider> parameters)
+            => parameters.FirstOrDefault(static p => p.InputParameter is InputBodyParameter) ??
+                parameters.FirstOrDefault(static p => p.Location == ParameterLocation.Body);
 
         private Dictionary<List<int>, PropertyProvider> BuildPipelineMessage20xClassifiers()
         {

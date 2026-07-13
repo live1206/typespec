@@ -168,6 +168,21 @@ namespace Microsoft.TypeSpec.Generator.Tests.ReferenceMap
         }
 
         [Test]
+        public void QualifiedExternalBuildableTypeDoesNotMatchRemovedGeneratedTypeBySimpleName()
+        {
+            var generatedFoo = new GeneratedModelTestTypeProvider("Foo", TypeSignatureModifiers.Public, ns: "Sample");
+            MockHelpers.LoadMockGenerator(
+                createOutputLibrary: () => new TestOutputLibrary(generatedFoo),
+                configuration: "{\"unreferenced-types-handling\":\"removeOrInternalize\"}");
+
+            ProviderReferenceMapAnalyzer.Analyze([generatedFoo]);
+
+            Assert.IsFalse(ProviderReferenceMapAnalyzer.ShouldWriteProvider(generatedFoo));
+            Assert.IsTrue(ProviderReferenceMapAnalyzer.IsResolvableBuildableType(CreateNamedType("Foo", "Contoso")));
+            Assert.IsFalse(ProviderReferenceMapAnalyzer.IsResolvableBuildableType(CreateNamedType("Foo", string.Empty)));
+        }
+
+        [Test]
         public void HelperRootBodyDependencyRootsGeneratedGenericDependency()
         {
             var genericArgument = CreateNamedType("T", string.Empty);
@@ -900,6 +915,59 @@ namespace Microsoft.TypeSpec.Generator.Tests.ReferenceMap
             Assert.IsTrue(genericModel.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Internal));
             Assert.IsFalse(genericModel.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Public));
             Assert.IsEmpty(modelFactory.Methods.Select(m => m.Signature.Name));
+        }
+
+        [Test]
+        public void GeneratedTypePreservesLastContractTypeAttributes()
+        {
+            var lastContractView = new AttributedTestTypeProvider(
+                "GeneratedModel",
+                TypeSignatureModifiers.Internal,
+                ns: "Sample",
+                new AttributeStatement(typeof(ExperimentalAttribute), Literal("TEST001")));
+            var generatedModel = new ContractedTestTypeProvider(
+                "GeneratedModel",
+                TypeSignatureModifiers.Internal,
+                lastContractView,
+                ns: "Sample");
+            var outputLibrary = new TestOutputLibrary(generatedModel);
+            MockHelpers.LoadMockGenerator(
+                createOutputLibrary: () => outputLibrary,
+                configuration: "{\"unreferenced-types-handling\":\"removeOrInternalize\"}");
+
+            ProviderReferenceMapAnalyzer.ApplyPreWriteAccessibility([generatedModel]);
+
+            Assert.IsTrue(generatedModel.DeclarationModifiers.HasFlag(TypeSignatureModifiers.Internal));
+            var codeFile = new TypeProviderWriter(generatedModel).Write();
+            StringAssert.Contains("[global::System.Diagnostics.CodeAnalysis.ExperimentalAttribute(\"TEST001\")]", codeFile.Content);
+            StringAssert.Contains("internal partial class GeneratedModel", codeFile.Content);
+        }
+
+        [Test]
+        public void GeneratedTypeDoesNotPreserveLastContractAttributeReferencingRemovedGeneratedType()
+        {
+            var removedModel = new GeneratedModelTestTypeProvider("RemovedModel", TypeSignatureModifiers.Internal, ns: "Sample");
+            var lastContractView = new AttributedTestTypeProvider(
+                "GeneratedModel",
+                TypeSignatureModifiers.Internal,
+                ns: "Sample",
+                new AttributeStatement(typeof(ExperimentalAttribute), TypeOf(CreateNamedType("RemovedModel", "Sample"))));
+            var generatedModel = new ContractedTestTypeProvider(
+                "GeneratedModel",
+                TypeSignatureModifiers.Internal,
+                lastContractView,
+                ns: "Sample");
+            var outputLibrary = new TestOutputLibrary(generatedModel, removedModel);
+            MockHelpers.LoadMockGenerator(
+                createOutputLibrary: () => outputLibrary,
+                configuration: "{\"unreferenced-types-handling\":\"removeOrInternalize\"}");
+
+            ProviderReferenceMapAnalyzer.Analyze([generatedModel, removedModel]);
+
+            Assert.IsFalse(ProviderReferenceMapAnalyzer.ShouldWriteProvider(removedModel));
+            var codeFile = new TypeProviderWriter(generatedModel).Write();
+            StringAssert.DoesNotContain("RemovedModel", codeFile.Content);
+            StringAssert.Contains("internal partial class GeneratedModel", codeFile.Content);
         }
 
         private sealed class BodyDependencyTestTypeProvider : TestTypeProvider

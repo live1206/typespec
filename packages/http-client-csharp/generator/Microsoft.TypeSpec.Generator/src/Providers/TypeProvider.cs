@@ -672,7 +672,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
             }
             if (attributes != null)
             {
-                _attributes = (attributes as IReadOnlyList<AttributeStatement>) ?? [.. attributes];
+                _attributes = [.. attributes];
             }
 
             if (name != null)

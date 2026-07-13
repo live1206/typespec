@@ -230,7 +230,6 @@ namespace Microsoft.TypeSpec.Generator.SourceInput
         }
 
         private static bool IsContainingTypeMatch(INamedTypeSymbol symbol, string ns, string? declaringTypeName)
-            => string.Equals(symbol.ContainingNamespace.ToDisplayString(), ns, StringComparison.Ordinal) &&
-                string.Equals(GetContainingTypeName(symbol), declaringTypeName, StringComparison.Ordinal);
+            => string.Equals(GetContainingTypeName(symbol), declaringTypeName, StringComparison.Ordinal);
     }
 }

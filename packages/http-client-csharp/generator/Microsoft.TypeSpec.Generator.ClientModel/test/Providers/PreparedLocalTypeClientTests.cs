@@ -2773,6 +2773,82 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
             });
         }
 
+        private sealed class PocNativeWriterAttachmentProbe(Action<CodeWriter> onWrite) : Microsoft.TypeSpec.Generator.Statements.MethodBodyStatement
+        {
+            internal override void WriteCore(CodeWriter writer)
+            {
+                onWrite(writer);
+                writer.WriteRawLine("// native probe");
+            }
+        }
+
+        [Test]
+        public void RealFooNativeWriterDetachesRejectedDeclarationObserver()
+        {
+            PreparedPocFileConsumption? consumption = null;
+            var started = typeof(PreparedPocFileConsumption).GetField("_started", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var attached = typeof(CodeWriter).GetField("_pocFileConsumption", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var armed = false;
+            var injected = false;
+            var probeWrites = 0;
+            bool? observerAttached = null;
+            WithRealFoo((_, _) => { }, precomputePoc: true, fooGroupOnly: true, sourceCurrent: () =>
+            {
+                if (armed && !injected && consumption is not null && (bool)started.GetValue(consumption)!)
+                {
+                    injected = true;
+                    consumption.Complete();
+                }
+                return true;
+            }, beforePocPreparation: (output, _) =>
+            {
+                var rest = output.TypeProviders.OfType<Microsoft.TypeSpec.Generator.ClientModel.Providers.RestClientProvider>()
+                    .Single(provider => provider.RelativeFilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                var probe = new PocNativeWriterAttachmentProbe(writer =>
+                {
+                    probeWrites++;
+                    observerAttached = attached.GetValue(writer) is not null;
+                });
+                var signature = new MethodSignature("PocObserverProbe", null, MethodSignatureModifiers.Private, null, null, []);
+                var body = new Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements([probe]);
+                rest.Update(methods: rest.CachedMethods!.Concat(new[] { new MethodProvider(signature, body, rest) }).ToArray());
+            }, inspectGeneration: (output, referenceMap, _, prepared) =>
+            {
+                var rest = prepared.SourceFiles.Single(source => source.FilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                Assert.That(rest.Roots.SelectMany(root => root.DescendantsAndSelf())
+                    .Any(occurrence => prepared.GetPrecomputedPocOrdinaryCandidate(rest, occurrence)?.Type.Name == "PipelineMessage"), Is.True);
+                var reached = false;
+                foreach (var provider in GetWrittenProviderStream(output, referenceMap))
+                {
+                    var writer = new TypeProviderWriter(provider) { PreparedFieldTypes = prepared };
+                    prepared.BeginPocProviderWrite(provider, writer);
+                    var target = ReferenceEquals(provider, rest.FileOwner);
+                    var plan = target ? prepared.PocGenerationEnvelope!.GetFile(provider)! : null;
+                    if (target)
+                    {
+                        consumption = (PreparedPocFileConsumption?)plan!.GetType().GetField("_native", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(plan);
+                        Assert.That(consumption, Is.Not.Null);
+                        armed = true;
+                    }
+                    var file = writer.Write();
+                    armed = false;
+                    prepared.EndPocProviderWrite(provider, writer, file);
+                    if (!target) { continue; }
+                    reached = true;
+                    Assert.That(injected, Is.True);
+                    Assert.That(probeWrites, Is.EqualTo(1), "The native body probe must run exactly once.");
+                    Assert.That(file.Content, Does.Contain("PocObserverProbe()"));
+                    Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                    Assert.That(prepared.CanCommit(), Is.True);
+                    Assert.That(prepared.IsPocCandidateFileWriteReceiptCurrent(rest, new PocWorkBudget(65536)), Is.False);
+                    Assert.That(consumption!.HasParameterSelectionFailure, Is.True);
+                    Assert.That(observerAttached, Is.False, "A rejected observer must not remain attached for later native parameters and roots.");
+                    break;
+                }
+                Assert.That(reached, Is.True);
+            });
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void RealFooUnownedParameterCarrierPreservesNativeOutput(bool unowned)

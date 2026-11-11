@@ -60,10 +60,34 @@ namespace Microsoft.TypeSpec.Generator
             return producer;
         }
 
-        private void ObservePocDeclarationStart(MethodSignatureBase? signature) => _pocFileConsumption?.BeginDeclaration(signature);
-        private void ObservePocParameter(MethodSignatureBase? signature, int ordinal, ParameterProvider? parameter) =>
-            _pocFileConsumption?.ObserveParameter(signature, ordinal, parameter);
-        private void ObservePocDeclarationComplete(MethodSignatureBase? signature) => _pocFileConsumption?.CompleteDeclaration(signature);
+        private void DetachRejectedPocDeclaration(PreparedPocFileConsumption consumption)
+        {
+            // A rejected sidecar must not continue input-proportional work on
+            // later native parameters or roots. Other observers stay attached.
+            if (consumption.HasParameterSelectionFailure && ReferenceEquals(_pocFileConsumption, consumption))
+            { _pocFileConsumption = null; }
+        }
+
+        private void ObservePocDeclarationStart(MethodSignatureBase? signature)
+        {
+            if (_pocFileConsumption is not { } consumption) { return; }
+            consumption.BeginDeclaration(signature);
+            DetachRejectedPocDeclaration(consumption);
+        }
+
+        private void ObservePocParameter(MethodSignatureBase? signature, int ordinal, ParameterProvider? parameter)
+        {
+            if (_pocFileConsumption is not { } consumption) { return; }
+            consumption.ObserveParameter(signature, ordinal, parameter);
+            DetachRejectedPocDeclaration(consumption);
+        }
+
+        private void ObservePocDeclarationComplete(MethodSignatureBase? signature)
+        {
+            if (_pocFileConsumption is not { } consumption) { return; }
+            consumption.CompleteDeclaration(signature);
+            DetachRejectedPocDeclaration(consumption);
+        }
 
         internal IDisposable BeginSourceRoot(TypeProvider owner, string role, int index)
         {

@@ -229,8 +229,9 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             _rootObserved = root.Producer is null;
             return new Scope(() =>
             {
-                if (System.Threading.Volatile.Read(ref _declarationState) == 1) { FailParameterSelection("declaration-incomplete"); }
-                if (!ReferenceEquals(_active, root) || !_rootObserved || _nextNode != root.Entries.Length) { Fail($"root-incomplete:{root.Role}[{root.Index}]:{_nextNode}/{root.Entries.Length}"); }
+                if (System.Threading.Volatile.Read(ref _declarationState) == 1 && !HasParameterSelectionFailure) { FailParameterSelection("declaration-incomplete"); }
+                if (!_failed && (!ReferenceEquals(_active, root) || !_rootObserved || _nextNode != root.Entries.Length))
+                { Fail($"root-incomplete:{root.Role}[{root.Index}]:{_nextNode}/{root.Entries.Length}"); }
                 _active = null; _opaqueDepth = 0;
             });
         }
@@ -259,7 +260,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return new Scope(() =>
             {
                 if (entry.Opaque) { _opaqueDepth--; }
-                if (_nextNode != entry.End) { Fail($"subtree-incomplete:{root.Role}[{root.Index}]:{_nextNode}/{entry.End}"); }
+                if (!_failed && _nextNode != entry.End) { Fail($"subtree-incomplete:{root.Role}[{root.Index}]:{_nextNode}/{entry.End}"); }
             });
         }
 

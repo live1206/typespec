@@ -9,6 +9,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using System.Threading;
 using Microsoft.TypeSpec.Generator.Expressions;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
@@ -19,6 +20,7 @@ namespace Microsoft.TypeSpec.Generator
     internal static partial class ProviderReferenceMapAnalyzer
     {
         private static ProviderReferenceMapResult? _latestResult;
+        private static long _activityVersion;
         private static readonly ConditionalWeakTable<HashSet<string>, Dictionary<string, string[]>> _simpleNameLookupCache = new();
         private static readonly ConditionalWeakTable<HashSet<string>, Dictionary<string, string[]>> _metadataSimpleNameLookupCache = new();
         private static TypeProvider? _preWriteModelFactory;
@@ -32,6 +34,42 @@ namespace Microsoft.TypeSpec.Generator
             ApplyPreWriteAccessibility(providers);
             Analyze(providers);
             return new ProviderReferenceMapSession();
+        }
+
+        // This records analyzer method entries, not exclusive ownership or group
+        // permission. An operation already in flight at capture is not excluded.
+        internal static ProviderReferenceMapSession PrepareForGenerationWithActivityWitness(IReadOnlyList<TypeProvider> providers) =>
+            PrepareWithActivityWitness(providers, null, 0);
+
+        // The caller supplies the same output and roots it is about to analyze.
+        // Capture without invoking the output builder or a generator getter.
+        internal static ProviderReferenceMapSession PrepareForGenerationWithRootWitness(OutputLibrary output, IReadOnlyList<TypeProvider> providers)
+        {
+            var captured = output.TryCaptureMaterializedTypeProviders(out var roots, out var revision) && ReferenceEquals(roots, providers);
+            return PrepareWithActivityWitness(providers, captured ? output : null, revision);
+        }
+
+        private static ProviderReferenceMapSession PrepareWithActivityWitness(IReadOnlyList<TypeProvider> providers, OutputLibrary? output, long revision)
+        {
+            var before = ActivityVersion;
+            ResetPreWriteAccessibility(); // Reset and its Restore each record one entry.
+            ApplyPreWriteAccessibility(providers);
+            Analyze(providers);
+            var after = ActivityVersion;
+            var result = LatestResult;
+            var uninterrupted = before < long.MaxValue - 4 && after == before + 4 && after == ActivityVersion && result is not null;
+            return new ProviderReferenceMapSession(after, result, uninterrupted, output, providers, revision);
+        }
+
+        internal static long ActivityVersion => Volatile.Read(ref _activityVersion);
+
+        private static void ObserveActivity()
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref _activityVersion);
+                if (current == long.MaxValue || Interlocked.CompareExchange(ref _activityVersion, current + 1, current) == current) { return; }
+            }
         }
 
         public static bool ShouldWriteProvider(TypeProvider provider) =>
@@ -153,12 +191,14 @@ namespace Microsoft.TypeSpec.Generator
 
         public static void ResetPreWriteAccessibility()
         {
+            ObserveActivity();
             RestorePreWriteModelFactoryMethods();
             _latestResult = null;
         }
 
         public static void ApplyPreWriteAccessibility(IReadOnlyList<TypeProvider> providers)
         {
+            ObserveActivity();
             if (Configuration.UnreferencedTypesHandling == Configuration.UnreferencedTypesHandlingOption.KeepAll)
             {
                 return;
@@ -216,6 +256,7 @@ namespace Microsoft.TypeSpec.Generator
 
         public static void RestorePreWriteModelFactoryMethods()
         {
+            ObserveActivity();
             if (_preWriteModelFactory == null || _preWriteModelFactoryMethods == null)
             {
                 return;
@@ -228,6 +269,7 @@ namespace Microsoft.TypeSpec.Generator
 
         public static void Analyze(IReadOnlyList<TypeProvider> providers)
         {
+            ObserveActivity();
             var generatedProviders = GetGeneratedProviders(providers);
 
             // Build two graphs from provider metadata: the full implementation graph for removal,

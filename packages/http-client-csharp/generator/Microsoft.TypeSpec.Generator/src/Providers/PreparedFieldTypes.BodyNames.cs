@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis.CSharp;
@@ -49,7 +50,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         internal PreparedTypeOfNamespacePermission? GetTypeOfNamePermission(PreparedSourceFile file, PreparedSourceOccurrence occurrence)
         {
             // No new permission means no new environment/currentness callbacks.
-            if (!_typeOfNames.TryGetValue(occurrence.Id, out var permission) || !ReferenceEquals(permission.File, file) ||
+            if (_prospectiveAwaitingDecision || !_typeOfNames.TryGetValue(occurrence.Id, out var permission) || !ReferenceEquals(permission.File, file) ||
                 !ReferenceEquals(permission.Occurrence, occurrence)) { return null; }
             ObserveSourceSnapshot();
             if (_sourceDisposed || !IsSnapshotCurrent() || !_sourceFiles.TryGetValue(file.FileOwner, out var owned) ||
@@ -76,6 +77,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         {
             var count = output.PreparedBodyNameCount;
             if (count == 0) { return true; }
+            if (_prospectiveAwaitingDecision) { return false; }
             ObserveSourceSnapshot();
             if (_sourceDisposed || !IsSnapshotCurrent() || output.SourceConsumption is not { WasCurrentAtEndOfWrite: true } receipt)
             {
@@ -91,7 +93,84 @@ namespace Microsoft.TypeSpec.Generator.Providers
         internal bool CanCommitSharedSnapshot()
         {
             ObserveSourceSnapshot();
-            return !_sourceDisposed && IsSnapshotCurrent();
+            return !_prospectiveAwaitingDecision && !_sourceDisposed && IsSnapshotCurrent();
+        }
+
+        // This detects replacement of the captured output root reference,
+        // including change-and-restore. It is not list-content, group/source,
+        // writer-receipt or name-permission evidence.
+        internal bool IsProspectiveRootReferenceCurrent()
+        {
+            if (!_captureProspectiveLifetime || _sourceDisposed || _roots is null || _prospectiveOutput is null ||
+                System.Threading.Volatile.Read(ref _prospectiveRootStale) != 0) { return false; }
+            if (_prospectiveOutput.IsMaterializedTypeProviderSnapshotCurrent(_roots, _prospectiveRootRevision)) { return true; }
+            System.Threading.Interlocked.Exchange(ref _prospectiveRootStale, 1);
+            return false;
+        }
+
+        // This checks the observed current generator only; an unobserved
+        // change-and-restore between checks is not detected.
+        internal bool IsProspectiveGeneratorCurrent()
+        {
+            if (!_captureProspectiveLifetime || _sourceDisposed || _prospectiveGenerator is null ||
+                System.Threading.Volatile.Read(ref _prospectiveGeneratorStale) != 0) { return false; }
+            if (IsCurrentGenerator(_prospectiveGenerator)) { return true; }
+            System.Threading.Interlocked.Exchange(ref _prospectiveGeneratorStale, 1);
+            return false;
+        }
+
+        // This is a membership fact, not a shared snapshot or permission. For
+        // an exact List, a copied enumerator detects intervening mutations through
+        // version-incrementing List operations. AsSpan writes, other carriers,
+        // List version wraparound and concurrent mutation are not established safe.
+        internal bool AreProspectiveRootMembersCurrent()
+        {
+            if (!_captureProspectiveLifetime || _sourceDisposed || _roots is null ||
+                System.Threading.Volatile.Read(ref _prospectiveRootMembersStale) != 0) { return false; }
+            if ((_prospectiveListVersion is not { } version || IsProspectiveListVersionCurrent(version)) &&
+                SameReferences(_roots, _rootSnapshot)) { return true; }
+            System.Threading.Interlocked.Exchange(ref _prospectiveRootMembersStale, 1);
+            return false;
+        }
+
+        internal bool HasProspectiveListVersionWitness => _prospectiveListVersion.HasValue;
+
+        private static bool IsProspectiveListVersionCurrent(List<TypeProvider>.Enumerator version)
+        {
+            try
+            {
+                _ = version.MoveNext();
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        // This binds only the observed reference-map/iterator root and predicate
+        // to the prospective lifetime. It is not input stability, group closure,
+        // a writer receipt or permission to shorten any occurrence.
+        internal bool IsObservedGenerationRootPhaseCurrent(ProviderReferenceMapSession referenceMap)
+        {
+            if (!_captureProspectiveLifetime || _sourceDisposed || _roots is null || _prospectiveOutput is null || _prospectiveGenerator is null || _shouldWrite is null ||
+                System.Threading.Volatile.Read(ref _valid) == 0 || !_shouldWrite.Equals((Func<TypeProvider, bool>)referenceMap.ShouldWriteProvider)) { return false; }
+            return IsProspectiveGeneratorCurrent() && referenceMap.IsOwnedEnumerationRootCurrent(_prospectiveGenerator, _prospectiveOutput, _roots) &&
+                IsProspectiveRootReferenceCurrent() && referenceMap.IsObservedEnumerationRootCurrent(_prospectiveOutput, _roots) &&
+                IsProspectiveRootReferenceCurrent() && IsProspectiveGeneratorCurrent() &&
+                referenceMap.IsOwnedGenerationPhaseCurrent(_prospectiveGenerator, _prospectiveOutput, _roots);
+        }
+
+        // This is an owner-snapshot fact only, not group closure, source/input
+        // currentness, a writer receipt or permission to shorten. Unversioned
+        // mutable carriers can change and restore between observations.
+        internal bool AreProspectiveOwnerSnapshotsCurrent()
+        {
+            if (!_captureProspectiveLifetime || _sourceDisposed || _roots is null || _callLookupScopes.Length == 0 ||
+                System.Threading.Volatile.Read(ref _prospectiveOwnerSnapshotsStale) != 0) { return false; }
+            if (_callLookupScopes.All(scope => scope.IsCurrent())) { return true; }
+            System.Threading.Interlocked.Exchange(ref _prospectiveOwnerSnapshotsStale, 1);
+            return false;
         }
 
         // Shared root/input failure is sticky for BOTH channels. The existing

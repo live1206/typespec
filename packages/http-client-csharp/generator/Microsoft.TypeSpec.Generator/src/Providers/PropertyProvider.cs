@@ -29,7 +29,19 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         public FormattableString? Description { get; private set; }
         public MethodSignatureModifiers Modifiers { get; internal set; }
-        public CSharpType Type { get; internal set; }
+        private CSharpType _type = null!;
+        private long _typeRevision;
+        internal long TypeRevision => System.Threading.Volatile.Read(ref _typeRevision);
+        public CSharpType Type
+        {
+            get => _type;
+            internal set
+            {
+                if (ReferenceEquals(_type, value)) { return; }
+                _type = value;
+                System.Threading.Interlocked.Increment(ref _typeRevision);
+            }
+        }
         public string Name { get; internal set; }
         public PropertyBody Body { get; internal set; }
         public CSharpType? ExplicitInterface { get; private set; }

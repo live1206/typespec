@@ -26,7 +26,9 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         protected override IReadOnlyList<AttributeStatement> BuildAttributes()
         {
-            return [new AttributeStatement(typeof(AttributeUsageAttribute),
+            AttributeStatement attribute;
+            return ConstructedCollectionWitness.Record<AttributeStatement>(
+                [attribute = new AttributeStatement(typeof(AttributeUsageAttribute),
                 [new BinaryOperatorExpression(
                     "|",
                     FrameworkEnumValue(AttributeTargets.Class),
@@ -34,7 +36,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 [
                     new KeyValuePair<string, ValueExpression>("AllowMultiple", True),
                     new KeyValuePair<string, ValueExpression>("Inherited", True)
-                ])];
+                ])], attribute);
         }
 
         protected internal override PropertyProvider[] BuildProperties() =>

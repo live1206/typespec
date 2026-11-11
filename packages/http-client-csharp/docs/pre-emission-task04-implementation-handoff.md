@@ -51,6 +51,36 @@ arguments as required by the original anchors. Do not interpret that boundary as
 excluding every lexical generic owner: original cases require arity-sensitive
 lookup inside generic classes/methods and correct type-parameter ownership.
 
+## Approved bounded header-finalization lifecycle
+
+The user subsequently approved an explicit opt-in header-finalization phase to
+reduce complexity. Audited built-in documentation/file-warning getters and the
+known dictionary constraint may materialize after visitor/reference-map work and
+before source capture/name planning. Final output writers still run once; unknown
+or side-effecting builders/inputs retain the legacy path. No arbitrary getter,
+collection enumeration, writer or callback may be replayed for planning.
+
+This is a deliberate lifecycle change, not transparent name substitution: header
+values are canonical at this boundary, and later input changes do not implicitly
+rebuild already-cached headers. Changes to the finalized canonical objects or
+documentation policy must veto their snapshots. Qualified fallback cannot undo
+changed getter timing. Validate stable-input output/source-callback parity and the
+new mutation contract separately; retain legacy timing regressions on the legacy
+entry point. Header finalization does not itself prove grammar, binding, source
+policy, complete currentness or permission, and does not narrow the original Foo
+or ordinary-role acceptance scope.
+
+The finalized-header checkpoint passes **271 core controls / 17 client controls**,
+including all 39 provider snapshots before writers, one native write per provider,
+syntax/traversal checks, owned compiler-host preparation and stable output/callback
+parity. Writer-free warning capture and cached-description normalization are
+bounded separately; cached raw descriptions reject unsafe tags, excessive repeated
+expansion and empty formats with arguments. Fallback names reject `<` before any
+builder runs. The final two-guard follow-up completed with no concrete findings
+(static review; not a full Task04 review). These results do not enable POC spelling:
+original Foo permissions and the complete generation confinement certificate are
+still pending.
+
 ## Checkpoint 0: finite acceptance and representation map
 
 Before production edits, make one map of the Task04-owned acceptance surface.
@@ -232,8 +262,9 @@ language-emission framework. Continue other independent authorized work rather
 than stalling the whole task.
 
 Do not cache permissions by type/producer, memoize away mutable or sticky
-observations, force lazy carriers, execute unknown formatting/getters to prove a
-role, replay callbacks, or use legacy output to claim raw acceptance. This plan
+observations, force lazy carriers outside the approved audited header phase,
+execute unknown formatting/getters to prove a role, replay callbacks, or use
+legacy output to claim raw acceptance. This plan
 also does not accept `global::` as the final generated SDK spelling.
 
 Each checkpoint report should state: original reductions now working and their

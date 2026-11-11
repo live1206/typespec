@@ -50,6 +50,21 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             TargetConstructorIntent = target;
         }
 
-        public ConstructorInitializer(bool isBase, IEnumerable<ParameterProvider> arguments) : this(isBase, [.. arguments.Select(p => p.AsVariable())]) { }
+        public ConstructorInitializer(bool isBase, IEnumerable<ParameterProvider> arguments) : this(isBase, ProjectArguments(arguments)) { }
+
+        private static IReadOnlyList<ValueExpression> ProjectArguments(IEnumerable<ParameterProvider> arguments)
+        {
+            if (!CodeModelGenerator.ObserveConstructedArguments) { return [.. arguments.Select(p => p.AsVariable())]; }
+            var owned = new List<ValueExpression>();
+            // Capture the values during the original projection. Never enumerate
+            // the supplied sequence twice or call AsVariable an extra time.
+            IReadOnlyList<ValueExpression> carrier = [.. arguments.Select(parameter =>
+            {
+                var value = parameter.AsVariable();
+                if (owned.Count <= 4096) { owned.Add(value); }
+                return value;
+            })];
+            return ConstructedCollectionWitness.RecordOwned(carrier, owned);
+        }
     }
 }

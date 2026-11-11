@@ -201,7 +201,10 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
         private sealed class BodyOnlyFixedSession(CompilerBuildInputCapture capture) : ITrustedCompilerBuildSession
         {
             public CompilerBuildInputCapture Capture => capture;
-            public bool IsCurrent() => true; // immutable controlled session; TryCreate owns actual byte/hash revalidation.
+            internal Func<bool>? CurrentnessCallback { get; set; }
+            // TryCreate still owns actual byte/hash revalidation. The optional
+            // callback exercises reentrancy of that real controlled proof.
+            public bool IsCurrent() => CurrentnessCallback?.Invoke() ?? true;
         }
         private class BodyOnlyHostGenerator(GeneratorContext context) : CodeModelGenerator(context) { }
         private sealed class BodyOnlyCustomWriterGenerator(GeneratorContext context) : BodyOnlyHostGenerator(context)

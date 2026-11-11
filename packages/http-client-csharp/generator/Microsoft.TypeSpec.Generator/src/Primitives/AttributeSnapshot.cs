@@ -28,11 +28,17 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             _wrappers = arguments.Concat(named.Select(n => n.Value)).OfType<ScopedApi>().Select(w => (w, w.DeclarationRevision)).ToImmutableArray();
         }
 
-        internal static bool TryCapture(AttributeStatement attribute, out AttributeSnapshot? snapshot)
+        internal static bool TryCapture(AttributeStatement attribute, out AttributeSnapshot? snapshot) => TryCaptureCore(attribute, null, out snapshot);
+        internal static bool TryCaptureForPoc(AttributeStatement attribute, PocWorkBudget budget, out AttributeSnapshot? snapshot) => TryCaptureCore(attribute, budget, out snapshot);
+
+        private static bool TryCaptureCore(AttributeStatement attribute, PocWorkBudget? budget, out AttributeSnapshot? snapshot)
         {
             snapshot = null;
             if (attribute.Data is not null)
             {
+                // The additional POC check cannot replay unbounded source
+                // attribute projection machinery or force its lazy inputs.
+                if (budget is not null) { return false; }
                 if (!attribute.IsOriginalDataProjectionCurrent())
                 {
                     return false;
@@ -40,9 +46,10 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 snapshot = new(attribute, null, [], []);
                 return true;
             }
-            if (attribute.CachedType is not { } type || !DeclaredTypeSnapshot.TryCapture(type, out var typeSnapshot) ||
-                !ContractCollections.TryCopy(attribute.CachedArguments, out var arguments) ||
-                !ContractCollections.TryCopy(attribute.CachedPositionalArguments, out var named) ||
+            if (attribute.CachedType is not { } type ||
+                !(budget is not null ? DeclaredTypeSnapshot.TryCaptureForPoc(type, budget, out var typeSnapshot) : DeclaredTypeSnapshot.TryCapture(type, out typeSnapshot)) ||
+                !(budget is not null ? ContractCollections.TryCopyForPoc(attribute.CachedArguments, budget, out var arguments) : ContractCollections.TryCopy(attribute.CachedArguments, out arguments)) ||
+                !(budget is not null ? ContractCollections.TryCopyForPoc(attribute.CachedPositionalArguments, budget, out var named) : ContractCollections.TryCopy(attribute.CachedPositionalArguments, out named)) ||
                 arguments.Concat(named.Select(n => n.Value)).Any(e => !TryGetLiteral(e, out _))) { return false; }
             snapshot = new(attribute, typeSnapshot, arguments, named);
             return true;
@@ -63,5 +70,22 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             ContractCollections.SameReferences(_attribute.CachedArguments, _arguments) &&
             ContractCollections.TryCopy(_attribute.CachedPositionalArguments, out var named) && named.Length == _named.Length &&
             named.Select((item, index) => item.Key == _named[index].Key && ReferenceEquals(item.Value, _named[index].Value)).All(same => same);
+
+        internal bool IsCurrentForPoc(PocWorkBudget budget)
+        {
+            if (!budget.TrySpend() || _attribute.Data is not null || _type is null || !_type.IsCurrentForPoc(budget) ||
+                !budget.TrySpend(_wrappers.Length) || _wrappers.Any(w => w.Wrapper.DeclarationRevision != w.Revision) ||
+                !ContractCollections.SameReferencesForPoc(_attribute.CachedArguments, _arguments, budget) ||
+                !ContractCollections.TryCopyForPoc(_attribute.CachedPositionalArguments, budget, out var named) || named.Length != _named.Length) { return false; }
+            for (int i = 0; i < named.Length; i++)
+            {
+                // Equal text in a replacement carrier is still variable work.
+                // Identical key references require no character traversal.
+                if (!ReferenceEquals(named[i].Key, _named[i].Key) &&
+                    !budget.TrySpend(named[i].Key?.Length ?? 0)) { return false; }
+                if (named[i].Key != _named[i].Key || !ReferenceEquals(named[i].Value, _named[i].Value)) { return false; }
+            }
+            return true;
+        }
     }
 }

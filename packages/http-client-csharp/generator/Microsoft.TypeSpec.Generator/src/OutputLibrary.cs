@@ -11,11 +11,55 @@ namespace Microsoft.TypeSpec.Generator
 {
     public class OutputLibrary
     {
-        private IReadOnlyList<TypeProvider>? _typeProviders;
+        private volatile IReadOnlyList<TypeProvider>? _typeProviders;
+        private readonly object _typeProviderSnapshotSync = new();
+        private long _typeProviderRevision;
+
         public IReadOnlyList<TypeProvider> TypeProviders
         {
-            get => _typeProviders ??= BuildTypeProviders();
-            internal set => _typeProviders = value;
+            get
+            {
+                var providers = _typeProviders;
+                if (providers is null)
+                {
+                    // Preserve the original lazy/reentrant behavior: never hold
+                    // the witness lock while calling the virtual builder, and
+                    // retain its result even if the builder set a value itself.
+                    providers = BuildTypeProviders();
+                    StoreTypeProviders(providers);
+                }
+                return providers!;
+            }
+            internal set => StoreTypeProviders(value);
+        }
+
+        private void StoreTypeProviders(IReadOnlyList<TypeProvider>? providers)
+        {
+            lock (_typeProviderSnapshotSync)
+            {
+                _typeProviders = providers;
+                if (_typeProviderRevision != long.MaxValue) { _typeProviderRevision++; }
+            }
+        }
+
+        // A non-forcing reference witness only. Mutable elements and complete
+        // group/source/currentness remain separate proof obligations.
+        internal bool TryCaptureMaterializedTypeProviders(out IReadOnlyList<TypeProvider>? providers, out long revision)
+        {
+            lock (_typeProviderSnapshotSync)
+            {
+                providers = _typeProviders;
+                revision = _typeProviderRevision;
+                return providers is not null && revision != long.MaxValue;
+            }
+        }
+
+        internal bool IsMaterializedTypeProviderSnapshotCurrent(IReadOnlyList<TypeProvider> providers, long revision)
+        {
+            lock (_typeProviderSnapshotSync)
+            {
+                return revision != long.MaxValue && _typeProviderRevision == revision && ReferenceEquals(_typeProviders, providers);
+            }
         }
 
         internal Lazy<ModelFactoryProvider> ModelFactory { get; } = new(() => CodeModelGenerator.Instance.TypeFactory.CreateModelFactory(CodeModelGenerator.Instance.InputLibrary.InputNamespace.Models));

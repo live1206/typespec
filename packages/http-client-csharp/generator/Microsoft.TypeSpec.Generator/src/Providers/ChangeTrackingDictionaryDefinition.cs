@@ -46,6 +46,10 @@ namespace Microsoft.TypeSpec.Generator.Providers
             EnsureDictionary = new(This.Invoke(_ensureDictionarySignature));
         }
 
+        // Readonly construction identity for the POC's exact built-in constraint
+        // contract. Reading it does not materialize the lazy WhereClause.
+        internal CSharpType ConstraintKeyType => _tKey;
+
         protected override WhereExpression BuildWhereClause() => Where.NotNull(_tKey);
 
         protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Internal;
@@ -247,7 +251,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         {
             var key = new ParameterProvider("key", $"The key to search for.", _tKey);
             var value = new ParameterProvider("value", $"The value.", _tValue, isOut: true);
-            var signature = GetSignature("TryGetValue", typeof(bool), parameters: [key, value]);
+            var signature = GetSignature("TryGetValue", typeof(bool), parameters: ConstructedCollectionWitness.Record<ParameterProvider>([key, value], key, value));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 new IfStatement(IsUndefined)
@@ -263,7 +267,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private MethodProvider BuildRemoveKey()
         {
             var key = new ParameterProvider("key", $"The key.", _tKey);
-            var signature = GetSignature("Remove", typeof(bool), parameters: [key]);
+            var signature = GetSignature("Remove", typeof(bool), parameters: ConstructedCollectionWitness.Record<ParameterProvider>([key], key));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 new IfStatement(IsUndefined)
@@ -278,7 +282,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private MethodProvider BuildContainsKey()
         {
             var key = new ParameterProvider("key", $"The key to search for.", _tKey);
-            var signature = GetSignature("ContainsKey", typeof(bool), parameters: [key]);
+            var signature = GetSignature("ContainsKey", typeof(bool), parameters: ConstructedCollectionWitness.Record<ParameterProvider>([key], key));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 new IfStatement(IsUndefined)
@@ -294,7 +298,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         {
             var key = new ParameterProvider("key", $"The key.", _tKey);
             var value = new ParameterProvider("value", $"The value to add.", _tValue);
-            var signature = GetSignature("Add", null, parameters: [key, value]);
+            var signature = GetSignature("Add", null, parameters: ConstructedCollectionWitness.Record<ParameterProvider>([key, value], key, value));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 EnsureDictionary.Invoke("Add", key, value).Terminate()
@@ -305,7 +309,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private MethodProvider BuildRemovePair()
         {
             var item = new ParameterProvider("item", $"The item to remove.", _keyValuePair);
-            var signature = GetSignature("Remove", typeof(bool), parameters: [item]);
+            var signature = GetSignature("Remove", typeof(bool), parameters: ConstructedCollectionWitness.Record<ParameterProvider>([item], item));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 new IfStatement(IsUndefined)
@@ -322,7 +326,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
             //TODO: This line will not honor the generic type of the array
             var array = new ParameterProvider("array", $"The array to copy.", typeof(KeyValuePair<,>).MakeArrayType());
             var index = new ParameterProvider("index", $"The index.", typeof(int));
-            var signature = GetSignature("CopyTo", null, parameters: [array, index]);
+            var signature = GetSignature("CopyTo", null, parameters: ConstructedCollectionWitness.Record<ParameterProvider>([array, index], array, index));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 new IfStatement(IsUndefined)
@@ -337,7 +341,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private MethodProvider BuildContains()
         {
             var item = new ParameterProvider("item", $"The item to search for.", _keyValuePair);
-            var signature = GetSignature("Contains", typeof(bool), parameters: [item]);
+            var signature = GetSignature("Contains", typeof(bool), parameters: ConstructedCollectionWitness.Record<ParameterProvider>([item], item));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 new IfStatement(IsUndefined)
@@ -362,7 +366,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private MethodProvider BuildAddPair()
         {
             var item = new ParameterProvider("item", $"The item to add.", _keyValuePair);
-            var signature = GetSignature("Add", null, parameters: [item]);
+            var signature = GetSignature("Add", null, parameters: ConstructedCollectionWitness.Record<ParameterProvider>([item], item));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 EnsureDictionary.Invoke("Add", item).Terminate()

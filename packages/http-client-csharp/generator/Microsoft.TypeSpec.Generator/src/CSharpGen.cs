@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.TypeSpec.Generator.Primitives;
@@ -20,6 +21,47 @@ namespace Microsoft.TypeSpec.Generator
         private const string CodeModelFileName = "tspCodeModel.json";
 
         private static readonly string[] _filesToKeep = [ConfigurationFileName, CodeModelFileName];
+
+        // Diagnostic observations only; never name permission.
+        internal bool? LastObservedOwnedRootPhase { get; private set; }
+        internal int LastObservedPocCandidatesBeforeOutput { get; private set; }
+        internal IReadOnlyList<string> LastObservedPocCandidateFilesBeforeOutput { get; private set; } = [];
+        internal bool? LastObservedPocOwnedStreamReceipt { get; private set; }
+
+        private sealed class GenerationOwner(CodeModelGenerator generator, OutputLibrary output, IReadOnlyList<TypeProvider> roots) : IDisposable
+        {
+            private ProviderReferenceMapSession? _session;
+            private int _active = 1;
+
+            internal void Bind(ProviderReferenceMapSession session)
+            {
+                if (Interlocked.CompareExchange(ref _session, session, null) is not null)
+                {
+                    Interlocked.Exchange(ref _active, 0);
+                    return;
+                }
+                session.TryBindGenerationOwner(this, generator, output, roots);
+            }
+
+            internal void ObserveEnumerationRoot(ProviderReferenceMapSession session, OutputLibrary candidateOutput,
+                IReadOnlyList<TypeProvider> candidateRoots) => session.ObserveOwnedEnumerationRoot(this, generator, candidateOutput, candidateRoots);
+
+            internal bool Matches(CodeModelGenerator candidate, OutputLibrary candidateOutput,
+                IReadOnlyList<TypeProvider> candidateRoots, ProviderReferenceMapSession session)
+            {
+                if (Volatile.Read(ref _active) == 0 || !ReferenceEquals(generator, candidate) ||
+                    !ReferenceEquals(output, candidateOutput) || !ReferenceEquals(roots, candidateRoots) ||
+                    !ReferenceEquals(_session, session)) { return false; }
+                try { return ReferenceEquals(CodeModelGenerator.Instance, generator); }
+                catch (InvalidOperationException) { return false; }
+            }
+
+            public void Dispose() => Interlocked.Exchange(ref _active, 0);
+        }
+
+        internal static bool IsActiveGenerationOwner(object owner, CodeModelGenerator generator, OutputLibrary output,
+            IReadOnlyList<TypeProvider> roots, ProviderReferenceMapSession session) =>
+            owner is GenerationOwner generationOwner && generationOwner.Matches(generator, output, roots, session);
 
         /// <summary>
         /// Executes the generator task with the <see cref="CodeModelGenerator"/> instance.
@@ -54,6 +96,10 @@ namespace Microsoft.TypeSpec.Generator
 
         private async Task ExecuteCoreAsync(CompilerBuildGenerationContext? compilerBuild)
         {
+            LastObservedOwnedRootPhase = null;
+            LastObservedPocCandidatesBeforeOutput = 0;
+            LastObservedPocCandidateFilesBeforeOutput = [];
+            LastObservedPocOwnedStreamReceipt = null;
             var generator = CodeModelGenerator.Instance;
             var outputPath = compilerBuild?.OutputDirectory ?? generator.Configuration.OutputDirectory;
             var generatedSourceOutputPath = compilerBuild?.GeneratedSourceDirectory ?? generator.Configuration.ProjectGeneratedDirectory;
@@ -96,7 +142,10 @@ namespace Microsoft.TypeSpec.Generator
 
             GeneratedCodeWorkspace generatedCodeWorkspace = await GeneratedCodeWorkspace.Create(isCustomCodeProject: false);
 
-            var output = CodeModelGenerator.Instance.OutputLibrary;
+            // Retain the actual receiver of the one virtual output getter: a
+            // reentrant setter/getter may change the global generator instance.
+            var outputOwner = CodeModelGenerator.Instance;
+            var output = outputOwner.OutputLibrary;
             Directory.CreateDirectory(Path.Combine(generatedSourceOutputPath, "Models"));
             List<Task> generateFilesTasks = new();
 
@@ -126,11 +175,29 @@ namespace Microsoft.TypeSpec.Generator
 
             try
             {
-                using var referenceMapSession = ProviderReferenceMapAnalyzer.PrepareForGeneration(output.TypeProviders);
-                // This one finalized-provider lifetime owns both field spellings and non-emitting
-                // executable occurrence snapshots. The standard writer consumes them in its one pass.
-                using var preparedFields = PreparedFieldTypes.CreateForGeneration(
-                    CodeModelGenerator.Instance, output.TypeProviders, referenceMapSession.ShouldWriteProvider);
+                var referenceMapRoots = output.TypeProviders;
+                var observeRootPhase = generator.Configuration.EnablePreEmissionSimplification && !generator.Configuration.DisableRoslynReduce;
+                using var generationOwner = observeRootPhase && ReferenceEquals(generator, outputOwner)
+                    ? new GenerationOwner(generator, output, referenceMapRoots) : null;
+                if (observeRootPhase && generationOwner is null) { LastObservedOwnedRootPhase = false; }
+                using var referenceMapSession = generationOwner is not null
+                    ? ProviderReferenceMapAnalyzer.PrepareForGenerationWithRootWitness(output, referenceMapRoots)
+                    : ProviderReferenceMapAnalyzer.PrepareForGeneration(referenceMapRoots);
+                generationOwner?.Bind(referenceMapSession);
+                // This one finalized-provider lifetime owns both existing field spellings and
+                // non-authorizing POC proposals. Only the active, root-bound generation phase
+                // may capture the POC plan; unknown ownership keeps the existing path.
+                var preparationGenerator = CodeModelGenerator.Instance;
+                var preparationRoots = output.TypeProviders;
+                var capturePocPlan = generationOwner is not null && ReferenceEquals(preparationGenerator, generator) &&
+                    ReferenceEquals(preparationRoots, referenceMapRoots) &&
+                    referenceMapSession.IsOwnedGenerationPhaseCurrent(generator, output, referenceMapRoots);
+                using var preparedHeaders = capturePocPlan ? new PreparedPocHeaderFinalization(preparationGenerator) : null;
+                using var preparedFields = capturePocPlan
+                    ? PreparedFieldTypes.CreateForGenerationWithFinalizedPocHeaders(preparationGenerator, preparationRoots, referenceMapSession.ShouldWriteProvider, preparedHeaders!)
+                    : PreparedFieldTypes.CreateForGeneration(preparationGenerator, preparationRoots, referenceMapSession.ShouldWriteProvider);
+                LastObservedPocCandidatesBeforeOutput = preparedFields?.PocCandidateCount ?? 0;
+                LastObservedPocCandidateFilesBeforeOutput = preparedFields?.PocCandidateFilePaths ?? [];
 
                 // Keep the existing streaming path when preparation is disabled.
                 // With prepared spellings, stage every file until the complete
@@ -145,7 +212,10 @@ namespace Microsoft.TypeSpec.Generator
                         fields?.ObserveSnapshot();
                         var writer = CodeModelGenerator.Instance.GetWriter(provider);
                         writer.PreparedFieldTypes = fields;
+                        writer.PreparedPocHeaders = preparedHeaders;
+                        if (fields?.HasPocProviderStream == true) { fields.BeginPocProviderWrite(provider, writer); }
                         var file = writer.Write();
+                        if (fields?.HasPocProviderStream == true) { fields.EndPocProviderWrite(provider, writer, file); }
                         fields?.ObserveSnapshot();
                         if (stagedFiles is null)
                         {
@@ -157,13 +227,22 @@ namespace Microsoft.TypeSpec.Generator
                         }
                     }
 
-                    foreach (var provider in GetWrittenProviders(output, referenceMapSession))
+                    foreach (var provider in GetWrittenProviders(output, referenceMapSession, generationOwner))
                     {
                         AddFile(provider);
                     }
                 }
 
                 WriteFiles(preparedFields);
+                if (preparedFields?.HasPocProviderStream == true)
+                {
+                    LastObservedPocOwnedStreamReceipt = preparedFields.IsPocProviderWriteReceiptComplete;
+                }
+                if (generationOwner is not null)
+                {
+                    LastObservedOwnedRootPhase = referenceMapSession.IsOwnedEnumerationRootCurrent(generator, output, referenceMapRoots) &&
+                        referenceMapSession.IsObservedEnumerationRootCurrent(output, referenceMapRoots);
+                }
                 if (stagedFiles is not null)
                 {
                     // A writer callback may register a rewriter after preparation
@@ -256,24 +335,36 @@ namespace Microsoft.TypeSpec.Generator
             compilerBuild?.ValidateResult(generator);
         }
 
-        private static IEnumerable<TypeProvider> GetWrittenProviders(OutputLibrary output, ProviderReferenceMapSession referenceMapSession)
+        private static IEnumerable<TypeProvider> GetWrittenProviders(OutputLibrary output, ProviderReferenceMapSession referenceMapSession, GenerationOwner? generationOwner)
         {
-            foreach (var outputType in output.TypeProviders)
+            var roots = output.TypeProviders;
+            referenceMapSession.ObserveEnumerationRoot(output, roots);
+            generationOwner?.ObserveEnumerationRoot(referenceMapSession, output, roots);
+            referenceMapSession.BeginPocProviderStream();
+            var exhausted = false;
+            try
             {
-                if (!referenceMapSession.ShouldWriteProvider(outputType) ||
-                    outputType is ModelFactoryProvider && outputType.Methods.Count == 0)
+                foreach (var outputType in roots)
                 {
-                    continue;
-                }
-                yield return outputType;
-                foreach (var serialization in outputType.SerializationProviders)
-                {
-                    if (referenceMapSession.ShouldWriteProvider(serialization))
+                    if (!referenceMapSession.ShouldWriteProvider(outputType) ||
+                        outputType is ModelFactoryProvider && outputType.Methods.Count == 0)
                     {
-                        yield return serialization;
+                        continue;
+                    }
+                    referenceMapSession.ObservePocProviderYield(outputType);
+                    yield return outputType;
+                    foreach (var serialization in outputType.SerializationProviders)
+                    {
+                        if (referenceMapSession.ShouldWriteProvider(serialization))
+                        {
+                            referenceMapSession.ObservePocProviderYield(serialization);
+                            yield return serialization;
+                        }
                     }
                 }
+                exhausted = true;
             }
+            finally { referenceMapSession.EndPocProviderStream(exhausted); }
         }
 
         internal static void FilterAllCustomizedMembers(OutputLibrary output)

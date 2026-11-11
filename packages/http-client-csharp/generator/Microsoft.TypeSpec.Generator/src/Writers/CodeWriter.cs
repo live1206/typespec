@@ -498,7 +498,13 @@ namespace Microsoft.TypeSpec.Generator
         // Output capture only, not permission. The consumer must already justify both
         // spellings for this occurrence, register its used permission, and observe the
         // same namespace as ordinary formatting. A false result writes nothing.
-        internal bool TryAppendPreparedBodyName(string shortSpelling, string qualifiedSpelling)
+        internal bool TryAppendPreparedBodyName(string shortSpelling, string qualifiedSpelling) =>
+            TryAppendPreparedName(shortSpelling, qualifiedSpelling, PreparedNameChannel.Body);
+
+        internal bool TryAppendPreparedPocName(string shortSpelling, string qualifiedSpelling) =>
+            TryAppendPreparedName(shortSpelling, qualifiedSpelling, PreparedNameChannel.Poc);
+
+        private bool TryAppendPreparedName(string shortSpelling, string qualifiedSpelling, PreparedNameChannel channel)
         {
             if (_qualifiedBuilder is null || string.IsNullOrEmpty(shortSpelling) ||
                 string.IsNullOrEmpty(qualifiedSpelling) || shortSpelling.Length >= qualifiedSpelling.Length ||
@@ -507,7 +513,7 @@ namespace Microsoft.TypeSpec.Generator
                 return false;
             }
 
-            AppendRaw(shortSpelling.AsSpan(), qualifiedSpelling.AsSpan(), PreparedNameChannel.Body);
+            AppendRaw(shortSpelling.AsSpan(), qualifiedSpelling.AsSpan(), channel);
             return true;
         }
 

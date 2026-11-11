@@ -44,6 +44,58 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             }
         }
 
+        [Test]
+        public void LegacyTwoChannelSelectionCannotAuthorizePocOrVetoIndependentNames()
+        {
+            const string qualified = "[global::N.F|global::N.B|global::N.P]";
+            var alternatives = ImmutableArray.Create(
+                new PreparedNameAlternative(1, 11, "F", PreparedNameChannel.Field),
+                new PreparedNameAlternative(13, 11, "B", PreparedNameChannel.Body),
+                new PreparedNameAlternative(25, 11, "P", PreparedNameChannel.Poc));
+            var file = new CodeFile("[F|B|P]", "Owned.cs", qualified, nameAlternatives: alternatives);
+            Assert.That(file.SelectPreparedNames(true, true).Content, Is.EqualTo("[F|B|global::N.P]"),
+                "A future POC decision requires its own commit permission; preserving both old channels is not that permission.");
+            Assert.That(file.SelectPreparedNames(true, false).Content, Is.EqualTo("[F|global::N.B|global::N.P]"),
+                "A POC-only veto must not erase the independent field selection.");
+            Assert.That(file.SelectPreparedNames(false, true).Content, Is.EqualTo("[global::N.F|B|global::N.P]"));
+        }
+
+        [TestCase(false, false, false)]
+        [TestCase(false, false, true)]
+        [TestCase(false, true, false)]
+        [TestCase(false, true, true)]
+        [TestCase(true, false, false)]
+        [TestCase(true, false, true)]
+        [TestCase(true, true, false)]
+        [TestCase(true, true, true)]
+        public void OwnedThreeChannelRangesSelectIndependently(bool fieldAllowed, bool bodyAllowed, bool pocAllowed)
+        {
+            var mixed = new CodeFile("[F|B|P]", "Mixed.cs", "[global::N.F|global::N.B|global::N.P]",
+                nameAlternatives: ImmutableArray.Create(
+                    new PreparedNameAlternative(1, 11, "F", PreparedNameChannel.Field),
+                    new PreparedNameAlternative(13, 11, "B", PreparedNameChannel.Body),
+                    new PreparedNameAlternative(25, 11, "P", PreparedNameChannel.Poc)));
+            Assert.That(mixed.SelectPreparedNames(fieldAllowed, bodyAllowed, pocAllowed).Content,
+                Is.EqualTo($"[{(fieldAllowed ? "F" : "global::N.F")}|{(bodyAllowed ? "B" : "global::N.B")}|{(pocAllowed ? "P" : "global::N.P")}]") );
+            using var writer = new CodeWriter();
+            writer.EnableQualifiedFallback();
+            writer.AppendRaw("[");
+            Assert.That(writer.TryAppendPreparedBodyName("B", "global::N.B"), Is.True);
+            writer.AppendRaw("|");
+            Assert.That(writer.TryAppendPreparedPocName("P", "global::N.P"), Is.True);
+            writer.AppendRaw("]");
+            var content = writer.ToString(header: false);
+            var file = new CodeFile(content, "Owned.cs", writer.QualifiedContent, nameAlternatives: writer.NameAlternatives);
+            Assert.That(file.PreparedBodyNameCount, Is.EqualTo(1));
+            Assert.That(file.PreparedPocNameCount, Is.EqualTo(1));
+            var selected = file.SelectPreparedNames(fieldAllowed, bodyAllowed, pocAllowed);
+            Assert.That(selected.Content, Is.EqualTo($"[{(bodyAllowed ? "B" : "global::N.B")}|{(pocAllowed ? "P" : "global::N.P")}]") );
+            Assert.That(file.Content, Is.EqualTo("[B|P]"), "Selection cannot mutate the one-pass native buffers.");
+            Assert.That(file.QualifiedContent, Is.EqualTo("[global::N.B|global::N.P]"));
+            Assert.That(file.SelectPreparedNames(fieldAllowed, bodyAllowed).Content,
+                Is.EqualTo($"[{(bodyAllowed ? "B" : "global::N.B")}|global::N.P]"), "Legacy selection never grants the POC channel.");
+        }
+
         [TestCase("overlap", true, false)]
         [TestCase("overlap", false, true)]
         [TestCase("negative", true, false)]

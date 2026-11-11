@@ -331,26 +331,30 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return result;
         }
 
-        internal bool IsCurrent()
+        internal bool IsCurrent() => IsCurrentCore(invalidate: true);
+        internal bool IsCurrentWithoutInvalidating(PocWorkBudget? budget = null) => IsCurrentCore(invalidate: false, budget);
+
+        private bool IsCurrentCore(bool invalidate, PocWorkBudget? budget = null)
         {
-            if (System.Threading.Volatile.Read(ref _stale) != 0 || !IsAvailable)
+            if (!SourceCurrentnessChecks.Spend(budget) || System.Threading.Volatile.Read(ref _stale) != 0 || !IsAvailable)
             {
                 return false;
             }
             var current = (_signature is null || _signature.DeclarationRevision == _signatureRevision &&
-                ContractCollections.SameReferences(_signature.Parameters, _providers) &&
-                ContractCollections.SameReferences(_signature.Attributes, _methodAttributes) && _methodAttributeSnapshots.All(a => a.IsCurrent()) &&
-                _parameterSnapshots.All(p => p.IsCurrent()) && (_returnType?.IsCurrent() ?? true) && (_constructorType?.IsCurrent() ?? true) &&
+                SourceCurrentnessChecks.References(_signature.Parameters, _providers, budget) &&
+                SourceCurrentnessChecks.References(_signature.Attributes, _methodAttributes, budget) &&
+                _methodAttributeSnapshots.All(a => budget is null ? a.IsCurrent() : a.IsCurrentForPoc(budget)) &&
+                _parameterSnapshots.All(p => p.IsCurrent(budget)) && SourceCurrentnessChecks.Type(_returnType, budget) && SourceCurrentnessChecks.Type(_constructorType, budget) &&
                 (_signature is not MethodSignature constraintSignature || constraintSignature.GenericParameterConstraints is null && _constraintChildren.IsDefault ||
-                    !_constraintChildren.IsDefault && ContractCollections.SameReferences(constraintSignature.GenericParameterConstraints, _constraintChildren)) &&
+                    !_constraintChildren.IsDefault && SourceCurrentnessChecks.References(constraintSignature.GenericParameterConstraints, _constraintChildren, budget)) &&
                 (_signature is not MethodSignature methodSignature || methodSignature.GenericArguments is null && _genericArguments.IsDefault ||
-                    !_genericArguments.IsDefault && ContractCollections.SameReferences(methodSignature.GenericArguments, _genericArguments) && _genericTypes.All(t => t.IsCurrent()))) &&
-                (_owner is null || _owner.DeclarationRevision == _ownerRevision && ReferenceEquals(_owner.CachedType, _ownerType?.Identity) && _ownerType!.IsCurrent()) &&
+                    !_genericArguments.IsDefault && SourceCurrentnessChecks.References(methodSignature.GenericArguments, _genericArguments, budget) && _genericTypes.All(t => SourceCurrentnessChecks.Type(t, budget)))) &&
+                (_owner is null || _owner.DeclarationRevision == _ownerRevision && ReferenceEquals(_owner.CachedType, _ownerType?.Identity) && SourceCurrentnessChecks.Type(_ownerType!, budget)) &&
                 (_method is null || _method.DeclarationRevision == _memberRevision && ReferenceEquals(_method.Signature, _signature) &&
-                    ContractCollections.TryCopy(_owner!.CachedMethods, out var methods) && methods.Count(m => ReferenceEquals(m, _method)) == 1) &&
+                    SourceCurrentnessChecks.Copy(_owner!.CachedMethods, budget, out var methods) && SourceCurrentnessChecks.Spend(budget, methods.Length) && methods.Count(m => ReferenceEquals(m, _method)) == 1) &&
                 (_constructor is null || _constructor.DeclarationRevision == _memberRevision && ReferenceEquals(_constructor.Signature, _signature) &&
-                    ContractCollections.TryCopy(_owner!.CachedConstructors, out var constructors) && constructors.Count(c => ReferenceEquals(c, _constructor)) == 1);
-            if (!current)
+                    SourceCurrentnessChecks.Copy(_owner!.CachedConstructors, budget, out var constructors) && SourceCurrentnessChecks.Spend(budget, constructors.Length) && constructors.Count(c => ReferenceEquals(c, _constructor)) == 1);
+            if (!current && invalidate)
             {
                 System.Threading.Interlocked.Exchange(ref _stale, 1);
             }

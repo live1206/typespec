@@ -7,11 +7,13 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.TypeSpec.Generator.ClientModel.Providers;
 using Microsoft.TypeSpec.Generator.Expressions;
 using Microsoft.TypeSpec.Generator.Input;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
+using Microsoft.TypeSpec.Generator.SourceInput;
 using Microsoft.TypeSpec.Generator.Statements;
 using Microsoft.TypeSpec.Generator.Tests.Common;
 using NUnit.Framework;
@@ -124,6 +126,159 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.ReferenceMap
                         .SelectMany(a => a.Arguments).OfType<TypeOfExpression>().Select(e => e.Type);
                     Assert.AreEqual(referenced, buildableTypes.Contains(modelProvider.Type));
                 });
+        }
+
+        [Test]
+        public void FinalizedRetentionFixtureRestoresBothGeneratorSingletonsAndPolicy()
+        {
+            var scmField = typeof(ScmCodeModelGenerator).GetField("_instance",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var policyProperty = typeof(Configuration).GetProperty(nameof(Configuration.UnreferencedTypesHandling),
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            CodeModelGenerator? original = null;
+            try { original = CodeModelGenerator.Instance; }
+            catch (InvalidOperationException) { }
+            var originalScm = scmField.GetValue(null);
+            var originalPolicy = Configuration.UnreferencedTypesHandling;
+            var directory = Path.Combine(Path.GetTempPath(), "typespec-context-retention-prior-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var configuration = Configuration.Load(directory,
+                    "{\"package-name\":\"PriorSample\",\"unreferenced-types-handling\":\"keepAll\"}");
+                var prior = new ScmCodeModelGenerator(new GeneratorContext(configuration));
+                CodeModelGenerator.Instance = prior;
+                Assert.That(ReferenceEquals(ScmCodeModelGenerator.Instance, prior), Is.True);
+                Assert.That(Configuration.UnreferencedTypesHandling, Is.EqualTo(Configuration.UnreferencedTypesHandlingOption.KeepAll));
+                FinalizedContextFallsBackForRetainedCustomAndRemovedModels();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(ReferenceEquals(CodeModelGenerator.Instance, prior), Is.True);
+                    Assert.That(ReferenceEquals(ScmCodeModelGenerator.Instance, prior), Is.True,
+                        "The separate SCM singleton must not retain the fixture generator with a deleted output directory.");
+                    Assert.That(Configuration.UnreferencedTypesHandling, Is.EqualTo(Configuration.UnreferencedTypesHandlingOption.KeepAll));
+                });
+            }
+            finally
+            {
+                CodeModelGenerator.Instance = original!;
+                scmField.SetValue(null, originalScm);
+                policyProperty.SetValue(null, originalPolicy);
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+
+        [Test]
+        public void FinalizedContextFallsBackForRetainedCustomAndRemovedModels()
+        {
+            (string Content, string[] BuildableTypes) Run(bool finalized)
+            {
+                CodeModelGenerator? previous = null;
+                try { previous = CodeModelGenerator.Instance; }
+                catch (InvalidOperationException) { } // Isolated execution may start with no generator.
+                var scmField = typeof(ScmCodeModelGenerator).GetField("_instance",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+                var previousScm = scmField.GetValue(null);
+                var policyProperty = typeof(Configuration).GetProperty(nameof(Configuration.UnreferencedTypesHandling),
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+                var previousPolicy = Configuration.UnreferencedTypesHandling;
+                var directory = Path.Combine(Path.GetTempPath(), "typespec-context-retention-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(directory);
+                try
+                {
+                    File.Copy(Path.Combine(AppContext.BaseDirectory, "TestData", "PreparedFieldTypes", "ClientStructureDefault.json"),
+                        Path.Combine(directory, "tspCodeModel.json"));
+                    var configuration = Configuration.Load(directory,
+                        "{\"enable-pre-emission-simplification\":true,\"package-name\":\"Sample\",\"unreferenced-types-handling\":\"removeOrInternalize\"}");
+                    var generator = new ScmCodeModelGenerator(new GeneratorContext(configuration));
+                    CodeModelGenerator.Instance = generator;
+                    ((CodeModelGenerator)generator).Configure();
+                    // The general custom-source helper also injects generated
+                    // support files containing #if directives, which correctly
+                    // veto this preparation profile. This fixture needs only its
+                    // actual custom partial, not those unrelated generated files.
+                    var compilation = CSharpCompilation.Create("ContextRetention",
+                        syntaxTrees: [CSharpSyntaxTree.ParseText("namespace Sample.Models { public partial class CustomizedModel { public ContextDependency Dependency { get; set; } } }", path: "CustomizedModel.cs")],
+                        references: new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) }
+                            .Concat(generator.AdditionalMetadataReferences),
+                        options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+                    Assert.That(compilation.SyntaxTrees.Count(), Is.EqualTo(1));
+                    // Controlled complete-input fixture, not a production host certificate.
+                    var snapshot = new CompleteSourceInputSnapshot(directory, "context-retention", compilation, ["Debug|net10.0"], () => true);
+                    generator.SourceInputModel = new SourceInputModel(compilation, null) { PreEmissionSourceInputs = snapshot };
+                    Assert.That(snapshot.IsCurrentFor(directory), Is.True);
+                    var retainedInput = InputFactory.Model("CustomizedModel", access: null!);
+                    var dependencyInput = InputFactory.Model("ContextDependency", access: null!);
+                    var removedInput = InputFactory.Model("UnusedContextModel", access: null!, usage: InputModelTypeUsage.Json);
+                    var retained = generator.TypeFactory.CreateModel(retainedInput)!;
+                    var dependency = generator.TypeFactory.CreateModel(dependencyInput)!;
+                    var removed = generator.TypeFactory.CreateModel(removedInput)!;
+                    var output = generator.OutputLibrary;
+                    output.TypeProviders = output.TypeProviders.Concat(new TypeProvider[] { retained, dependency, removed }).ToArray();
+                    foreach (var provider in output.TypeProviders) { provider.EnsureBuilt(); }
+                    foreach (var visitor in generator.Visitors) { visitor.VisitLibrary(output); }
+                    CSharpGen.FilterAllCustomizedMembers(output);
+                    foreach (var provider in output.TypeProviders) { provider.ProcessTypeForBackCompatibility(); }
+                    var roots = output.TypeProviders;
+                    using var map = ProviderReferenceMapAnalyzer.PrepareForGenerationWithRootWitness(output, roots);
+                    Assert.That(retained.CustomCodeView, Is.Not.Null, "The retained root must actually bind its pre-analysis custom partial.");
+                    Assert.That(map.ShouldWriteProvider(retained), Is.True);
+                    Assert.That(map.ShouldWriteProvider(dependency), Is.True, "The custom partial's generated-model dependency must be retained.");
+                    Assert.That(map.ShouldWriteProvider(removed), Is.False);
+                    var context = roots.OfType<ModelReaderWriterContextDefinition>().Single();
+                    var beforeCache = context.CachedWriteAttributes;
+                    var beforeOrigin = context.PocNativeAttributeCacheOrigin;
+                    Assert.That(PreparedFieldTypes.IsPolicyEnabled(generator), Is.True,
+                        $"Controlled native preparation policy: enabled={configuration.EnablePreEmissionSimplification}, disableReduce={configuration.DisableRoslynReduce}, rewriters={generator.Rewriters.Count}.");
+                    Assert.That(ReferenceEquals(generator.SourceInputModel.PreEmissionSourceInputs, snapshot), Is.True);
+                    Assert.That(generator.SourceInputModel.Customization, Is.Not.Null);
+                    Assert.That(snapshot.IsCurrentFor(configuration.OutputDirectory), Is.True);
+                    using var preparedHeaders = finalized ? new PreparedPocHeaderFinalization(generator) : null;
+                    using var prepared = finalized
+                        ? PreparedFieldTypes.CreateForGenerationWithFinalizedPocHeaders(generator, roots, map.ShouldWriteProvider, preparedHeaders!)
+                        : PreparedFieldTypes.CreateForGeneration(generator, roots, map.ShouldWriteProvider);
+                    Assert.That(prepared, Is.Not.Null);
+                    Assert.That(snapshot.IsCurrentFor(directory), Is.True);
+                    Assert.That(ReferenceEquals(context.CachedWriteAttributes, beforeCache), Is.True);
+                    Assert.That(ReferenceEquals(context.PocNativeAttributeCacheOrigin, beforeOrigin), Is.True);
+                    if (finalized)
+                    {
+                        Assert.That(prepared!.FinalizedPocHeaders, Is.Not.Null);
+                        var header = prepared.FinalizedPocHeaders!.Get(context);
+                        Assert.That(header, Is.Not.Null);
+                        Assert.That(header!.Attributes, Is.Null, "Model roots are outside the approved context-attribute recipe.");
+                    }
+                    var writer = generator.GetWriter(context);
+                    writer.PreparedFieldTypes = prepared;
+                    writer.PreparedPocHeaders = preparedHeaders;
+                    var text = writer.Write().Content; // exactly one final native writer invocation
+                    Assert.That(ReferenceEquals(context.CachedWriteAttributes, beforeCache), Is.False);
+                    Assert.That(ReferenceEquals(context.PocNativeAttributeCacheOrigin, beforeOrigin), Is.False);
+                    var buildableTypes = context.CachedWriteAttributes!.OfType<AttributeStatement>()
+                        .SelectMany(a => a.Arguments).OfType<TypeOfExpression>()
+                        .Select(e => e.Type.FullyQualifiedName).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+                    Assert.That(buildableTypes, Does.Contain(retained.Type.FullyQualifiedName));
+                    Assert.That(buildableTypes, Does.Contain(dependency.Type.FullyQualifiedName));
+                    Assert.That(buildableTypes, Does.Not.Contain(removed.Type.FullyQualifiedName));
+                    Assert.That(text, Does.Contain("CustomizedModel"));
+                    Assert.That(text, Does.Contain("ContextDependency"));
+                    Assert.That(text, Does.Not.Contain("UnusedContextModel"));
+                    return (text, buildableTypes);
+                }
+                finally
+                {
+                    ProviderReferenceMapAnalyzer.ResetPreWriteAccessibility();
+                    CodeModelGenerator.Instance = previous!;
+                    scmField.SetValue(null, previousScm);
+                    policyProperty.SetValue(null, previousPolicy);
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+
+            var native = Run(finalized: false);
+            var candidate = Run(finalized: true);
+            Assert.That(candidate.Content, Is.EqualTo(native.Content));
+            Assert.That(candidate.BuildableTypes, Is.EqualTo(native.BuildableTypes));
         }
 
         [Test]

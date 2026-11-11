@@ -25,6 +25,13 @@ namespace Microsoft.TypeSpec.Generator.Primitives
     public class CSharpType
     {
         private readonly Type? _type;
+        // Facts from an already-occurring native runtime constructor. These are
+        // only work-size provenance for a later non-generic nullable copy, not
+        // current IR contents or spelling permission.
+        private readonly Type? _nativeConstructorType;
+        private readonly Type? _nativeConstructorBase;
+        private readonly string? _nativeConstructorName;
+        private readonly string? _nativeConstructorNamespace;
         private object? _literal;
         private Type? _underlyingType;
         private IReadOnlyList<CSharpType>? _unionItemTypes;
@@ -123,8 +130,16 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             IsNullable = isNullable;
 
             IsStruct = type.IsValueType;
-            BaseType = type.BaseType ?? (CSharpType?)null;
+            var runtimeBase = type.BaseType;
+            BaseType = runtimeBase ?? (CSharpType?)null;
             _underlyingType = type.IsEnum ? Enum.GetUnderlyingType(type) : null;
+            if (type.GetType() == typeof(object).GetType())
+            {
+                _nativeConstructorType = type;
+                _nativeConstructorBase = runtimeBase;
+                _nativeConstructorName = Name;
+                _nativeConstructorNamespace = Namespace;
+            }
         }
 
         [Conditional("DEBUG")]
@@ -273,6 +288,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         /// For special cases like interface types, such as collections, this will return the concrete implementation type.
         /// </summary>
         public CSharpType PropertyInitializationType => _propertyInitializationType ??= GetPropertyInitializationType();
+        internal CSharpType? CachedElementType => _elementType;
         public CSharpType ElementType => _elementType ??= GetElementType();
         public CSharpType InputType => _inputType ??= GetInputType();
         public CSharpType OutputType => _outputType ??= GetOutputType();
@@ -305,6 +321,24 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
         private bool TypeIsCollection()
             => IsFrameworkType && (IsDictionary || IsList);
+
+        // The rejected POC recipe must not warm the native classification
+        // caches. Honor already-cached values and otherwise inspect the same
+        // exact runtime definitions, without memoizing any result.
+        internal bool TryGetPocCollectionKind(out bool collection, out bool dictionary)
+        {
+            collection = dictionary = false;
+            if (GetType() != typeof(CSharpType) || _type is not null && _type.GetType() != typeof(object).GetType()) { return false; }
+            var readOnlyDictionary = _isReadOnlyDictionary ?? ReferenceEquals(_type, typeof(IReadOnlyDictionary<,>));
+            var readWriteDictionary = _isReadWriteDictionary ?? ReferenceEquals(_type, typeof(IDictionary<,>));
+            dictionary = _isDictionary ?? (readOnlyDictionary || readWriteDictionary);
+            var readOnlyList = _isReadOnlyList ?? (ReferenceEquals(_type, typeof(IEnumerable<>)) || ReferenceEquals(_type, typeof(IReadOnlyList<>)));
+            var readWriteList = _isReadWriteList ?? (ReferenceEquals(_type, typeof(IList<>)) || ReferenceEquals(_type, typeof(ICollection<>)) || ReferenceEquals(_type, typeof(List<>)));
+            var memory = _isReadOnlyMemory ?? ReferenceEquals(_type, typeof(ReadOnlyMemory<>));
+            var list = _isList ?? (readOnlyList || readWriteList || memory);
+            collection = _isCollection ?? (IsFrameworkType && (dictionary || list));
+            return true;
+        }
 
         private bool TypeContainsBinaryData()
         {
@@ -600,6 +634,45 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         /// </summary>
         /// <param name="isNullable">Flag to determine if the new type is nullable.</param>
         /// <returns>The existing <see cref="CSharpType"/> if it is nullable, otherwise a new instance of <see cref="CSharpType"/>.</returns>
+        // Prove the bounded native WithNullable(false) constructor path without
+        // calling it. Runtime names are immutable; mutable IR names must still
+        // agree, and a base must already be in the actual native runtime cache.
+        // Generic/nested/parameter constructors can allocate recursive metadata
+        // arrays and are deliberately outside this small profile.
+        internal bool TrySpendPocNullableRuntimeConstruction(PocWorkBudget budget, out CSharpType? cachedBase)
+        {
+            cachedBase = null;
+            if (GetType() != typeof(CSharpType) || !IsFrameworkType || !IsNullable ||
+                !ReferenceEquals(_nativeConstructorType, _type) || _nativeConstructorType is null ||
+                _nativeConstructorType.GetType() != typeof(object).GetType() ||
+                _nativeConstructorName is null || _nativeConstructorNamespace is null || Name is null || Namespace is null ||
+                !budget.TrySpend(48) || _nativeConstructorName.Length > 4096 || _nativeConstructorNamespace.Length > 4096 ||
+                Name.Length > 4096 || Namespace.Length > 4096 ||
+                !budget.TrySpend(_nativeConstructorName.Length + _nativeConstructorNamespace.Length + Name.Length + Namespace.Length) ||
+                !string.Equals(Name, _nativeConstructorName, StringComparison.Ordinal) ||
+                !string.Equals(Namespace, _nativeConstructorNamespace, StringComparison.Ordinal) ||
+                _nativeConstructorType.IsGenericType || _nativeConstructorType.IsGenericParameter || _nativeConstructorType.IsNested || DeclaringType is not null ||
+                !ContractCollections.TryCopyForPoc(Arguments, budget, out var arguments) || !arguments.IsEmpty)
+            {
+                return false;
+            }
+            // No base constructor may run through the implicit Type conversion.
+            // This also avoids relying on the recorded CSharpType BaseType value
+            // as proof of the cache's actual current entry.
+            if (_nativeConstructorBase is null) { return true; }
+            if (_nativeConstructorBase.GetType() != typeof(object).GetType()) { return false; }
+            // Pure enumeration below pays only for observation. The later
+            // native constructor performs its own dictionary lookup; reserve
+            // every possible current bucket probe for that occurrence too.
+            if (!budget.TrySpendReferenceLookup(_cache.Count) ||
+                !TryGetPocCachedRuntimeType(_nativeConstructorBase, budget, out var found) ||
+                found?.GetType() != typeof(CSharpType) || !found.IsFrameworkType ||
+                found.FrameworkType.GetType() != typeof(object).GetType() ||
+                !ReferenceEquals(found.FrameworkType, _nativeConstructorBase)) { return false; }
+            cachedBase = found;
+            return true;
+        }
+
         public CSharpType WithNullable(bool isNullable)
         {
             var type = isNullable == IsNullable ? this : IsFrameworkType
@@ -646,6 +719,39 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         }
 
         private static readonly Dictionary<Type, CSharpType> _cache = new();
+        // Legacy nonforcing lookup. It is not a pure POC observation: public
+        // Type conversion can introduce keys with foreign equality dispatch.
+        internal static bool TryGetCachedRuntimeType(Type type, out CSharpType? result) => _cache.TryGetValue(type, out result);
+
+        // Observe bounded ACTUAL keys without GetHashCode/Equals or constructing
+        // a CSharpType. Success with a null result means an observed cache miss;
+        // false means the cache itself cannot be inspected by this POC profile.
+        internal static bool TryGetPocCachedRuntimeType(Type type, PocWorkBudget budget, out CSharpType? result)
+        {
+            result = null;
+            if (type.GetType() != typeof(object).GetType()) { return false; }
+            var count = _cache.Count;
+            // Enumeration can visit deleted slots. The public capacity query
+            // invokes no key equality and bounds that scan separately from the
+            // per-live-entry checks below; native cache lookup stays unchanged.
+            var capacity = _cache.EnsureCapacity(0);
+            if (count > 4096 || !budget.TrySpend(capacity) || !budget.TrySpend(1 + count)) { return false; }
+            try
+            {
+                var seen = 0;
+                CSharpType? found = null;
+                foreach (var pair in _cache)
+                {
+                    if (++seen > count || pair.Key.GetType() != typeof(object).GetType()) { return false; }
+                    if (ReferenceEquals(pair.Key, type)) { found = pair.Value; }
+                }
+                if (seen != count || _cache.Count != count) { return false; }
+                result = found;
+                return true;
+            }
+            catch (InvalidOperationException) { return false; }
+        }
+
         public static implicit operator CSharpType(Type type)
         {
             if (!_cache.TryGetValue(type, out var result))

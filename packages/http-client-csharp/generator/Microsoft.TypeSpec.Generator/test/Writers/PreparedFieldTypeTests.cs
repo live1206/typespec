@@ -1238,7 +1238,11 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 }
                 CodeModelGenerator.Instance = generator;
 
-                await new CSharpGen().ExecuteAsync();
+                var generation = new CSharpGen();
+                await generation.ExecuteAsync();
+                Assert.That(generation.LastObservedOwnedRootPhase,
+                    Is.EqualTo(mode is "enabled" or "unknown" or "rewriter" ? (bool?)true : null),
+                    "This is an output/root/iterator identity observation, not group permission.");
 
                 var actual = await File.ReadAllTextAsync(Path.Combine(directory, "Clock.cs"));
                 // The controlled host is consulted twice while preparing and again

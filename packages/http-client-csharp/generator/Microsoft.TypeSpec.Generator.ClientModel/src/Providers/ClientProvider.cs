@@ -114,6 +114,20 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
         public ClientProvider(InputClient inputClient)
         {
             _inputClient = inputClient;
+            PocHeaderFinalizationBridge.Install(typeof(ClientProvider), new(typeof(TypeProvider), typeof(ClientProvider), typeof(ClientProvider),
+                static (value, _) => value is ClientProvider provider && provider._inputClient is not null && provider._inputClient.Experimental is null &&
+                    PocHeaderFinalizationBridge.SafeDescriptionText(provider._inputClient.Summary) &&
+                    PocHeaderFinalizationBridge.SafeDescriptionText(provider._inputClient.Doc),
+                DescriptionInputs: static value =>
+                {
+                    var provider = (ClientProvider)value;
+                    // The exact inherited type builder has already cached Name
+                    // before header admission. Count the longest native fallback
+                    // template without constructing or caching a description.
+                    int length = provider.Name.Length;
+                    return new(provider._inputClient.Summary, provider._inputClient.Doc,
+                        length > 4096 ? int.MaxValue : length + 17, provider.Name);
+                }));
             IsMultiServiceClient = _inputClient.IsMultiServiceClient;
             CleanOperationNames(inputClient);
 
@@ -1072,7 +1086,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                     $"Initializes a new instance of {Name} from a <see cref=\"{ClientSettings.Type.Name}\"/>.",
                     MethodSignatureModifiers.Public,
                     [settingsParam],
-                    attributes: [experimentalAttr],
+                    attributes: ConstructedCollectionBridge.Record<AttributeStatement>([experimentalAttr], experimentalAttr),
                     initializer: new ConstructorInitializer(false, args)),
                 MethodBodyStatement.Empty,
                 this,
@@ -1407,10 +1421,17 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             // initialize the arguments to reference the primary constructor
             // For parameters in the secondary constructor, use the parameter itself
             // For parameters not in the secondary constructor, use their initialization value
+            var ownedArguments = ConstructedCollectionBridge.Enabled<ValueExpression>() ? new List<ValueExpression>() : null;
+            IReadOnlyList<ValueExpression> initializerArguments;
             var primaryCtorInitializer = new ConstructorInitializer(
                 false,
-                [.. primaryCtorOrderedParams.Select(p => secondaryParamNames.Contains(p.Name) ? p : (p.InitializationValue ?? p))
-             ]);
+                initializerArguments = [.. primaryCtorOrderedParams.Select(parameter =>
+                {
+                    ValueExpression value = secondaryParamNames.Contains(parameter.Name) ? parameter : (parameter.InitializationValue ?? parameter);
+                    if (ownedArguments is { Count: <= 4096 }) { ownedArguments.Add(value); }
+                    return value;
+                })]);
+            if (ownedArguments is not null) { ConstructedCollectionBridge.RecordOwned(initializerArguments, ownedArguments); }
             var constructorSignature = new ConstructorSignature(
                 Type,
                 PublicCtorDescription,

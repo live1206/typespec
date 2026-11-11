@@ -222,35 +222,51 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return true;
         }
 
-        internal static bool HasPureFormattedTypes(IEnumerable<CSharpType> types)
+        internal static bool HasPureFormattedTypes(IEnumerable<CSharpType> types, PocWorkBudget? budget = null)
         {
+            if (budget is not null && !budget.TrySpend()) { return false; }
             var names = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
-            return types.All(t => CaptureTypeImports(t, names, 0));
+            return types.All(t => CaptureTypeImports(t, names, 0, budget));
         }
 
-        private static bool CaptureTypeImports(CSharpType type, ImmutableHashSet<string>.Builder names, int depth)
+        private static bool AddImportNamespace(string name, ImmutableHashSet<string>.Builder names, PocWorkBudget? budget)
         {
-            if (depth > 32 || type.GetType() != typeof(CSharpType) || !Namespace(type.Namespace) ||
-                !ContractCollections.TryCopy(type.Arguments, out var arguments)) { return false; }
-            names.Add(type.Namespace);
-            if (type.IsFrameworkType && !CaptureRuntimeTypeImports(type.FrameworkType, names, depth + 1)) { return false; }
-            if (type.DeclaringType is { } declaring && !CaptureTypeImports(declaring, names, depth + 1)) { return false; }
-            return arguments.All(a => a is not null && CaptureTypeImports(a, names, depth + 1));
+            if (budget is not null)
+            {
+                long work = (name.Length + 1L) * (names.Count + 1L);
+                if (work > int.MaxValue || !budget.TrySpend((int)work)) { return false; }
+            }
+            names.Add(name);
+            return true;
         }
 
-        private static bool CaptureRuntimeTypeImports(Type type, ImmutableHashSet<string>.Builder names, int depth)
+        private static bool CaptureTypeImports(CSharpType type, ImmutableHashSet<string>.Builder names, int depth, PocWorkBudget? budget = null)
+        {
+            if (depth > 32 || type.GetType() != typeof(CSharpType) ||
+                budget is not null && !budget.TrySpend(type.Namespace.Length) || !Namespace(type.Namespace) ||
+                !(budget is null ? ContractCollections.TryCopy(type.Arguments, out var arguments) :
+                    ContractCollections.TryCopyForPoc(type.Arguments, budget, out arguments))) { return false; }
+            if (!AddImportNamespace(type.Namespace, names, budget)) { return false; }
+            if (type.IsFrameworkType && !CaptureRuntimeTypeImports(type.FrameworkType, names, depth + 1, budget)) { return false; }
+            if (type.DeclaringType is { } declaring && !CaptureTypeImports(declaring, names, depth + 1, budget)) { return false; }
+            return arguments.All(a => a is not null && CaptureTypeImports(a, names, depth + 1, budget));
+        }
+
+        private static bool CaptureRuntimeTypeImports(Type type, ImmutableHashSet<string>.Builder names, int depth, PocWorkBudget? budget = null)
         {
             // Friendly-name formatting dispatches through virtual Type members.
             // A TypeDelegator can retain a harmless cached CSharpType name yet
             // inject imports during writing. Audit dispatch before predicates.
             if (depth > 32 || type.GetType() != RuntimeTypeImplementation) { return false; }
+            // The bounded file profile already excludes these reflective array
+            // families; retain the established non-file behavior with no budget.
+            if (budget is not null && (type.IsGenericType || type.IsGenericParameter || type.HasElementType)) { return false; }
             if (type.IsGenericParameter) { return true; }
             var name = type.Namespace ?? string.Empty;
-            if (!Namespace(name)) { return false; }
-            names.Add(name);
-            if (type.HasElementType && (type.GetElementType() is not { } element || !CaptureRuntimeTypeImports(element, names, depth + 1))) { return false; }
-            if (type.DeclaringType is { } declaring && !CaptureRuntimeTypeImports(declaring, names, depth + 1)) { return false; }
-            return !type.IsGenericType || type.GetGenericArguments().All(a => CaptureRuntimeTypeImports(a, names, depth + 1));
+            if (budget is not null && !budget.TrySpend(name.Length) || !Namespace(name) || !AddImportNamespace(name, names, budget)) { return false; }
+            if (type.HasElementType && (type.GetElementType() is not { } element || !CaptureRuntimeTypeImports(element, names, depth + 1, budget))) { return false; }
+            if (type.DeclaringType is { } declaring && !CaptureRuntimeTypeImports(declaring, names, depth + 1, budget)) { return false; }
+            return !type.IsGenericType || type.GetGenericArguments().All(a => CaptureRuntimeTypeImports(a, names, depth + 1, budget));
         }
 
         private static IEnumerable<string> Ancestors(string name)

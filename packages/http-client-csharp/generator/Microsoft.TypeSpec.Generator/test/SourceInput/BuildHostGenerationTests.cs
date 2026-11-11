@@ -11,10 +11,12 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.TypeSpec.Generator.Expressions;
 using Microsoft.TypeSpec.Generator.Input;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
 using Microsoft.TypeSpec.Generator.SourceInput;
+using Microsoft.TypeSpec.Generator.Statements;
 using Microsoft.TypeSpec.Generator.Tests.TestHelpers;
 using Microsoft.TypeSpec.Generator.Tests.Writers;
 using NUnit.Framework;
@@ -66,6 +68,91 @@ namespace Microsoft.TypeSpec.Generator.Tests.SourceInput
             {
                 Directory.Delete(directory, recursive: true);
             }
+        }
+
+        [Test]
+        public async Task EmptyOwnedRootWritesNoFilesAndRetainsNoNameChoices()
+        {
+            CodeModelGenerator? previous = null;
+            try { previous = CodeModelGenerator.Instance; }
+            catch (InvalidOperationException) { }
+            var policy = typeof(Configuration).GetProperty(nameof(Configuration.UnreferencedTypesHandling),
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var previousPolicy = policy.GetValue(null);
+            var directory = Path.Combine(Path.GetTempPath(), "typespec-empty-owned-generation", Guid.NewGuid().ToString("N"));
+            var original = Path.Combine(directory, "original");
+            var isolated = Path.Combine(directory, "isolated");
+            Directory.CreateDirectory(original);
+            Directory.CreateDirectory(isolated);
+            var source = Path.Combine(directory, "linked.cs");
+            File.WriteAllText(source, "namespace Other { class Unrelated {} }");
+            try
+            {
+                const string json = "{\"enable-pre-emission-simplification\":true,\"package-name\":\"Sample\",\"unreferenced-types-handling\":\"keepAll\"}";
+                var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original, configuration: json,
+                    compilation: () => Task.FromResult<Compilation>(CSharpCompilation.Create("Customization")));
+                var output = new TestOutputLibrary();
+                Assert.That(output.TypeProviders, Is.Empty);
+                var generator = new ControlledGenerator(new GeneratorContext(mock.Object.Configuration),
+                    mock.Object.InputLibrary, mock.Object.TypeFactory, output);
+                CodeModelGenerator.Instance = generator;
+                var generation = new CSharpGen();
+                var result = await generation.ExecuteForCompilerBuildAsync(isolated, new FixtureSession(original, source));
+                Assert.That(result.UsedCapturedResidualInputs, Is.True);
+                Assert.That(output.TypeProviders, Is.Empty);
+                Assert.That(generation.LastObservedOwnedRootPhase, Is.True);
+                Assert.That(generation.LastObservedPocCandidateFilesBeforeOutput, Is.Empty);
+                Assert.That(Directory.EnumerateFiles(isolated, "*.cs", SearchOption.AllDirectories), Is.Empty);
+                Assert.That(File.ReadAllText(source), Is.EqualTo("namespace Other { class Unrelated {} }"));
+                // An empty emission root establishes the opt-in/cleanup route,
+                // not canonical consumption or a count-zero name permission.
+            }
+            finally
+            {
+                ProviderReferenceMapAnalyzer.ResetPreWriteAccessibility();
+                CodeModelGenerator.Instance = previous!;
+                policy.SetValue(null, previousPolicy);
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+
+        [Test]
+        public async Task PocProposalIsPreparedBeforeActualOutputProviderWrites()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "typespec-poc-generation", Guid.NewGuid().ToString("N"));
+            var original = Path.Combine(directory, "original");
+            var isolated = Path.Combine(directory, "isolated");
+            Directory.CreateDirectory(original);
+            Directory.CreateDirectory(isolated);
+            var source = Path.Combine(directory, "linked.cs");
+            File.WriteAllText(source, "namespace Other { class Unrelated {} }");
+            try
+            {
+                const string json = "{\"enable-pre-emission-simplification\":true,\"package-name\":\"Sample\",\"unreferenced-types-handling\":\"keepAll\"}";
+                var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original, configuration: json,
+                    compilation: () => Task.FromResult<Compilation>(CSharpCompilation.Create("Customization")));
+                var target = new TestTypeProvider(name: "Widget", ns: "Sample",
+                    declarationModifiers: TypeSignatureModifiers.Internal | TypeSignatureModifiers.Class);
+                var owner = new PocFieldOwner(target.Type);
+                var generator = new ControlledGenerator(new GeneratorContext(mock.Object.Configuration),
+                    mock.Object.InputLibrary, mock.Object.TypeFactory, new TestOutputLibrary(owner, target));
+                CodeModelGenerator.Instance = generator;
+                var references = new[] { typeof(object).Assembly.Location, typeof(System.Text.StringBuilder).Assembly.Location }.Distinct(StringComparer.Ordinal).ToArray();
+                var referenceCompilation = CSharpCompilation.Create("ReferenceProbe", references: references.Select(path => MetadataReference.CreateFromFile(path)));
+                Assert.That(referenceCompilation.GetTypeByMetadataName(typeof(System.Text.StringBuilder).FullName!), Is.Not.Null);
+                var session = new PocFixtureSession(original, source, references);
+                var generation = new CSharpGen();
+
+                var result = await generation.ExecuteForCompilerBuildAsync(isolated, session);
+
+                Assert.That(result.UsedCapturedResidualInputs, Is.True, "The controlled compiler proof must actually be active.");
+                Assert.That(generation.LastObservedOwnedRootPhase, Is.True);
+                Assert.That(generation.LastObservedPocCandidatesBeforeOutput, Is.GreaterThan(0),
+                    "The actual generation path must prepare its occurrence-owned proposal before writing output providers.");
+                Assert.That(generation.LastObservedPocOwnedStreamReceipt, Is.True,
+                    "The actual generation-owned iterator and standard writer must complete the precomputed stream.");
+            }
+            finally { Directory.Delete(directory, recursive: true); }
         }
 
         [TestCase("default")]
@@ -699,6 +786,33 @@ namespace Microsoft.TypeSpec.Generator.Tests.SourceInput
             protected override string BuildRelativeFilePath() => "Clock.cs";
             protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Internal | TypeSignatureModifiers.Class;
             protected internal override FieldProvider[] BuildFields() => [new FieldProvider(FieldModifiers.Private, fieldType, "_value", this)];
+        }
+
+        private sealed class PocFieldOwner(CSharpType fieldType) : TypeProvider
+        {
+            protected override string BuildName() => "PocHost";
+            protected override string BuildNamespace() => "Sample";
+            protected override string BuildRelativeFilePath() => "PocHost.cs";
+            protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Internal | TypeSignatureModifiers.Class;
+            protected internal override FieldProvider[] BuildFields() => [new FieldProvider(FieldModifiers.Private, fieldType, "_value", this)];
+            protected internal override MethodProvider[] BuildMethods()
+            {
+                var signature = new MethodSignature("Probe", null, MethodSignatureModifiers.Private, null, null, []);
+                var declaration = new DeclarationExpression(typeof(System.Text.StringBuilder), "value");
+                var assignment = new AssignmentExpression(declaration, new KeywordExpression("default", null));
+                return [new MethodProvider(signature, new MethodBodyStatements([assignment.Terminate()]), this)];
+            }
+        }
+
+        private sealed class PocFixtureSession(string outputDirectory, string sourcePath, string[] references) : ITrustedCompilerBuildSession
+        {
+            private static string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+            private readonly string _sourceHash = Hash(sourcePath);
+            private readonly CapturedCompilerReference[] _references = references.Select(path => new CapturedCompilerReference(path, Hash(path), [], false)).ToArray();
+            public CompilerBuildInputCapture Capture => new(outputDirectory, "poc-generation", "Debug|net10.0", "12.0", "PocProof", [],
+                [new CapturedCompilerSource(sourcePath, _sourceHash)], _references, false, false,
+                new CSharpParseOptions(LanguageVersion.CSharp12), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            public bool IsCurrent() => true;
         }
 
         private sealed class FixtureSession(string outputDirectory, string sourcePath, string? assetsPath = null, bool unsupported = false) : ITrustedCompilerBuildSession

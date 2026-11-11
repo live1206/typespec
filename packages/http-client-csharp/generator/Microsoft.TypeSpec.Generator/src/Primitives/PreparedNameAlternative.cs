@@ -6,7 +6,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
     internal enum PreparedNameChannel
     {
         Field,
-        Body
+        Body,
+        Poc
     }
 
     // Owned spelling plus a numeric range, never a span into pooled writer buffers.

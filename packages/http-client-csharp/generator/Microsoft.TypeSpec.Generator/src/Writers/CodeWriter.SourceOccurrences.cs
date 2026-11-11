@@ -14,6 +14,9 @@ namespace Microsoft.TypeSpec.Generator
         private TypeProviderWriter? _standardSourceWriter;
         private PreparedSourceFile? _sourceFile;
         private PreparedSourceFile.Cursor? _sourceCursor;
+        private PreparedPocSupplementalFile.Cursor? _pocSupplementalCursor;
+        private PreparedPocTypeConstraint? _pocTypeConstraint;
+        private PreparedPocFileConsumption? _pocFileConsumption;
         internal PreparedSourceOccurrence? CurrentSourceOccurrence => _sourceCursor?.Current;
         internal PreparedSourceObservations.PreparedOccurrenceObservations? CurrentSourceObservations => _sourceCursor?.Current is { } occurrence
             ? _sourceFile?.Observations?.GetCurrent(occurrence) : null;
@@ -25,6 +28,11 @@ namespace Microsoft.TypeSpec.Generator
             _sourcePreparation = preparation;
             _sourceFile = preparation.GetSourceFile(owner);
             _sourceCursor = _sourceFile?.Start();
+            var pocFile = preparation.PocGenerationEnvelope?.GetFile(owner);
+            _pocTypeConstraint = pocFile?.TypeConstraint;
+            _pocFileConsumption = pocFile?.StartNativeConsumption(preparation, standardWriter);
+            if (_sourceFile is { } file && _sourceCursor is not null)
+            { _pocSupplementalCursor = preparation.GetPocSupplementalFile(file)?.Start(preparation, standardWriter); }
         }
 
         internal bool TryWritePreparedTypeOfOperand(TypeOfExpression producer) =>
@@ -46,24 +54,58 @@ namespace Microsoft.TypeSpec.Generator
             return true;
         }
 
+        internal T ObserveSourceRootProducer<T>(T producer) where T : class
+        {
+            _pocFileConsumption?.ObserveRootProducer(producer);
+            return producer;
+        }
+
         internal IDisposable BeginSourceRoot(TypeProvider owner, string role, int index)
         {
             _sourcePreparation?.ObserveSourceSnapshot();
-            return _sourceCursor?.BeginRoot(owner, role, index) ?? PreparedSourceFile.EmptyScope.Instance;
+            _sourcePreparation?.ObservePocHeaderAfterSourceCallback(_sourceFile);
+            var shared = _sourceCursor?.BeginRoot(owner, role, index) ?? PreparedSourceFile.EmptyScope.Instance;
+            if (_pocFileConsumption is { } consumption)
+            { shared = new SupplementalScope(shared, consumption.BeginRoot(owner, role, index)); }
+            if (role == "type-constraint" && index == 0 && ReferenceEquals(owner, _sourceFile?.FileOwner) && _pocTypeConstraint is { } constraint)
+            { return new SupplementalScope(shared, constraint.BeginNativeRoot()); }
+            return shared;
         }
 
         internal IDisposable EnterSourceNode(object producer)
         {
             _sourcePreparation?.ObserveSourceSnapshot();
-            return _sourceCursor?.Enter(producer) ?? PreparedSourceFile.EmptyScope.Instance;
+            _sourcePreparation?.ObservePocHeaderAfterSourceCallback(_sourceFile);
+            // The producer was retained before the callback above. Validate that
+            // exact object, not just its carrier's potentially restored endpoint.
+            _pocTypeConstraint?.ObserveNativeProducer(producer);
+            var shared = _sourceCursor?.Enter(producer) ?? PreparedSourceFile.EmptyScope.Instance;
+            var supplemental = _pocSupplementalCursor?.Enter(producer, _sourceCursor?.Current) ?? PreparedSourceFile.EmptyScope.Instance;
+            var original = ReferenceEquals(supplemental, PreparedSourceFile.EmptyScope.Instance) ? shared : new SupplementalScope(shared, supplemental);
+            return _pocFileConsumption is { } consumption
+                ? new SupplementalScope(original, consumption.Enter(producer)) : original;
         }
 
         internal SourceConsumptionReceipt? CompleteSourceFile()
         {
             _sourcePreparation?.ObserveSourceSnapshot();
+            _sourcePreparation?.ObservePocHeaderAfterSourceCallback(_sourceFile);
+            _pocFileConsumption?.Complete();
             if (_sourceFile is null || _sourceCursor is null) { return null; }
+            var current = _sourceCursor.Complete();
+            var consumed = _sourceCursor.Consumed;
+            _pocSupplementalCursor?.Complete(current, consumed);
             return new(_sourceFile.Generation, _sourceFile.FilePath, _sourceFile.Roots.Length,
-                _sourceCursor.Consumed, _sourceCursor.Complete());
+                consumed, current);
+        }
+
+        private sealed class SupplementalScope(IDisposable shared, IDisposable supplemental) : IDisposable
+        {
+            public void Dispose()
+            {
+                try { supplemental.Dispose(); }
+                finally { shared.Dispose(); }
+            }
         }
     }
 }

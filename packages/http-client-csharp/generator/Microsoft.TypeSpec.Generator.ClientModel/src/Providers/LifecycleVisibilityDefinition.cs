@@ -35,7 +35,11 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
         protected override TypeProvider[] BuildSerializationProviders() => [];
 
         protected override IReadOnlyList<MethodBodyStatement> BuildAttributes()
-            => [new AttributeStatement(typeof(FlagsAttribute))];
+        {
+            MethodBodyStatement attribute;
+            return ConstructedCollectionBridge.Record<MethodBodyStatement>(
+                [attribute = new AttributeStatement(typeof(FlagsAttribute))], attribute);
+        }
 
         protected override IReadOnlyList<EnumTypeMember> BuildEnumValues()
             => Enum.GetValues<InputVisibility>().Select(visibility =>

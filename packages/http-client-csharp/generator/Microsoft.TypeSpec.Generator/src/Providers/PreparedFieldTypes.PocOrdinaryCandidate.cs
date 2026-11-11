@@ -769,6 +769,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
             plan.TypeConstraint?.ObserveNative(constraint);
         }
 
+        internal int PocSourceFileCount => _sourceFiles.Count;
+
         internal bool OwnsPocSupplementalWrite(PreparedSourceFile file, TypeProviderWriter writer) =>
             Volatile.Read(ref _pocStreamState) == 1 && Volatile.Read(ref _pocCandidateStale) == 0 &&
             ReferenceEquals(_pocWritingProvider, file.FileOwner) && ReferenceEquals(_pocWritingWriter, writer) &&
@@ -783,6 +785,11 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 // Reserve the possible POC-only rejection before observing a
                 // mismatch; do not partly record it after exhausting credits.
                 !budget.TrySpendReferenceLookup(_pocInvalidCandidateFiles.Count)) { return false; }
+            if (PocGenerationEnvelope is { } envelope)
+            {
+                var plan = envelope.GetFile(file.FileOwner, budget);
+                if (budget.Exhausted || plan is { HasObservedParameterSelectionFailure: true } && ReferenceEquals(plan.Source, file)) { return false; }
+            }
             if (file.IsCurrentWithoutInvalidating(budget)) { return true; }
             // Running out of credits does not establish a source mismatch and
             // must not poison a later independently funded POC query.

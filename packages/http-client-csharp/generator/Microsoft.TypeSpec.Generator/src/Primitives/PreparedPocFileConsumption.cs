@@ -14,15 +14,54 @@ namespace Microsoft.TypeSpec.Generator.Primitives
     internal sealed class PreparedPocFileConsumption
     {
         private sealed record Entry(object Producer, bool Opaque, int End);
+        private sealed record DeclarationPlan(MethodSignatureBase Signature, ImmutableArray<ParameterProvider> Parameters);
         private sealed record Root(TypeProvider Owner, string Role, int Index, bool Opaque,
-            bool PlannedConstraint, ImmutableArray<Entry> Entries, object? Producer = null);
+            bool PlannedConstraint, ImmutableArray<Entry> Entries, object? Producer = null, DeclarationPlan? Declaration = null);
+
+        private sealed class DeclarationPlanBuilder
+        {
+            private MethodSignatureBase? _signature;
+            private readonly List<ParameterProvider> _parameters = [];
+
+            internal bool SetSignature(MethodSignatureBase signature)
+            {
+                if (_signature is not null) { return false; }
+                _signature = signature;
+                return true;
+            }
+
+            internal bool AddParameter(ParameterProvider parameter, PocWorkBudget budget)
+            {
+                if (!budget.TrySpend()) { return false; }
+                if (_parameters.Count == _parameters.Capacity)
+                {
+                    long next = _parameters.Capacity == 0 ? 4 : 2L * _parameters.Capacity;
+                    if (next > int.MaxValue) { budget.Reject(); return false; }
+                    if (!budget.TrySpend((int)next) || !budget.TrySpend(_parameters.Count)) { return false; }
+                }
+                _parameters.Add(parameter);
+                return true;
+            }
+
+            internal bool TryFinish(PocWorkBudget budget, out DeclarationPlan? plan)
+            {
+                plan = null;
+                if (_signature is null) { return true; }
+                // Plan object, possible immutable backing array, and element copy.
+                if (!budget.TrySpend(2) || !budget.TrySpend(_parameters.Count)) { return false; }
+                plan = new DeclarationPlan(_signature, _parameters.ToImmutableArray());
+                return true;
+            }
+        }
         private readonly PreparedSourceFile _source;
         private readonly ImmutableArray<Root> _roots;
         private readonly PreparedPocTypeConstraint? _constraint;
         private PreparedFieldTypes? _preparation;
         private TypeProviderWriter? _writer;
+        private PocDeclarationWorkBudget? _declarationBudget;
         private Root? _active;
         private int _nextRoot, _nextNode, _opaqueDepth, _events;
+        private int _declarationState, _nextParameter, _parameterSelectionFailure;
         private bool _started, _failed, _completed, _rootObserved;
         private string? _failure;
         internal string? Failure => _failure ?? (_completed && _constraint is not null && !_constraint.HasObservedExpectedEmission ? "constraint-contract" : null);
@@ -62,12 +101,23 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 // the shared graph. Use only its separately recorded construction
                 // elements here, and keep the original shared roots unchanged.
                 if (root.Id.RootRole == "type-attribute") { continue; }
+                if (!budget.TrySpendStringComparison(root.Id.RootRole, "method") ||
+                    !budget.TrySpendStringComparison(root.Id.RootRole, "constructor")) { return null; }
+                DeclarationPlanBuilder? declaration = null;
+                if (root.Id.RootRole is "method" or "constructor")
+                {
+                    // Builder and its initially empty private parameter list.
+                    if (!budget.TrySpend(2)) { return null; }
+                    declaration = new DeclarationPlanBuilder();
+                }
                 var entries = new List<Entry>();
-                if (!CaptureEntries(root, entries, budget, 0, source.DisableXmlDocs, out failure))
+                if (!CaptureEntries(root, entries, budget, 0, source.DisableXmlDocs, declaration, false, out failure))
                 { failure = $"{root.Id.RootRole}[{root.Id.RootIndex}]:{failure}"; return null; }
+                DeclarationPlan? declarationPlan = null;
+                if (declaration is not null && !declaration.TryFinish(budget, out declarationPlan)) { return null; }
                 roots.Add(new Root(owner, root.Id.RootRole, root.Id.RootIndex,
                     root.IsOpaque && !root.EmissionBoundary, false, entries.ToImmutableArray(),
-                    root.EmissionBoundary || root.Id.RootRole == "type-documentation" ? null : root.Producer));
+                    root.EmissionBoundary || root.Id.RootRole == "type-documentation" ? null : root.Producer, declarationPlan));
                 if (root.Id.RootRole == "type-documentation")
                 {
                     if (budget.Exhausted || budget.Remaining == 0) { return null; }
@@ -86,7 +136,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                     {
                         if (attributes[attributeIndex] is not { } attribute) { return null; }
                         var attributeEntries = new List<Entry>();
-                        if (!CapturePocEntries(attribute, true, attributeEntries, budget, 0, source.DisableXmlDocs, out failure)) { return null; }
+                        if (!CapturePocEntries(attribute, true, attributeEntries, budget, 0, source.DisableXmlDocs, null, false, out failure)) { return null; }
                         roots.Add(new Root(owner, "type-attribute", attributeIndex, false, false, attributeEntries.ToImmutableArray()));
                     }
                 }
@@ -95,7 +145,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return new PreparedPocFileConsumption(source, roots.ToImmutable(), constraint);
         }
 
-        private static bool CaptureEntries(PreparedSourceOccurrence occurrence, List<Entry> entries, PocWorkBudget budget, int depth, bool disableDocs, out string? failure)
+        private static bool CaptureEntries(PreparedSourceOccurrence occurrence, List<Entry> entries, PocWorkBudget budget, int depth, bool disableDocs,
+            DeclarationPlanBuilder? declaration, bool primaryParameter, out string? failure)
         {
             failure = "capture-budget-or-depth";
             if (depth > 256 || !budget.TrySpend()) { return false; }
@@ -103,7 +154,11 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             // Their shared opacity cannot absorb child writes. A POC-only capture
             // may now expand them from witnessed carriers before writing starts.
             if (depth > 0 && occurrence.IsOpaque && !occurrence.EmissionBoundary)
-            { return CapturePocEntries(occurrence.Producer, false, entries, budget, depth, disableDocs, out failure); }
+            { return CapturePocEntries(occurrence.Producer, false, entries, budget, depth, disableDocs, declaration, primaryParameter, out failure); }
+            var primarySignature = declaration is not null && depth == 1 && occurrence.Producer is MethodSignatureBase;
+            if (primarySignature && !declaration!.SetSignature((MethodSignatureBase)occurrence.Producer) ||
+                primaryParameter && occurrence.Producer is ParameterProvider parameter && !declaration!.AddParameter(parameter, budget))
+            { failure = "declaration-capture"; return false; }
             var entry = -1;
             if (occurrence.EmissionBoundary)
             {
@@ -113,19 +168,24 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             if (!occurrence.IsOpaque)
             {
                 foreach (var child in occurrence.Children)
-                { if (!CaptureEntries(child, entries, budget, depth + 1, disableDocs, out failure)) { return false; } }
+                { if (!CaptureEntries(child, entries, budget, depth + 1, disableDocs, declaration, primarySignature, out failure)) { return false; } }
             }
             if (entry >= 0) { entries[entry] = entries[entry] with { End = entries.Count }; }
             return true;
         }
 
-        private static bool CapturePocEntries(object producer, bool boundary, List<Entry> entries, PocWorkBudget budget, int depth, bool disableDocs, out string? failure)
+        private static bool CapturePocEntries(object producer, bool boundary, List<Entry> entries, PocWorkBudget budget, int depth, bool disableDocs,
+            DeclarationPlanBuilder? declaration, bool primaryParameter, out string? failure)
         {
             failure = "capture-budget-or-depth";
             if (depth > 256 || !budget.TrySpend()) { return false; }
             var shape = StructuredSourceShape.CaptureForPocSupplement(producer, disableDocs, budget);
             if (budget.Exhausted || shape.Opaque && !boundary)
             { failure = $"{producer.GetType().Name}:{shape.UnavailableReason}"; return false; }
+            var primarySignature = declaration is not null && depth == 1 && producer is MethodSignatureBase;
+            if (primarySignature && !declaration!.SetSignature((MethodSignatureBase)producer) ||
+                primaryParameter && producer is ParameterProvider parameter && !declaration!.AddParameter(parameter, budget))
+            { failure = "declaration-capture"; return false; }
             var entry = -1;
             if (boundary)
             {
@@ -136,17 +196,17 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             {
                 foreach (var child in shape.Children)
                 {
-                    if (!CapturePocEntries(child.Producer, child.EmissionBoundary, entries, budget, depth + 1, disableDocs, out failure)) { return false; }
+                    if (!CapturePocEntries(child.Producer, child.EmissionBoundary, entries, budget, depth + 1, disableDocs, declaration, primarySignature, out failure)) { return false; }
                 }
             }
             if (entry >= 0) { entries[entry] = entries[entry] with { End = entries.Count }; }
             return true;
         }
 
-        internal PreparedPocFileConsumption? Start(PreparedFieldTypes preparation, TypeProviderWriter writer)
+        internal PreparedPocFileConsumption? Start(PreparedFieldTypes preparation, TypeProviderWriter writer, PocDeclarationWorkBudget declarationBudget)
         {
             if (_started || !preparation.OwnsPocSupplementalWrite(_source, writer)) { Fail("start-or-ownership"); return null; }
-            _started = true; _preparation = preparation; _writer = writer;
+            _started = true; _preparation = preparation; _writer = writer; _declarationBudget = declarationBudget;
             return this;
         }
 
@@ -165,9 +225,11 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             if (!ReferenceEquals(root.Owner, owner) || root.Role != role || root.Index != index)
             { Fail($"root:{root.Role}[{root.Index}]/{root.Owner.GetType().Name}!={role}[{index}]/{owner.GetType().Name}"); return PreparedSourceFile.EmptyScope.Instance; }
             _nextRoot++; _active = root; _nextNode = 0; _opaqueDepth = root.Opaque ? 1 : 0;
+            _declarationState = 0; _nextParameter = 0;
             _rootObserved = root.Producer is null;
             return new Scope(() =>
             {
+                if (System.Threading.Volatile.Read(ref _declarationState) == 1) { FailParameterSelection("declaration-incomplete"); }
                 if (!ReferenceEquals(_active, root) || !_rootObserved || _nextNode != root.Entries.Length) { Fail($"root-incomplete:{root.Role}[{root.Index}]:{_nextNode}/{root.Entries.Length}"); }
                 _active = null; _opaqueDepth = 0;
             });
@@ -200,6 +262,53 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 if (_nextNode != entry.End) { Fail($"subtree-incomplete:{root.Role}[{root.Index}]:{_nextNode}/{entry.End}"); }
             });
         }
+
+        private void FailParameterSelection(string reason)
+        {
+            System.Threading.Interlocked.Exchange(ref _parameterSelectionFailure, 1);
+            Fail(reason);
+        }
+
+        private bool ObserveDeclarationBoundary()
+        {
+            // An earlier sidecar failure does not invalidate shared traversal,
+            // but a later native declaration is no longer observable here.
+            if (_failed || _completed) { FailParameterSelection("declaration-unavailable"); return false; }
+            if (_preparation is null || _writer is null || _declarationBudget is null ||
+                !_declarationBudget.TrySpendReferenceLookup(_preparation.PocSourceFileCount))
+            { FailParameterSelection("declaration-budget-or-state"); return false; }
+            if (!ObserveBoundary()) { FailParameterSelection("declaration-ownership"); return false; }
+            return true;
+        }
+
+        internal void BeginDeclaration(MethodSignatureBase? signature)
+        {
+            if (!ObserveDeclarationBoundary()) { return; }
+            if (_active is not { Declaration: { } plan } || !ReferenceEquals(plan.Signature, signature) ||
+                System.Threading.Interlocked.CompareExchange(ref _declarationState, 1, 0) != 0)
+            { FailParameterSelection("declaration-signature"); }
+        }
+
+        internal void ObserveParameter(MethodSignatureBase? signature, int ordinal, ParameterProvider? parameter)
+        {
+            if (!ObserveDeclarationBoundary()) { return; }
+            if (_active is not { Declaration: { } plan } || !ReferenceEquals(plan.Signature, signature) ||
+                System.Threading.Volatile.Read(ref _declarationState) != 1 || ordinal < 0 || ordinal >= plan.Parameters.Length ||
+                !ReferenceEquals(plan.Parameters[ordinal], parameter) ||
+                System.Threading.Interlocked.CompareExchange(ref _nextParameter, ordinal + 1, ordinal) != ordinal)
+            { FailParameterSelection("declaration-parameter"); }
+        }
+
+        internal void CompleteDeclaration(MethodSignatureBase? signature)
+        {
+            if (!ObserveDeclarationBoundary()) { return; }
+            if (_active is not { Declaration: { } plan } || !ReferenceEquals(plan.Signature, signature) ||
+                System.Threading.Volatile.Read(ref _nextParameter) != plan.Parameters.Length ||
+                System.Threading.Interlocked.CompareExchange(ref _declarationState, 2, 1) != 1)
+            { FailParameterSelection("declaration-parameter-count"); }
+        }
+
+        internal bool HasParameterSelectionFailure => System.Threading.Volatile.Read(ref _parameterSelectionFailure) != 0;
 
         internal void Complete()
         {

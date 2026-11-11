@@ -2716,6 +2716,102 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
             });
         }
 
+        [Test]
+        public void RealFooPocReceiptRejectsUnobservedDeclarationAfterPriorSidecarFailure()
+        {
+            PreparedPocFileConsumption? consumption = null;
+            var started = typeof(PreparedPocFileConsumption).GetField("_started", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var armed = false;
+            var injected = false;
+            WithRealFoo((_, _) => { }, precomputePoc: true, fooGroupOnly: true, sourceCurrent: () =>
+            {
+                if (armed && !injected && consumption is not null && (bool)started.GetValue(consumption)!)
+                {
+                    injected = true;
+                    // This is a protocol failure, not a simulated parameter ABA.
+                    // The actual writer subsequently emits real declarations.
+                    consumption.Complete();
+                }
+                return true;
+            }, inspectGeneration: (output, referenceMap, _, prepared) =>
+            {
+                var rest = prepared.SourceFiles.Single(source => source.FilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                Assert.That(rest.Roots.SelectMany(root => root.DescendantsAndSelf())
+                    .Any(occurrence => prepared.GetPrecomputedPocOrdinaryCandidate(rest, occurrence)?.Type.Name == "PipelineMessage"), Is.True);
+                var reached = false;
+                foreach (var provider in GetWrittenProviderStream(output, referenceMap))
+                {
+                    var writer = new TypeProviderWriter(provider) { PreparedFieldTypes = prepared };
+                    prepared.BeginPocProviderWrite(provider, writer);
+                    var target = ReferenceEquals(provider, rest.FileOwner);
+                    var plan = target ? prepared.PocGenerationEnvelope!.GetFile(provider)! : null;
+                    if (target)
+                    {
+                        consumption = (PreparedPocFileConsumption?)plan!.GetType().GetField("_native", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(plan);
+                        Assert.That(consumption, Is.Not.Null);
+                        armed = true;
+                    }
+                    var file = writer.Write();
+                    armed = false;
+                    prepared.EndPocProviderWrite(provider, writer, file);
+                    if (!target) { continue; }
+                    reached = true;
+                    Assert.That(injected, Is.True);
+                    Assert.That(file.Content, Does.Contain("CreateThreeRequest("), "The standard writer must actually emit a declaration after the protocol failure.");
+                    Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True, "A POC-only failure must not invalidate shared traversal.");
+                    Assert.That(rest.IsCurrent(), Is.True);
+                    Assert.That(plan!.HasCompleteNativeConsumption, Is.False);
+                    Assert.That(prepared.CanCommit(), Is.True, "Independent shared field decisions remain available.");
+                    Assert.That(prepared.IsPocCandidateFileWriteReceiptCurrent(rest, new PocWorkBudget(65536)), Is.False,
+                        "A later native declaration whose selection could not be observed cannot have a current POC receipt.");
+                    Assert.That(consumption!.HasParameterSelectionFailure, Is.True);
+                    Assert.That(prepared.IsPocCandidateFileWriteReceiptCurrent(rest, new PocWorkBudget(65536)), Is.False,
+                        "Independent later funding cannot repair an unobserved native selection.");
+                    break;
+                }
+                Assert.That(reached, Is.True);
+            });
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void RealFooUnownedParameterCarrierPreservesNativeOutput(bool unowned)
+        {
+            WithRealFoo((_, _) => { }, precomputePoc: true, fooGroupOnly: true, beforePocPreparation: (output, _) =>
+            {
+                var rest = output.TypeProviders.OfType<Microsoft.TypeSpec.Generator.ClientModel.Providers.RestClientProvider>()
+                    .Single(provider => provider.RelativeFilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                var parameter = new ParameterProvider("arg", $"arg", typeof(int), validation: ParameterValidationType.None);
+                IReadOnlyList<ParameterProvider> parameters = unowned ? Array.AsReadOnly(new[] { parameter }) : new[] { parameter };
+                var signature = new MethodSignature("PocUnplanned", null, MethodSignatureModifiers.Private, null, null, parameters);
+                var method = new MethodProvider(signature, new Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements([]), rest);
+                rest.Update(methods: rest.CachedMethods!.Concat(new[] { method }).ToArray());
+            }, inspectGeneration: (output, referenceMap, _, prepared) =>
+            {
+                var rest = prepared.SourceFiles.Single(source => source.FilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                var hasCandidate = rest.Roots.SelectMany(root => root.DescendantsAndSelf())
+                    .Any(occurrence => prepared.GetPrecomputedPocOrdinaryCandidate(rest, occurrence)?.Type.Name == "PipelineMessage");
+                Assert.That(hasCandidate, Is.EqualTo(!unowned), "The supported array control must actually reach the original candidate.");
+                var reached = false;
+                foreach (var provider in GetWrittenProviderStream(output, referenceMap))
+                {
+                    var writer = new TypeProviderWriter(provider) { PreparedFieldTypes = prepared };
+                    prepared.BeginPocProviderWrite(provider, writer);
+                    var file = writer.Write();
+                    prepared.EndPocProviderWrite(provider, writer, file);
+                    if (!ReferenceEquals(provider, rest.FileOwner)) { continue; }
+                    reached = true;
+                    Assert.That(file.Content, Does.Contain("PocUnplanned(int arg)"));
+                    Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                    Assert.That(rest.IsCurrent(), Is.True);
+                    Assert.That(prepared.CanCommit(), Is.True);
+                    Assert.That(prepared.IsPocCandidateFileWriteReceiptCurrent(rest, new PocWorkBudget(65536)), Is.EqualTo(!unowned));
+                    break;
+                }
+                Assert.That(reached, Is.True);
+            });
+        }
+
         [TestCase("conflict")]
         [TestCase("receipt")]
         public void RealFooRestPocImportQueriesRequireIndependentCredits(string query)

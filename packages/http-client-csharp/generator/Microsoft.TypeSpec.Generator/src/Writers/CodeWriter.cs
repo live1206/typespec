@@ -899,6 +899,7 @@ namespace Microsoft.TypeSpec.Generator
 
         public IDisposable WriteMethodDeclarationNoScope(MethodSignatureBase methodBase, params string[] disabledWarnings)
         {
+            ObservePocDeclarationStart(methodBase);
             if (methodBase.NonDocumentComment is { } comment)
             {
                 WriteLine($"// {comment}");
@@ -991,12 +992,15 @@ namespace Microsoft.TypeSpec.Generator
 
             for (int i = 0; i < methodBase.Parameters.Count; i++)
             {
-                WriteParameter(methodBase.Parameters[i]);
+                var parameter = methodBase.Parameters[i];
+                ObservePocParameter(methodBase, i, parameter);
+                WriteParameter(parameter);
                 if (i != methodBase.Parameters.Count - 1)
                 {
                     AppendRaw(", ");
                 }
             }
+            ObservePocDeclarationComplete(methodBase);
             Append($")");
 
             if (methodBase is MethodSignature { GenericParameterConstraints: { } constraints })

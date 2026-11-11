@@ -60,6 +60,11 @@ namespace Microsoft.TypeSpec.Generator
             return producer;
         }
 
+        private void ObservePocDeclarationStart(MethodSignatureBase? signature) => _pocFileConsumption?.BeginDeclaration(signature);
+        private void ObservePocParameter(MethodSignatureBase? signature, int ordinal, ParameterProvider? parameter) =>
+            _pocFileConsumption?.ObserveParameter(signature, ordinal, parameter);
+        private void ObservePocDeclarationComplete(MethodSignatureBase? signature) => _pocFileConsumption?.CompleteDeclaration(signature);
+
         internal IDisposable BeginSourceRoot(TypeProvider owner, string role, int index)
         {
             _sourcePreparation?.ObserveSourceSnapshot();

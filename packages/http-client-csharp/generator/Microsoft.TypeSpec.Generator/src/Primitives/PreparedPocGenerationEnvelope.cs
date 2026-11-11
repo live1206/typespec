@@ -31,6 +31,10 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 !ReferenceEquals(known.Comparer, ReferenceEqualityComparer.Instance))
             { envelope._rejected = true; return envelope; }
             budget ??= new PocWorkBudget(262144);
+            // One generation-wide ledger funds the later declaration events;
+            // capture pays for the ledger object before constructing it.
+            if (!budget.TrySpend()) { envelope._rejected = true; return envelope; }
+            var declarationBudget = new PocDeclarationWorkBudget();
             var paths = new HashSet<string>(System.StringComparer.Ordinal);
             System.Guid? generation = null;
             foreach (var owner in expected)
@@ -64,7 +68,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 var native = PreparedPocFileConsumption.TryCapture(file, constraint, budget, out var captureFailure);
                 if (budget.Exhausted || !budget.TrySpendReferenceLookup(envelope._files.Count))
                 { envelope._files.Clear(); envelope._rejected = true; return envelope; }
-                envelope._files.Add(owner, new FilePlan(file, envelope._files.Count, consumed.ToImmutable(), constraint, native, captureFailure));
+                envelope._files.Add(owner, new FilePlan(file, envelope._files.Count, consumed.ToImmutable(), constraint, native, captureFailure, declarationBudget));
             }
             return envelope;
         }
@@ -114,15 +118,17 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             internal PreparedPocTypeConstraint? TypeConstraint { get; }
             private readonly PreparedPocFileConsumption? _native;
             private readonly string? _captureFailure;
+            private readonly PocDeclarationWorkBudget _declarationBudget;
             internal bool HasCompleteNativeConsumption => _native?.HasCompleted == true;
+            internal bool HasObservedParameterSelectionFailure => _native?.HasParameterSelectionFailure == true;
             internal string? NativeConsumptionFailure => _native is null ? "plan-unavailable:" + _captureFailure : _native.Failure;
             internal PreparedPocFileConsumption? StartNativeConsumption(PreparedFieldTypes preparation, TypeProviderWriter writer) =>
-                _native?.Start(preparation, writer);
+                _native?.Start(preparation, writer, _declarationBudget);
             private readonly ImmutableArray<SourceOccurrenceId> _consumed;
 
             internal FilePlan(PreparedSourceFile source, int index, ImmutableArray<SourceOccurrenceId> consumed,
-                PreparedPocTypeConstraint? constraint, PreparedPocFileConsumption? native, string? captureFailure)
-            { Source = source; Index = index; _consumed = consumed; TypeConstraint = constraint; _native = native; _captureFailure = captureFailure; }
+                PreparedPocTypeConstraint? constraint, PreparedPocFileConsumption? native, string? captureFailure, PocDeclarationWorkBudget declarationBudget)
+            { Source = source; Index = index; _consumed = consumed; TypeConstraint = constraint; _native = native; _captureFailure = captureFailure; _declarationBudget = declarationBudget; }
 
             internal bool Matches(SourceConsumptionReceipt? receipt, PocWorkBudget budget)
             {

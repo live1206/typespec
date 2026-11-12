@@ -40,21 +40,22 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             _initializerShape = StructuredSourceShape.Capture(initializer, true);
         }
 
-        internal bool IsCurrent
+        internal bool IsCurrent => IsCurrentCore(invalidate: true);
+        internal bool IsCurrentWithoutInvalidating(PocWorkBudget? budget = null) => IsCurrentCore(invalidate: false, budget);
+
+        private bool IsCurrentCore(bool invalidate, PocWorkBudget? budget = null)
         {
-            get
-            {
-                if (System.Threading.Volatile.Read(ref _stale) != 0) { return false; }
-                if (_header.IsCurrent && _docs.IsCurrent && _constructor.DeclarationRevision == _revision &&
-                    ContractCollections.TryCopy(_constructor.Suppressions, out var suppressions) && suppressions.IsEmpty &&
-                    ReferenceEquals(_constructor.Signature, _signature) && ReferenceEquals(_signature.Initializer, _initializer) &&
-                    _constructorShape.Matches(StructuredSourceShape.Capture(_constructor, true)) &&
-                    _signatureShape.Matches(StructuredSourceShape.Capture(_signature, true)) &&
-                    _initializerShape.Matches(StructuredSourceShape.Capture(_initializer, true)) &&
-                    _nodes.All(n => n.Shape.Matches(StructuredSourceShape.Capture(n.Node, true)))) { return true; }
-                System.Threading.Interlocked.Exchange(ref _stale, 1);
-                return false;
-            }
+            if (System.Threading.Volatile.Read(ref _stale) != 0 || !SourceCurrentnessChecks.Spend(budget)) { return false; }
+            if ((invalidate ? _header.IsCurrent : _header.IsCurrentWithoutInvalidating(budget)) &&
+                (invalidate ? _docs.IsCurrent : _docs.IsCurrentWithoutInvalidating(budget)) && _constructor.DeclarationRevision == _revision &&
+                SourceCurrentnessChecks.Copy(_constructor.Suppressions, budget, out var suppressions) && suppressions.IsEmpty &&
+                ReferenceEquals(_constructor.Signature, _signature) && ReferenceEquals(_signature.Initializer, _initializer) &&
+                SourceCurrentnessChecks.Shape(_constructorShape, _constructor, true, budget) &&
+                SourceCurrentnessChecks.Shape(_signatureShape, _signature, true, budget) &&
+                SourceCurrentnessChecks.Shape(_initializerShape, _initializer, true, budget) &&
+                _nodes.All(n => SourceCurrentnessChecks.Spend(budget) && SourceCurrentnessChecks.Shape(n.Shape, n.Node, true, budget))) { return true; }
+            if (invalidate) { System.Threading.Interlocked.Exchange(ref _stale, 1); }
+            return false;
         }
 
         internal bool Matches(ConstructorInitializer initializer) => ReferenceEquals(_initializer, initializer) && IsCurrent;

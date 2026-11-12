@@ -55,6 +55,9 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         public CodeWriterDeclaration Declaration => _declaration ??= new CodeWriterDeclaration(Name);
 
+        // POC-only observations must not materialize the writer's lazy value.
+        internal CodeWriterDeclaration? CachedDeclaration => _declaration;
+
         /// <summary>
         /// Converts this field to a parameter.
         /// </summary>

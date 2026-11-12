@@ -13,6 +13,8 @@ namespace Microsoft.TypeSpec.Generator.Expressions
 {
     public sealed record InvokeMethodExpression : ValueExpression
     {
+        static InvokeMethodExpression() => ConstructedArgumentWitness.InstallBridge();
+
         public bool Equals(InvokeMethodExpression? other) => other is not null && base.Equals(other) &&
             System.Collections.Generic.EqualityComparer<CSharpType?>.Default.Equals(ExtensionType, other.ExtensionType) &&
             AddConfigureAwaitFalse == other.AddConfigureAwaitFalse && CallAsAsync == other.CallAsAsync &&

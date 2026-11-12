@@ -33,8 +33,9 @@ namespace Microsoft.TypeSpec.Generator
         private UnsafeBufferSequence _builder;
         private UnsafeBufferSequence? _qualifiedBuilder;
         internal string? QualifiedContent { get; private set; }
-        internal ImmutableArray<PreparedNameAlternative> NameAlternatives { get; private set; } = ImmutableArray<PreparedNameAlternative>.Empty;
-        private List<PreparedNameAlternative>? _nameAlternatives;
+        internal ImmutableArray<PreparedNameAlternative> NameAlternatives => NameAlternativesSnapshot.Alternatives;
+        internal PreparedNameAlternativesSnapshot NameAlternativesSnapshot { get; private set; } = new(ImmutableArray<PreparedNameAlternative>.Empty, false);
+        private object? _nameAlternatives;
         private int _qualifiedPayloadLength;
         private bool _hasWrittenPayload;
         private PreparedFieldTypes? _preparedFieldTypes;
@@ -82,6 +83,7 @@ namespace Microsoft.TypeSpec.Generator
 
         public CodeWriter Append(FormattableString formattableString)
         {
+            NativeTypeCapture?.AppendEntry();
             if (formattableString.ArgumentCount == 0)
             {
                 return AppendRaw(formattableString.ToString());
@@ -143,6 +145,7 @@ namespace Microsoft.TypeSpec.Generator
                         AppendType(new CSharpType(t), false, false);
                         break;
                     case CSharpType t:
+                        NativeTypeCapture?.Dispatch(t, isDeclaration);
                         AppendType(t, isDeclaration, false);
                         break;
                     case CodeWriterDeclaration declaration when isDeclaration:
@@ -498,7 +501,13 @@ namespace Microsoft.TypeSpec.Generator
         // Output capture only, not permission. The consumer must already justify both
         // spellings for this occurrence, register its used permission, and observe the
         // same namespace as ordinary formatting. A false result writes nothing.
-        internal bool TryAppendPreparedBodyName(string shortSpelling, string qualifiedSpelling)
+        internal bool TryAppendPreparedBodyName(string shortSpelling, string qualifiedSpelling) =>
+            TryAppendPreparedName(shortSpelling, qualifiedSpelling, PreparedNameChannel.Body);
+
+        internal bool TryAppendPreparedPocName(string shortSpelling, string qualifiedSpelling) =>
+            TryAppendPreparedName(shortSpelling, qualifiedSpelling, PreparedNameChannel.Poc);
+
+        private bool TryAppendPreparedName(string shortSpelling, string qualifiedSpelling, PreparedNameChannel channel)
         {
             if (_qualifiedBuilder is null || string.IsNullOrEmpty(shortSpelling) ||
                 string.IsNullOrEmpty(qualifiedSpelling) || shortSpelling.Length >= qualifiedSpelling.Length ||
@@ -507,7 +516,7 @@ namespace Microsoft.TypeSpec.Generator
                 return false;
             }
 
-            AppendRaw(shortSpelling.AsSpan(), qualifiedSpelling.AsSpan(), PreparedNameChannel.Body);
+            AppendRaw(shortSpelling.AsSpan(), qualifiedSpelling.AsSpan(), channel);
             return true;
         }
 
@@ -689,22 +698,24 @@ namespace Microsoft.TypeSpec.Generator
 
         private void AppendType(CSharpType type, bool isDeclaration, bool writeTypeNameOnly, int genericDepth = 0)
         {
-            if (type.IsArray && type.FrameworkType.GetGenericArguments().Any())
+            NativeTypeCapture?.Root(type, isDeclaration, writeTypeNameOnly, genericDepth);
+            if (ObserveNativeTypeFact(PocNativeTypeFacts.IsArray, type.IsArray) &&
+                ObserveNativeTypeFact(PocNativeTypeFacts.ArrayHasGenericArguments, type.FrameworkType.GetGenericArguments().Any()))
             {
                 AppendType(type.FrameworkType.GetElementType()!, isDeclaration, writeTypeNameOnly, genericDepth);
                 AppendRaw("[]");
                 return;
             }
 
-            if (type.TryGetCSharpFriendlyName(out var keywordName))
+            if (ObserveNativeTypeFact(PocNativeTypeFacts.FriendlyName, type.TryGetCSharpFriendlyName(out var keywordName)))
             {
-                AppendRaw(keywordName);
+                AppendRaw(keywordName!);
                 if (type.FrameworkType.IsGenericParameter && type.IsNullable)
                 {
                     AppendRaw("?");
                 }
             }
-            else if (isDeclaration && !type.IsFrameworkType)
+            else if (isDeclaration && !ObserveNativeTypeFact(PocNativeTypeFacts.IsFrameworkType, type.IsFrameworkType))
             {
                 AppendRaw(type.Name);
             }
@@ -714,20 +725,20 @@ namespace Microsoft.TypeSpec.Generator
             }
             else
             {
-                UseNamespace(type.Namespace);
+                RegisterNativeTypeNamespace(type.Namespace);
 
-                AppendRaw("global::");
-                AppendRaw(type.Namespace);
-                AppendRaw(".");
-                if (type.DeclaringType is not null)
+                AppendNativeTypeChunk("global::", PocNativeTypeSite.Global);
+                AppendNativeTypeChunk(type.Namespace, PocNativeTypeSite.Namespace);
+                AppendNativeTypeChunk(".", PocNativeTypeSite.Dot);
+                if (ObserveNativeTypeFact(PocNativeTypeFacts.HasDeclaringType, type.DeclaringType is not null))
                 {
-                    AppendRaw($"{type.DeclaringType.Name}.");
+                    AppendRaw($"{type.DeclaringType!.Name}.");
                 }
 
-                AppendRaw(type.Name);
+                AppendNativeTypeChunk(type.Name, PocNativeTypeSite.Name);
             }
 
-            if (type.Arguments.Any())
+            if (ObserveNativeTypeFact(PocNativeTypeFacts.HasArguments, type.Arguments.Any()))
             {
                 AppendRaw(_writingXmlDocumentation ? "{" : "<");
                 for (int i = 0; i < type.Arguments.Count; i++)
@@ -742,10 +753,14 @@ namespace Microsoft.TypeSpec.Generator
             }
 
             // Add '?' for nullable value types, but skip if we're writing new instance UNLESS we're inside generic type arguments
-            if ((!_writingNewInstance || genericDepth > 0) && !isDeclaration && type is { IsNullable: true, IsValueType: true })
+            if ((!ObserveNativeTypeFact(PocNativeTypeFacts.WritingNewInstance, _writingNewInstance) ||
+                ObserveNativeTypeFact(PocNativeTypeFacts.PositiveGenericDepth, genericDepth > 0)) && !isDeclaration &&
+                ObserveNativeTypeFact(PocNativeTypeFacts.IsNullable, type.IsNullable) &&
+                ObserveNativeTypeFact(PocNativeTypeFacts.IsValueType, type.IsValueType))
             {
                 AppendRaw("?");
             }
+            NativeTypeCapture?.RootReturned(PrimaryPayloadLength, NativeQualifiedPosition);
         }
 
         public CodeWriter WriteLine(FormattableString formattableString)
@@ -766,10 +781,12 @@ namespace Microsoft.TypeSpec.Generator
 
         private CodeWriter AppendRawChar(char c)
         {
+            if (NativeTypeCapture is { Active: true } capture) { capture.Abandon(); }
             _hasWrittenPayload = true;
             var destination = _builder.GetSpan(1);
             destination[0] = c;
             _builder.Advance(1);
+            AdvancePrimaryPayload(1);
             if (_qualifiedBuilder is not null)
             {
                 var qualifiedDestination = _qualifiedBuilder.GetSpan(1);
@@ -783,19 +800,24 @@ namespace Microsoft.TypeSpec.Generator
 
         private CodeWriter AppendRaw(ReadOnlySpan<char> span) => AppendRaw(span, span);
 
-        private CodeWriter AppendRaw(ReadOnlySpan<char> span, ReadOnlySpan<char> qualifiedSpan, PreparedNameChannel? channel = null)
+        private CodeWriter AppendRaw(ReadOnlySpan<char> span, ReadOnlySpan<char> qualifiedSpan, PreparedNameChannel? channel = null,
+            PocNativeTypeSite nativeSite = PocNativeTypeSite.Foreign)
         {
             if (span.Length == 0 )
             {
+                if (nativeSite == PocNativeTypeSite.Foreign && NativeTypeCapture is { Active: true } emptyCapture)
+                { emptyCapture.Abandon(); }
                 return this;
             }
 
             _hasWrittenPayload = true;
             AddSpaces(span);
+            NativeTypeCapture?.Chunk(nativeSite, PrimaryPayloadLength, NativeQualifiedPosition, _qualifiedBuilder is null);
 
             var destination = _builder.GetSpan(span.Length);
             span.CopyTo(destination);
             _builder.Advance(span.Length);
+            AdvancePrimaryPayload(span.Length);
             if (_qualifiedBuilder is not null)
             {
                 // AddSpaces has already advanced both buffers. These offsets are
@@ -807,7 +829,7 @@ namespace Microsoft.TypeSpec.Generator
                 _qualifiedPayloadLength = checked(_qualifiedPayloadLength + qualifiedSpan.Length);
                 if (channel is { } capturedChannel && !span.SequenceEqual(qualifiedSpan))
                 {
-                    (_nameAlternatives ??= new()).Add(new PreparedNameAlternative(
+                    GetNameAlternatives().Add(new PreparedNameAlternative(
                         qualifiedOffset, qualifiedSpan.Length, span.ToString(), capturedChannel));
                 }
             }
@@ -833,6 +855,7 @@ namespace Microsoft.TypeSpec.Generator
             var destination = _builder.GetSpan(spaces);
             destination.Slice(0, spaces).Fill(_space);
             _builder.Advance(spaces);
+            AdvancePrimaryPayload(spaces);
             if (_qualifiedBuilder is not null)
             {
                 var qualifiedDestination = _qualifiedBuilder.GetSpan(spaces);
@@ -893,6 +916,7 @@ namespace Microsoft.TypeSpec.Generator
 
         public IDisposable WriteMethodDeclarationNoScope(MethodSignatureBase methodBase, params string[] disabledWarnings)
         {
+            ObservePocDeclarationStart(methodBase);
             if (methodBase.NonDocumentComment is { } comment)
             {
                 WriteLine($"// {comment}");
@@ -985,12 +1009,15 @@ namespace Microsoft.TypeSpec.Generator
 
             for (int i = 0; i < methodBase.Parameters.Count; i++)
             {
-                WriteParameter(methodBase.Parameters[i]);
+                var parameter = methodBase.Parameters[i];
+                ObservePocParameter(methodBase, i, parameter);
+                WriteParameter(parameter);
                 if (i != methodBase.Parameters.Count - 1)
                 {
                     AppendRaw(", ");
                 }
             }
+            ObservePocDeclarationComplete(methodBase);
             Append($")");
 
             if (methodBase is MethodSignature { GenericParameterConstraints: { } constraints })
@@ -1046,13 +1073,22 @@ namespace Microsoft.TypeSpec.Generator
 
         public string ToString(bool header)
         {
+            var nativeCapture = DrainNativeTypeCapture(out int primaryPayloadLength, out bool primaryOverflow);
+            try
+            {
+                return ToStringCore(header, nativeCapture, primaryPayloadLength, primaryOverflow);
+            }
+            finally { nativeCapture?.Release(); }
+        }
+
+        private string ToStringCore(bool header, PocNativeTypeCapture? nativeCapture, int primaryPayloadLength, bool primaryOverflow)
+        {
             var reader = _builder.ExtractReader();
             using var qualifiedReader = _qualifiedBuilder?.ExtractReader();
-            var payloadAlternatives = _nameAlternatives;
-            _nameAlternatives = null;
+            var payloadAlternatives = TakeNameAlternatives();
             int qualifiedPayloadLength = _qualifiedPayloadLength;
             _qualifiedPayloadLength = 0;
-            NameAlternatives = ImmutableArray<PreparedNameAlternative>.Empty;
+            NameAlternativesSnapshot = new(ImmutableArray<PreparedNameAlternative>.Empty, false);
             // ExtractReader drains the buffers. Fail rather than publish incorrect
             // ranges if a future buffer mutation bypasses the append accounting.
             if (qualifiedReader is not null && qualifiedReader.Length != qualifiedPayloadLength)
@@ -1115,14 +1151,18 @@ namespace Microsoft.TypeSpec.Generator
                 if (payloadAlternatives is { Count: > 0 })
                 {
                     var alternatives = ImmutableArray.CreateBuilder<PreparedNameAlternative>(payloadAlternatives.Count);
+                    bool hasPoc = false;
                     foreach (var alternative in payloadAlternatives)
                     {
                         alternatives.Add(alternative with { QualifiedOffset = checked(headerLength + alternative.QualifiedOffset) });
+                        hasPoc |= alternative.Channel == PreparedNameChannel.Poc;
                     }
-                    NameAlternatives = alternatives.MoveToImmutable();
+                    NameAlternativesSnapshot = new(alternatives.MoveToImmutable(), hasPoc);
                 }
             }
-            return builder.ToString();
+            string content = builder.ToString();
+            nativeCapture?.Publish(headerLength, totalLength, primaryPayloadLength, primaryOverflow);
+            return content;
         }
 
         private void PopScope(CodeScope expected)
@@ -1231,6 +1271,8 @@ namespace Microsoft.TypeSpec.Generator
 
         public void Dispose()
         {
+            ReleaseNativeTypeCapture();
+            ReleasePocFailureObserver();
             _builder?.Dispose();
             _qualifiedBuilder?.Dispose();
         }

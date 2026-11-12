@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.TypeSpec.Generator.Primitives;
 
@@ -69,6 +70,64 @@ namespace Microsoft.TypeSpec.Generator.Providers
             var supported = TryPrepareNamespaceLookup(ownerNamespace, target, referencedTarget, out var competitors, out _);
             forbiddenImports = competitors.ToImmutableHashSet(StringComparer.Ordinal);
             return supported;
+        }
+
+        internal readonly record struct PocBareNamespaceCandidate(PreparedPocNameForms.Form Form, string Spelling)
+        {
+            internal PreparedPocNameForms.RootKind Root => Form.Root;
+            internal int Start => Form.Start;
+        }
+
+        // First POC candidate for a plain runtime type with no aliases: the
+        // shortest ordinary suffix is its bare name. This supplies namespace
+        // lookup and ranking only; lexical scope, source observation, imports,
+        // emission confinement and the writer's authority remain separate.
+        internal bool TryPreparePocBareNamespaceCandidate(string ownerNamespace, CSharpType target, INamedTypeSymbol referencedTarget,
+            out PocBareNamespaceCandidate candidate, out ImmutableHashSet<string> forbiddenImports)
+        {
+            candidate = default;
+            forbiddenImports = ImmutableHashSet<string>.Empty;
+            if (target is null || referencedTarget is null || ownerNamespace is null ||
+                target.GetType() != typeof(CSharpType) || !target.IsFrameworkType || target.IsNullable || target.IsLiteral || target.HasUnionMetadata ||
+                target.DeclaringType is not null || !ContractCollections.TryCopy(target.Arguments, out var arguments) || !arguments.IsEmpty) { return false; }
+            var runtime = target.FrameworkType;
+            if (runtime.GetType() != typeof(object).GetType() || runtime.IsArray || runtime.IsGenericType || runtime.IsGenericParameter ||
+                runtime.DeclaringType is not null || target.Name != runtime.Name || target.Namespace != runtime.Namespace ||
+                target.TryGetCSharpFriendlyName(out _) || runtime.FullName is not { } metadataName ||
+                PreparedPocNameForms.RenderIdentifier(target.Name) is not { } spelling || !HasMaterializedPocInventory() ||
+                _compilation is not CSharpCompilation csharp || _generated.ContainsKey((target.Namespace, target.Name)) ||
+                _generatedNamespaces.Contains(target.Namespace + "." + target.Name) ||
+                !SymbolEqualityComparer.Default.Equals(referencedTarget, PreparedFieldTypes.ResolveReferencedTarget(csharp, target, _generated)) ||
+                !SymbolEqualityComparer.Default.Equals(referencedTarget, _compilation.GetTypeByMetadataName(metadataName)) || referencedTarget.HasUnsupportedMetadata ||
+                referencedTarget.TypeKind == TypeKind.Error || referencedTarget.ContainingAssembly is null ||
+                !string.Equals(referencedTarget.ContainingAssembly.Identity.ToString(), runtime.Assembly.FullName, StringComparison.Ordinal) ||
+                !TryPrepareTypeOnlyNamespaceLookup(ownerNamespace, target, referencedTarget, out forbiddenImports)) { return false; }
+            var partCount = target.Namespace.Length == 0 ? 1 : target.Namespace.Count(character => character == '.') + 2;
+            var forms = PreparedPocNameForms.Rank(partCount, ImmutableArray<PreparedPocNameForms.Alias>.Empty);
+            if (forms.IsEmpty || forms[0] is not { Root: PreparedPocNameForms.RootKind.Ordinary } first || first.Start != partCount - 1) { return false; }
+            candidate = new PocBareNamespaceCandidate(first, spelling);
+            return true;
+        }
+
+        private bool HasMaterializedPocInventory()
+        {
+            if (_generated.GetType() != typeof(Dictionary<(string Namespace, string Name), TypeProvider[]>) ||
+                _generatedNamespaces.GetType() != typeof(HashSet<string>)) { return false; }
+            var generated = (Dictionary<(string Namespace, string Name), TypeProvider[]>)_generated;
+            var namespaces = (HashSet<string>)_generatedNamespaces;
+            if (!ReferenceEquals(generated.Comparer, EqualityComparer<(string Namespace, string Name)>.Default) ||
+                !ReferenceEquals(namespaces.Comparer, StringComparer.Ordinal)) { return false; }
+            foreach (var (key, providers) in generated)
+            {
+                if (providers is null) { return false; }
+                foreach (var provider in providers)
+                {
+                    if (provider?.CachedType is not { } type || type.GetType() != typeof(CSharpType) ||
+                        type.Name != key.Name || type.Namespace != key.Namespace || type.DeclaringType is not null ||
+                        !ContractCollections.TryCopy(type.Arguments, out _)) { return false; }
+                }
+            }
+            return true;
         }
 
         private bool TryPrepareNamespaceLookup(string ownerNamespace, CSharpType target, INamedTypeSymbol? referencedTarget,

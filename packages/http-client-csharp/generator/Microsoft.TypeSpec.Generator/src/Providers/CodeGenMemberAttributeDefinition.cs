@@ -26,15 +26,18 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         protected override IReadOnlyList<AttributeStatement> BuildAttributes()
         {
-            return [new AttributeStatement(typeof(AttributeUsageAttribute),
+            AttributeStatement attribute;
+            return ConstructedCollectionWitness.Record<AttributeStatement>(
+                [attribute = new AttributeStatement(typeof(AttributeUsageAttribute),
                 new BinaryOperatorExpression(
                     "|",
                     FrameworkEnumValue(AttributeTargets.Property),
-                    FrameworkEnumValue(AttributeTargets.Field)))];
+                    FrameworkEnumValue(AttributeTargets.Field)))], attribute);
         }
         protected internal override ConstructorProvider[] BuildConstructors()
         {
             var parameter = new ParameterProvider("originalName", $"The original name of the member.", typeof(string));
+            ValueExpression argument;
 
             return
             [
@@ -44,7 +47,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
                         null,
                         MethodSignatureModifiers.Public,
                         [parameter],
-                        initializer: new ConstructorInitializer(IsBase: true, [parameter])),
+                        initializer: new ConstructorInitializer(IsBase: true,
+                            ConstructedCollectionWitness.Record<ValueExpression>([argument = parameter], argument))),
                     MethodBodyStatement.Empty,
                 this)
             ];

@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Linq;
 using Microsoft.TypeSpec.Generator.Expressions;
 using Microsoft.TypeSpec.Generator.Providers;
@@ -53,7 +54,9 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             foreach (var parameter in parameters)
             {
                 if (parameter is null || !DeclaredTypeSnapshot.TryCapture(parameter.Type, out var type)) { return null; }
-                states.Add(new(parameter, parameter.DeclarationRevision, parameter.Type, type!, parameter.EmittedDeclarationState, parameter.CachedVariableExpression));
+                states.Add(new(parameter, parameter.DeclarationRevision, parameter.Type, type!, parameter.Name,
+                    parameter.InputParameter?.IsExactName == true, CultureInfo.CurrentCulture,
+                    parameter.EmittedDeclarationState, parameter.CachedVariableExpression));
             }
             return new(method, body, states.ToImmutable(), region.ToImmutable(), ownedBlockInvocation);
         }
@@ -95,17 +98,44 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return _method.EnclosingType.CachedType;
         }
 
-        internal bool IsCurrent()
+        internal bool IsCurrent() => IsCurrentCore(invalidate: true);
+        internal bool IsCurrentWithoutInvalidating(PocWorkBudget? budget = null) => IsCurrentCore(invalidate: false, budget);
+        internal bool IsCurrentWithoutInvalidatingWithTextMemo(PocWorkBudget? budget, PocTypeTextMemo? textMemo) => IsCurrentCore(invalidate: false, budget, textMemo);
+
+        private bool IsCurrentCore(bool invalidate, PocWorkBudget? budget = null, PocTypeTextMemo? textMemo = null)
         {
-            if (System.Threading.Volatile.Read(ref _stale) != 0) { return false; }
+            if (!SourceCurrentnessChecks.Spend(budget) || System.Threading.Volatile.Read(ref _stale) != 0) { return false; }
+            ImmutableArray<ParameterProvider> parameters = default;
             var current = _method.DeclarationRevision == _revision && ReferenceEquals(_method.Signature, _signature) &&
                 ReferenceEquals((object?)_method.BodyStatements ?? _method.BodyExpression, _body) &&
-                ReferenceEquals(_signature.Parameters, _parameters) && ContractCollections.TryCopy(_parameters, out var parameters) &&
-                parameters.Length == _states.Length && parameters.Where((p, i) => !ReferenceEquals(p, _states[i].Parameter)).Any() == false &&
-                _signatureShape.Matches(StructuredSourceShape.Capture(_signature, true)) && _states.All(s => s.IsCurrent()) &&
-                _region.All(r => r.Shape.Matches(StructuredSourceShape.Capture(r.Producer, true))) &&
-                (_ownedBlockInvocation is null || ReferenceEquals(PreparedUnusedDefaultLocalCallBlock.GetInvocation(_method), _ownedBlockInvocation));
-            if (!current) { System.Threading.Interlocked.Exchange(ref _stale, 1); }
+                ReferenceEquals(_signature.Parameters, _parameters) && SourceCurrentnessChecks.Copy(_parameters, budget, out parameters) &&
+                parameters.Length == _states.Length && SourceCurrentnessChecks.Spend(budget, parameters.Length);
+            if (current)
+            {
+                for (int index = 0; index < parameters.Length; index++)
+                {
+                    if (!ReferenceEquals(parameters[index], _states[index].Parameter)) { current = false; break; }
+                }
+            }
+            if (current) { current = SourceCurrentnessChecks.Shape(_signatureShape, _signature, true, budget, textMemo); }
+            if (current)
+            {
+                foreach (var state in _states) { if (!state.IsCurrent(budget)) { current = false; break; } }
+            }
+            if (current)
+            {
+                foreach (var region in _region)
+                {
+                    if (!SourceCurrentnessChecks.Spend(budget) || !SourceCurrentnessChecks.Shape(region.Shape, region.Producer, true, budget, textMemo))
+                    { current = false; break; }
+                }
+            }
+            if (current && _ownedBlockInvocation is not null)
+            {
+                current = ReferenceEquals(budget is null ? PreparedUnusedDefaultLocalCallBlock.GetInvocation(_method) :
+                    PreparedUnusedDefaultLocalCallBlock.GetInvocationForPoc(_method, budget, _states.Length == 1 ? _states[0].EmittedState.Name : null), _ownedBlockInvocation);
+            }
+            if (!current && invalidate) { System.Threading.Interlocked.Exchange(ref _stale, 1); }
             return current;
         }
 
@@ -142,10 +172,26 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         };
 
         private sealed record ParameterState(ParameterProvider Parameter, long Revision, CSharpType Type, DeclaredTypeSnapshot TypeSnapshot,
+            string RawName, bool ExactName, CultureInfo Culture,
             (long Variable, long Declaration, string Name) EmittedState, VariableExpression? Carrier)
         {
-            internal bool IsCurrent() => Parameter.DeclarationRevision == Revision && ReferenceEquals(Parameter.Type, Type) && TypeSnapshot.IsCurrent() &&
-                Parameter.EmittedDeclarationState == EmittedState && (Carrier is null || ReferenceEquals(Parameter.CachedVariableExpression, Carrier));
+            internal bool IsCurrent(PocWorkBudget? budget = null)
+            {
+                if (!SourceCurrentnessChecks.Spend(budget) || Parameter.DeclarationRevision != Revision ||
+                    !ReferenceEquals(Parameter.Type, Type) || !SourceCurrentnessChecks.Type(TypeSnapshot, budget)) { return false; }
+                if (budget is null) { return Parameter.EmittedDeclarationState == EmittedState && (Carrier is null || ReferenceEquals(Parameter.CachedVariableExpression, Carrier)); }
+                var variable = Parameter.CachedVariableExpression;
+                if (Carrier is not null && !ReferenceEquals(variable, Carrier)) { return false; }
+                var declaration = variable?.Declaration;
+                if ((variable?.SourceRevision ?? 0) != EmittedState.Variable || (declaration?.SourceRevision ?? 0) != EmittedState.Declaration) { return false; }
+                if (declaration?.RequestedName is { } emitted)
+                { return SourceCurrentnessChecks.Text(emitted, EmittedState.Name, budget); }
+                // No canonicalizer replay. Its observed fallback remains valid
+                // only while actual input/revision/culture facts still match.
+                return SourceCurrentnessChecks.Text(Parameter.Name, RawName, budget) &&
+                    (Parameter.InputParameter?.IsExactName == true) == ExactName &&
+                    (ExactName || Culture.GetType() == typeof(CultureInfo) && ReferenceEquals(CultureInfo.CurrentCulture, Culture));
+            }
         }
     }
 }

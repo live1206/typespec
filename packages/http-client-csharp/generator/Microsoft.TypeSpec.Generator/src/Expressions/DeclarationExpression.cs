@@ -28,7 +28,17 @@ namespace Microsoft.TypeSpec.Generator.Expressions
             writer.AppendRawIf("using ", IsUsing);
             writer.AppendRawIf("out ", IsOut);
             writer.AppendRawIf("const ", IsConst);
-            if (!writer.TryWritePreparedLocalDeclarationType(this)) { writer.Append($"{Variable.Type}"); }
+            if (!writer.TryWritePreparedLocalDeclarationType(this))
+            {
+                var capture = writer.BeginNativeTypeCapture(this);
+                bool completed = false;
+                try
+                {
+                    writer.Append($"{Variable.Type}");
+                    completed = true;
+                }
+                finally { writer.EndNativeTypeCapture(capture, completed); }
+            }
             writer.AppendRaw(" ");
             Variable.Write(writer);
         }

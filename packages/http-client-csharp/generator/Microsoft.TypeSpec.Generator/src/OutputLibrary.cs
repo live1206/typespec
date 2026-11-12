@@ -11,11 +11,62 @@ namespace Microsoft.TypeSpec.Generator
 {
     public class OutputLibrary
     {
-        private IReadOnlyList<TypeProvider>? _typeProviders;
+        private volatile IReadOnlyList<TypeProvider>? _typeProviders;
+        private long _typeProviderRevision;
+
         public IReadOnlyList<TypeProvider> TypeProviders
         {
-            get => _typeProviders ??= BuildTypeProviders();
-            internal set => _typeProviders = value;
+            get
+            {
+                var providers = _typeProviders;
+                if (providers is null)
+                {
+                    // Preserve the original lazy/reentrant behavior and retain
+                    // the builder result even if the builder set a value itself.
+                    providers = BuildTypeProviders();
+                    StoreTypeProviders(providers);
+                }
+                return providers!;
+            }
+            internal set => StoreTypeProviders(value);
+        }
+
+        private void StoreTypeProviders(IReadOnlyList<TypeProvider>? providers)
+        {
+            var revision = System.Threading.Volatile.Read(ref _typeProviderRevision);
+            if (revision >= 0 && revision < long.MaxValue)
+            {
+                var next = revision + 1;
+                var writing = next | long.MinValue;
+                if (System.Threading.Interlocked.CompareExchange(ref _typeProviderRevision, writing, revision) == revision)
+                {
+                    _typeProviders = providers;
+                    System.Threading.Interlocked.CompareExchange(ref _typeProviderRevision, next, writing);
+                    return;
+                }
+            }
+            // Never wait or retry a store. Overlap or saturation forfeits the
+            // optional witness; the native assignment still occurs immediately.
+            System.Threading.Interlocked.Exchange(ref _typeProviderRevision, long.MaxValue);
+            _typeProviders = providers;
+        }
+
+        // A non-forcing reference witness only. Mutable elements and complete
+        // group/source/currentness remain separate proof obligations. Negative
+        // revisions denote a store in progress; MaxValue is a permanent veto.
+        internal bool TryCaptureMaterializedTypeProviders(out IReadOnlyList<TypeProvider>? providers, out long revision)
+        {
+            revision = System.Threading.Volatile.Read(ref _typeProviderRevision);
+            providers = _typeProviders;
+            return revision >= 0 && revision != long.MaxValue && providers is not null &&
+                revision == System.Threading.Volatile.Read(ref _typeProviderRevision);
+        }
+
+        internal bool IsMaterializedTypeProviderSnapshotCurrent(IReadOnlyList<TypeProvider> providers, long revision)
+        {
+            return revision >= 0 && revision != long.MaxValue &&
+                System.Threading.Volatile.Read(ref _typeProviderRevision) == revision && ReferenceEquals(_typeProviders, providers) &&
+                System.Threading.Volatile.Read(ref _typeProviderRevision) == revision;
         }
 
         internal Lazy<ModelFactoryProvider> ModelFactory { get; } = new(() => CodeModelGenerator.Instance.TypeFactory.CreateModelFactory(CodeModelGenerator.Instance.InputLibrary.InputNamespace.Models));

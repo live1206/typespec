@@ -15,6 +15,17 @@ namespace Microsoft.TypeSpec.Generator.Providers
 {
     internal sealed partial class PreparedFieldTypes
     {
+        // Read-only inspection is not writer authority. Task03 writing consumes
+        // only its concrete permission through the separate Task03 lookup.
+        internal interface IPreparedTypeOfNameInspection
+        {
+            PreparedSourceOccurrence Occurrence { get; }
+            string SimpleSpelling { get; }
+            string QualifiedSpelling { get; }
+            INamedTypeSymbol CanonicalCompilerMetadataTarget { get; }
+            bool IsCurrent { get; }
+        }
+
         /// <summary>
         /// Finite file/edge-owned namespace deletion permission, NOT attachment,
         /// public admission, a writer receipt or commit authority. Its consumer
@@ -24,7 +35,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         /// this used permission with the session before body commit is possible.
         /// No caller-supplied 'standard writer' boolean can discharge this.
         /// </summary>
-        internal sealed class PreparedTypeOfNamespacePermission
+        internal sealed class PreparedTypeOfNamespacePermission : IPreparedTypeOfNameInspection
         {
             private readonly PreparedFieldTypes _session;
             private readonly PreparedTypeOfFiniteEmissionShape _shape;
@@ -50,6 +61,12 @@ namespace Microsoft.TypeSpec.Generator.Providers
             internal INamedTypeSymbol CanonicalCompilerMetadataTarget => _lookup.MetadataTarget;
             internal ImmutableHashSet<string> ForbiddenImports => _lookup.ForbiddenImports;
             internal ImmutableHashSet<string> PlannedNamespaceImports => _shape.KnownNamespaceImports;
+
+            PreparedSourceOccurrence IPreparedTypeOfNameInspection.Occurrence => Occurrence;
+            string IPreparedTypeOfNameInspection.SimpleSpelling => SimpleSpelling;
+            string IPreparedTypeOfNameInspection.QualifiedSpelling => QualifiedSpelling;
+            INamedTypeSymbol IPreparedTypeOfNameInspection.CanonicalCompilerMetadataTarget => CanonicalCompilerMetadataTarget;
+            bool IPreparedTypeOfNameInspection.IsCurrent => IsCurrent;
 
             private PreparedTypeOfNamespacePermission(PreparedFieldTypes session, PreparedTypeOfFiniteEmissionShape shape,
                 PreparedTypeOfNamespaceLookupFacts lookup, PreparedSourceObservations graph,

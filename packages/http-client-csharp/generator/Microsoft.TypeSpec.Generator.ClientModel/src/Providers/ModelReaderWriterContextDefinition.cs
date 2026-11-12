@@ -560,7 +560,26 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                 return false;
             }
 
-            return type.FrameworkType.GetInterfaces().Any(i => i.Name == "IPersistableModel`1" || i.Name == "IJsonModel`1");
+            var runtimeType = type.FrameworkType;
+            var interfaces = runtimeType.GetInterfaces();
+            if (!Input.ConstructedCollectionBridge.Enabled<CSharpType>())
+            {
+                return interfaces.Any(static i => i.Name == "IPersistableModel`1" || i.Name == "IJsonModel`1");
+            }
+            long nameCharacters = 0;
+            var result = interfaces.Any(i =>
+            {
+                // Preserve both native name reads and short-circuiting. Do not
+                // enumerate or reflect again just to create an observation.
+                var firstName = i.Name;
+                nameCharacters += firstName.Length;
+                if (firstName == "IPersistableModel`1") { return true; }
+                var secondName = i.Name;
+                nameCharacters += secondName.Length;
+                return secondName == "IJsonModel`1";
+            });
+            PocContextInterfaceObservations.RecordDirect(runtimeType, interfaces.Length, nameCharacters, result);
+            return result;
         }
 
         protected override XmlDocProvider BuildXmlDocs()

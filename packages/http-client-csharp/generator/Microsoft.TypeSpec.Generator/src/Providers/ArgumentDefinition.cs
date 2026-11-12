@@ -73,7 +73,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private MethodProvider BuildAssertNotNullOrWhiteSpace()
         {
             var valueParam = new ParameterProvider("value", $"The value.", typeof(string));
-            var signature = GetSignature(AssertNotNullOrWhiteSpaceMethodName, [valueParam, _nameParam]);
+            var signature = GetSignature(AssertNotNullOrWhiteSpaceMethodName, ConstructedCollectionWitness.Record<ParameterProvider>([valueParam, _nameParam], valueParam, _nameParam));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 AssertNotNullSnippet(valueParam),
@@ -91,7 +91,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
             var minimumParam = new ParameterProvider("minimum", $"The minimum value.", _t);
             var maximumParam = new ParameterProvider("maximum", $"The maximum value.", _t);
             var whereExpression = Where.NotNull(_t).And(new CSharpType(typeof(IComparable<>), _t));
-            var signature = GetSignature(AssertInRangeMethodName, [valueParam, minimumParam, maximumParam, _nameParam], [_t], [whereExpression]);
+            var signature = GetSignature(AssertInRangeMethodName, ConstructedCollectionWitness.Record<ParameterProvider>([valueParam, minimumParam, maximumParam, _nameParam], valueParam, minimumParam, maximumParam, _nameParam), ConstructedCollectionWitness.Record<CSharpType>([_t], _t), ConstructedCollectionWitness.Record<WhereExpression>([whereExpression], whereExpression));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 new IfStatement(minimumParam.Invoke("CompareTo", valueParam).GreaterThan(Literal(0)))
@@ -109,7 +109,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private MethodProvider BuildCheckNotNullOrEmpty()
         {
             var valueParam = new ParameterProvider("value", $"The value.", typeof(string));
-            var signature = GetSignature(CheckNotNullOrEmptyMethodName, [valueParam, _nameParam], returnType: typeof(string));
+            var signature = GetSignature(CheckNotNullOrEmptyMethodName, ConstructedCollectionWitness.Record<ParameterProvider>([valueParam, _nameParam], valueParam, _nameParam), returnType: typeof(string));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 Static<ArgumentDefinition>().Invoke(AssertNotNullOrEmptyMethodName, [valueParam, _nameParam]).Terminate(),
@@ -121,7 +121,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private MethodProvider BuildAssertNotNullOrEmptyString()
         {
             var valueParam = new ParameterProvider("value", $"The value.", typeof(string));
-            var signature = GetSignature(AssertNotNullOrEmptyMethodName, [valueParam, _nameParam]);
+            var signature = GetSignature(AssertNotNullOrEmptyMethodName, ConstructedCollectionWitness.Record<ParameterProvider>([valueParam, _nameParam], valueParam, _nameParam));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 AssertNotNullSnippet(valueParam),
@@ -137,7 +137,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         {
             const string throwMessage = "Value cannot be an empty collection.";
             var value = new ParameterProvider("value", $"The value.", new CSharpType(typeof(IEnumerable<>), _t));
-            var signature = GetSignature(AssertNotNullOrEmptyMethodName, [value, _nameParam], [_t]);
+            var signature = GetSignature(AssertNotNullOrEmptyMethodName, ConstructedCollectionWitness.Record<ParameterProvider>([value, _nameParam], value, _nameParam), ConstructedCollectionWitness.Record<CSharpType>([_t], _t));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 AssertNotNullSnippet(value),
@@ -173,7 +173,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private MethodProvider BuildAssertNotNullStruct()
         {
             var value = new ParameterProvider("value", $"The value.", _nullableT);
-            var signature = GetSignature(AssertNotNullMethodName, [value, _nameParam], [_t], [Where.Struct(_t)]);
+            WhereExpression constraint;
+            var signature = GetSignature(AssertNotNullMethodName, ConstructedCollectionWitness.Record<ParameterProvider>([value, _nameParam], value, _nameParam), ConstructedCollectionWitness.Record<CSharpType>([_t], _t), ConstructedCollectionWitness.Record<WhereExpression>([constraint = Where.Struct(_t)], constraint));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 new IfStatement(Not(value.Property("HasValue")))
@@ -187,7 +188,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private MethodProvider BuildAssertNotNull()
         {
             var valueParam = new ParameterProvider("value", $"The value.", _t);
-            var signature = GetSignature(AssertNotNullMethodName, [valueParam, _nameParam], [_t]);
+            var signature = GetSignature(AssertNotNullMethodName, ConstructedCollectionWitness.Record<ParameterProvider>([valueParam, _nameParam], valueParam, _nameParam), ConstructedCollectionWitness.Record<CSharpType>([_t], _t));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 AssertNotNullSnippet(valueParam)

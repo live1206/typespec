@@ -63,13 +63,14 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             CSharpType tType = enumerableTType.GetGenericArguments()[0];
             var enumerableParameter = new ParameterProvider("enumerable", FormattableStringHelpers.Empty, enumerableTType);
             var options = new ParameterProvider("options", FormattableStringHelpers.Empty, typeof(ModelReaderWriterOptions), defaultValue: Null);
+            WhereExpression constraint;
             var signature = new MethodSignature(
                 Name: _fromEnumerableName,
                 Modifiers: _methodModifiers,
                 Parameters: [enumerableParameter, options],
                 ReturnType: _requestBodyType,
-                GenericArguments: [tType],
-                GenericParameterConstraints: [Where.NotNull(tType)],
+                GenericArguments: ConstructedCollectionBridge.Record<CSharpType>([tType], tType),
+                GenericParameterConstraints: ConstructedCollectionBridge.Record<WhereExpression>([constraint = Where.NotNull(tType)], constraint),
                 Description: null,
                 ReturnDescription: null);
 
@@ -134,13 +135,14 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             CSharpType tType = spanType.GetGenericArguments()[0];
             var spanParameter = new ParameterProvider("span", FormattableStringHelpers.Empty, spanType);
             var options = new ParameterProvider("options", FormattableStringHelpers.Empty, typeof(ModelReaderWriterOptions), defaultValue: Null);
+            WhereExpression constraint;
             var signature = new MethodSignature(
                 Name: _fromEnumerableName,
                 Modifiers: _methodModifiers,
                 Parameters: [spanParameter, options],
                 ReturnType: _requestBodyType,
-                GenericArguments: [tType],
-                GenericParameterConstraints: [Where.NotNull(tType)],
+                GenericArguments: ConstructedCollectionBridge.Record<CSharpType>([tType], tType),
+                GenericParameterConstraints: ConstructedCollectionBridge.Record<WhereExpression>([constraint = Where.NotNull(tType)], constraint),
                 Description: null,
                 ReturnDescription: null);
 
@@ -171,13 +173,14 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             CSharpType valueType = dictionaryTType.GetGenericArguments()[1];
             var dictionaryParameter = new ParameterProvider("dictionary", FormattableStringHelpers.Empty, new CSharpType(dictionaryTType, typeof(string), valueType));
             var options = new ParameterProvider("options", FormattableStringHelpers.Empty, typeof(ModelReaderWriterOptions), defaultValue: Null);
+            WhereExpression constraint;
             var signature = new MethodSignature(
                 Name: _fromDictionaryName,
                 Modifiers: _methodModifiers,
                 Parameters: [dictionaryParameter, options],
                 ReturnType: _requestBodyType,
-                GenericArguments: [valueType],
-                GenericParameterConstraints: [Where.NotNull(valueType)],
+                GenericArguments: ConstructedCollectionBridge.Record<CSharpType>([valueType], valueType),
+                GenericParameterConstraints: ConstructedCollectionBridge.Record<WhereExpression>([constraint = Where.NotNull(valueType)], constraint),
                 Description: null,
                 ReturnDescription: null);
 
@@ -292,13 +295,14 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             var rootNameHintParameter = new ParameterProvider("rootNameHint", FormattableStringHelpers.Empty, typeof(string));
             var childNameHintParameter = new ParameterProvider("childNameHint", FormattableStringHelpers.Empty, typeof(string));
             var options = new ParameterProvider("options", FormattableStringHelpers.Empty, typeof(ModelReaderWriterOptions), defaultValue: Null);
+            WhereExpression constraint;
             var signature = new MethodSignature(
                 Name: _fromEnumerableName,
                 Modifiers: _methodModifiers,
                 Parameters: [enumerableParameter, rootNameHintParameter, childNameHintParameter, options],
                 ReturnType: _requestBodyType,
-                GenericArguments: [tType],
-                GenericParameterConstraints: [Where.NotNull(tType)],
+                GenericArguments: ConstructedCollectionBridge.Record<CSharpType>([tType], tType),
+                GenericParameterConstraints: ConstructedCollectionBridge.Record<WhereExpression>([constraint = Where.NotNull(tType)], constraint),
                 Description: null,
                 ReturnDescription: null);
 

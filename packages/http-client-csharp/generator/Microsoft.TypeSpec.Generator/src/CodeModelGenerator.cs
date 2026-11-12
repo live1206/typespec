@@ -28,6 +28,9 @@ namespace Microsoft.TypeSpec.Generator
         private List<MetadataReference> _additionalMetadataReferences = [];
         private readonly Dictionary<string, List<TypeProvider>> _customCodeMethodDependencies = new(StringComparer.Ordinal);
         private static CodeModelGenerator? _instance;
+        // Unlike Instance, this does not force an initialized generator for
+        // snippets constructed outside an active generation.
+        internal static bool ObserveConstructedArguments => _instance?.Configuration?.EnablePreEmissionSimplification == true;
         private List<string> _sharedSourceDirectories = [];
         public const string GeneratorMetadataName = "GeneratorName";
 
@@ -59,6 +62,7 @@ namespace Microsoft.TypeSpec.Generator
         [ImportingConstructor]
         public CodeModelGenerator(GeneratorContext context)
         {
+            ConstructedCollectionWitness.InstallBridge();
             Configuration = context.Configuration;
             _inputLibrary = new InputLibrary(Configuration.OutputDirectory);
             TypeFactory = new TypeFactory();
@@ -70,6 +74,7 @@ namespace Microsoft.TypeSpec.Generator
         protected CodeModelGenerator()
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
         {
+            ConstructedCollectionWitness.InstallBridge();
         }
 
         internal bool IsNewProject { get; set; }
@@ -79,6 +84,7 @@ namespace Microsoft.TypeSpec.Generator
         internal CompilerBuildInputProof.BootstrapAssets? CompilerBuildAssets => CompilerBuildContext?.BootstrapAssets;
         internal string? CompilerBuildAssetsFile => CompilerBuildAssets?.Path;
         private InputLibrary _inputLibrary;
+        internal InputLibrary? CachedInputLibrary => _inputLibrary;
 
         public virtual Emitter Emitter { get; }
 
@@ -96,6 +102,10 @@ namespace Microsoft.TypeSpec.Generator
                 _sourceInputModel = value;
             }
         }
+
+        // Only callers that have separately audited the effective virtual
+        // getter may use this non-forcing base-storage observation.
+        internal bool IsBaseSourceInputModelCurrent(SourceInputModel source) => ReferenceEquals(_sourceInputModel, source);
 
         public string LicenseHeader => Configuration.LicenseInfo?.Header ?? string.Empty;
         public virtual OutputLibrary OutputLibrary { get; } = new();

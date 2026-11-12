@@ -36,6 +36,10 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
         {
             _inputClient = inputClient;
             _clientProvider = clientProvider;
+            PocHeaderFinalizationBridge.Install(typeof(ClientOptionsProvider), new(typeof(TypeProvider), typeof(ClientOptionsProvider), typeof(TypeProvider),
+                static (value, _) => value is ClientOptionsProvider provider && provider._clientProvider is not null,
+                static value => ((ClientOptionsProvider)value)._clientProvider)
+                { DescriptionTypeOwner = static value => ReferenceEquals(value, _singletonInstance) ? null : ((ClientOptionsProvider)value)._clientProvider });
             _serviceVersionsEnums = new(BuildServiceVersionsEnums);
         }
 
@@ -498,7 +502,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                     $"Initializes a new instance of {_clientProvider.Name}Options from configuration.",
                     MethodSignatureModifiers.Internal,
                     [sectionParam],
-                    attributes: [experimentalAttr],
+                    attributes: ConstructedCollectionBridge.Record<AttributeStatement>([experimentalAttr], experimentalAttr),
                     initializer: new ConstructorInitializer(true, [sectionParam])),
                 new MethodBodyStatements([.. body]),
                 this);

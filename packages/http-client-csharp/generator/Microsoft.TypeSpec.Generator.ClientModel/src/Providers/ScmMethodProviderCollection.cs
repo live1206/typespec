@@ -267,7 +267,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                 methodBody =
                 [
                     .. GetStackVariablesForProtocolParamConversion(convenienceBodyParameters, out var declarations),
-                    Return(This.Invoke(protocolMethod.Signature, [.. GetMethodArguments(protocolMethod.Signature, declarations, convenienceBodyParameters, methodSignature.Parameters[^1])], isAsync))
+                    Return(InvokeConvenienceProtocol(This, protocolMethod.Signature, GetMethodArguments(protocolMethod.Signature, declarations, convenienceBodyParameters, methodSignature.Parameters[^1]), isAsync))
                 ];
             }
             else
@@ -275,7 +275,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                 methodBody =
                 [
                     .. GetStackVariablesForProtocolParamConversion(convenienceBodyParameters, out var paramDeclarations),
-                    Declare("result", This.Invoke(protocolMethod.Signature, [.. GetMethodArguments(protocolMethod.Signature, paramDeclarations, convenienceBodyParameters, methodSignature.Parameters[^1])], isAsync).ToApi<ClientResponseApi>(), out ClientResponseApi result),
+                    Declare("result", InvokeConvenienceProtocol(This, protocolMethod.Signature, GetMethodArguments(protocolMethod.Signature, paramDeclarations, convenienceBodyParameters, methodSignature.Parameters[^1]), isAsync).ToApi<ClientResponseApi>(), out ClientResponseApi result),
                     .. GetStackVariablesForReturnValueConversion(result, responseBodyType, isAsync, out var resultDeclarations),
                     IsConvertibleFromBinaryData(responseBodyType)
                         || GetPlainTextParseType(responseBodyType, out _) is not null
@@ -1268,6 +1268,19 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
             {
                 signature.Update(attributes: [.. signature.Attributes, attribute]);
             }
+        }
+
+        private static InvokeMethodExpression InvokeConvenienceProtocol(ValueExpression receiver, MethodSignature signature, IReadOnlyList<ValueExpression> arguments, bool isAsync)
+        {
+            // Materialize the native spread exactly once, in its original
+            // evaluation position. Construct a known read-only carrier here,
+            // not in a visitor, so POC readback can inspect its live array.
+            var ownedArguments = arguments.ToArray();
+            var invocation = receiver.Invoke(signature, new ProducerOwnedReadOnlyList<ValueExpression>(ownedArguments), isAsync);
+            if (ConstructedArgumentBridge.Enabled(invocation) && arguments.GetType() == typeof(List<ValueExpression>) &&
+                ((List<ValueExpression>)arguments).Count <= ConstructedArgumentBridge.MaximumArguments)
+            { ConstructedArgumentBridge.Record(invocation, ownedArguments); }
+            return invocation;
         }
 
         private IReadOnlyList<ValueExpression> GetMethodArguments(

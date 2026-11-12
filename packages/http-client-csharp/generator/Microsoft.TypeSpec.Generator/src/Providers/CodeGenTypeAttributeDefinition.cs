@@ -26,14 +26,16 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         protected override IReadOnlyList<AttributeStatement> BuildAttributes()
         {
-            return [new AttributeStatement(typeof(AttributeUsageAttribute),
+            AttributeStatement attribute;
+            return ConstructedCollectionWitness.Record<AttributeStatement>(
+                [attribute = new AttributeStatement(typeof(AttributeUsageAttribute),
             [new BinaryOperatorExpression(
                 "|",
                 new BinaryOperatorExpression(
                     "|",
                     FrameworkEnumValue(AttributeTargets.Class),
                     FrameworkEnumValue(AttributeTargets.Enum)),
-                FrameworkEnumValue(AttributeTargets.Struct))])];
+                FrameworkEnumValue(AttributeTargets.Struct))])], attribute);
         }
 
         protected internal override PropertyProvider[] BuildProperties() =>

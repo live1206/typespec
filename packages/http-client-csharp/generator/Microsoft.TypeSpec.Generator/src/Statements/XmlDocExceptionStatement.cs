@@ -15,6 +15,7 @@ namespace Microsoft.TypeSpec.Generator.Statements
         public IReadOnlyList<ParameterProvider> Parameters { get; }
 
         private readonly string _reason;
+        internal string Reason => _reason;
 
         public XmlDocExceptionStatement(Type exceptionType, IReadOnlyList<ParameterProvider> parameters)
         {

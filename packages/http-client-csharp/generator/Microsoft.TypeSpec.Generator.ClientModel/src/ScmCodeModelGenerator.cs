@@ -9,6 +9,8 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.TypeSpec.Generator.ClientModel.Providers;
+using Microsoft.TypeSpec.Generator.Input;
+using Microsoft.TypeSpec.Generator.Providers;
 
 namespace Microsoft.TypeSpec.Generator.ClientModel
 {
@@ -18,6 +20,20 @@ namespace Microsoft.TypeSpec.Generator.ClientModel
     {
         private static ScmCodeModelGenerator? _instance;
         internal static new ScmCodeModelGenerator Instance => _instance ?? throw new InvalidOperationException("ScmCodeModelGenerator is not loaded.");
+
+        internal static bool IsCurrentInstance
+        {
+            get
+            {
+                if (_instance is null) { return false; }
+                try { return ReferenceEquals(CodeModelGenerator.Instance, _instance); }
+                catch (InvalidOperationException) { return false; }
+            }
+        }
+
+        // Published only by an existing native interface observation. The
+        // recipe reads this owner-local field without creating or replaying one.
+        internal Utilities.PocContextInterfaceObservations.Table? PocContextInterfaceObservations;
 
         private ScmOutputLibrary? _scmOutputLibrary;
         public override OutputLibrary OutputLibrary => _scmOutputLibrary ??= new();
@@ -63,6 +79,24 @@ namespace Microsoft.TypeSpec.Generator.ClientModel
         protected override void Configure()
         {
             base.Configure();
+            PocHeaderFinalizationBridge.Install(typeof(ModelReaderWriterContextDefinition),
+                new(typeof(ModelReaderWriterContextDefinition), typeof(TypeProvider), typeof(TypeProvider), static (_, _) => true));
+            PocHeaderFinalizationBridge.InstallCachedAttributes(typeof(ModelReaderWriterContextDefinition),
+                new(typeof(ModelReaderWriterContextDefinition), typeof(ModelReaderWriterContextDefinition), typeof(ModelReaderWriterContextDefinition),
+                    static _ => IsCurrentInstance && _instance is { } generator && generator.GetType() == typeof(ScmCodeModelGenerator) &&
+                        generator._scmOutputLibrary is not null && generator.SourceInputModel.GetType() == typeof(Microsoft.TypeSpec.Generator.SourceInput.SourceInputModel)));
+            PocHeaderFinalizationBridge.InstallContextRecipe(typeof(ModelReaderWriterContextDefinition),
+                new([
+                    typeof(BinaryContentHelperDefinition), typeof(CancellationTokenExtensionsDefinition), typeof(ClientOptionsProvider),
+                    typeof(ClientPipelineExtensionsDefinition), typeof(ClientProvider), typeof(ClientSettingsProvider), typeof(ClientUriBuilderDefinition),
+                    typeof(ErrorResultDefinition), typeof(FixedEnumSerializationProvider), typeof(LifecycleModelReaderWriterOptionsDefinition), typeof(LifecycleVisibilityDefinition),
+                    typeof(ModelReaderWriterContextDefinition), typeof(ModelSerializationExtensionsDefinition), typeof(PipelineRequestHeadersExtensionsDefinition),
+                    typeof(RestClientProvider), typeof(SerializationFormatDefinition), typeof(SystemOptionalDefinition), typeof(TypeFormattersDefinition),
+                    typeof(Utf8JsonBinaryContentDefinition)
+                ], [typeof(ScmMethodProvider)], Utilities.PocContextInterfaceObservations.TrySpendDirectNegative,
+                    Utilities.PocContextInterfaceObservations.TrySpendHelperNegative,
+                    static () => IsCurrentInstance && _instance is { } generator && generator.GetType() == typeof(ScmCodeModelGenerator)
+                        ? generator._scmOutputLibrary : null));
             AddMetadataReference(MetadataReference.CreateFromFile(typeof(ClientResult).Assembly.Location));
             AddMetadataReference(MetadataReference.CreateFromFile(typeof(BinaryData).Assembly.Location));
             AddMetadataReference(MetadataReference.CreateFromFile(typeof(JsonSerializer).Assembly.Location));

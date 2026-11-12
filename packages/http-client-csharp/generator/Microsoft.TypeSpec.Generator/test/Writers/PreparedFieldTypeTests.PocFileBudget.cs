@@ -229,6 +229,98 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Assert.That(source.IsCurrent(), Is.True);
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void PocSupplementalDocumentationChildLimitDistinguishesPointQueryAndVoidObserver(bool voidObserver)
+        {
+            var parameters = new List<XmlDocParamStatement>();
+            var docs = new XmlDocProvider(parameters: parameters);
+            var owner = new TestTypeProvider();
+            var method = new MethodProvider(
+                new MethodSignature("M", null, MethodSignatureModifiers.Public, null, null, Array.Empty<ParameterProvider>()),
+                new KeywordExpression("default", null), owner, docs);
+            owner.Update(methods: [method]);
+            owner.EnsureBuilt();
+            _ = owner.Type;
+            _ = owner.GetAttributesForWrite();
+            var source = new PreparedSourceFile(Guid.NewGuid(), owner, "S.cs", CSharpCompilation.Create("PocChildLimitRetry"), disableXmlDocs: false);
+            var supplemental = PreparedPocSupplementalFile.Capture(source);
+            var occurrence = source.Roots.SelectMany(root => root.DescendantsAndSelf())
+                .Single(node => node.IsOpaque && ReferenceEquals(node.Producer, docs));
+            var envelope = supplemental.GetDocumentation(occurrence.Id);
+            Assert.That(envelope, Is.Not.Null);
+            Assert.That(supplemental.IsRejected, Is.False);
+            Assert.That(envelope!.IsCurrentWithoutInvalidating(new PocWorkBudget(65536), out _), Is.True);
+            Assert.That(source.IsShapeCurrentWithoutInvalidating(new PocWorkBudget(65536)), Is.True,
+                "The actual supplemental shape must be current before the child-limit contrast.");
+            Assert.That(supplemental.IsDocumentationConsumedExactlyOnce(occurrence.Id, new PocWorkBudget(65536)), Is.False,
+                "The compact fixture has not executed a native write.");
+            Assert.That(supplemental.IsRejected, Is.False);
+
+            var parameter = new ParameterProvider("arg", $"arg", typeof(int));
+            var document = new XmlDocParamStatement(parameter);
+            parameters.AddRange(Enumerable.Repeat(document, 4097));
+            try
+            {
+                var envelopeBudget = new PocWorkBudget(65536);
+                Assert.That(envelope.IsCurrentWithoutInvalidating(envelopeBudget, out var unavailable), Is.False);
+                Assert.That(unavailable, Is.True, "The actual child precheck must exhaust its local limit.");
+                Assert.That(envelopeBudget.Exhausted, Is.False, "Child exhaustion must not exhaust the parent.");
+                Assert.That(source.IsCurrent(), Is.True, "The documentation boundary is opaque to the shared source proof.");
+                Assert.That(source.IsShapeCurrentWithoutInvalidating(new PocWorkBudget(65536)), Is.True,
+                    "The actual supplemental shape must remain current before the documentation recheck.");
+                if (voidObserver)
+                {
+                    _ = supplemental.HasUnsafeOrUnavailableKnownRawNames;
+                    Assert.That(supplemental.IsRejected, Is.True, "A void observer must fail closed on unavailable coverage.");
+                }
+                else
+                {
+                    var queryBudget = new PocWorkBudget(65536);
+                    Assert.That(supplemental.IsDocumentationConsumedExactlyOnce(occurrence.Id, queryBudget), Is.False);
+                    Assert.That(queryBudget.Exhausted, Is.False);
+                    Assert.That(supplemental.IsRejected, Is.False, "A point query must not turn a child limit into a sticky mismatch.");
+                }
+            }
+            finally { parameters.Clear(); }
+            Assert.That(source.IsCurrent(), Is.True);
+            Assert.That(envelope.IsCurrentWithoutInvalidating(new PocWorkBudget(65536), out _), Is.True);
+            Assert.That(supplemental.IsRejected, Is.EqualTo(voidObserver));
+        }
+
+        [Test]
+        public void PocSupplementalDocumentationFundedMismatchRemainsSticky()
+        {
+            var parameters = new List<XmlDocParamStatement>();
+            var docs = new XmlDocProvider(parameters: parameters);
+            var owner = new TestTypeProvider();
+            owner.Update(methods: [new MethodProvider(
+                new MethodSignature("M", null, MethodSignatureModifiers.Public, null, null, Array.Empty<ParameterProvider>()),
+                new KeywordExpression("default", null), owner, docs)]);
+            owner.EnsureBuilt();
+            _ = owner.Type;
+            _ = owner.GetAttributesForWrite();
+            var source = new PreparedSourceFile(Guid.NewGuid(), owner, "S.cs", CSharpCompilation.Create("PocFundedMismatch"), disableXmlDocs: false);
+            var supplemental = PreparedPocSupplementalFile.Capture(source);
+            var occurrence = source.Roots.SelectMany(root => root.DescendantsAndSelf())
+                .Single(node => node.IsOpaque && ReferenceEquals(node.Producer, docs));
+            var envelope = supplemental.GetDocumentation(occurrence.Id)!;
+            Assert.That(envelope.IsCurrentWithoutInvalidating(new PocWorkBudget(65536), out _), Is.True);
+            Assert.That(source.IsShapeCurrentWithoutInvalidating(new PocWorkBudget(65536)), Is.True);
+            Assert.That(supplemental.IsDocumentationConsumedExactlyOnce(occurrence.Id, new PocWorkBudget(65536)), Is.False);
+            Assert.That(supplemental.IsRejected, Is.False);
+            parameters.Add(new XmlDocParamStatement(new ParameterProvider("arg", $"arg", typeof(int))));
+            var budget = new PocWorkBudget(65536);
+            Assert.That(envelope.IsCurrentWithoutInvalidating(new PocWorkBudget(65536), out var unavailable), Is.False);
+            Assert.That(unavailable, Is.False, "A fully funded stable mismatch remains an observation.");
+            Assert.That(supplemental.IsDocumentationConsumedExactlyOnce(occurrence.Id, budget), Is.False);
+            Assert.That(budget.Exhausted, Is.False);
+            Assert.That(supplemental.IsRejected, Is.True);
+            parameters.Clear();
+            Assert.That(source.IsCurrent(), Is.True);
+            Assert.That(supplemental.IsRejected, Is.True, "A witnessed mismatch remains sticky after restoration.");
+        }
+
         [TestCase(8, false)]
         [TestCase(300, true)]
         public void PocSupplementalFileBoundsNumberOfObservedBoundaries(int count, bool rejected)

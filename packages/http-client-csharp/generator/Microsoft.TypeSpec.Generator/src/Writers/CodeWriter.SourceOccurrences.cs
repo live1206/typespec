@@ -17,6 +17,8 @@ namespace Microsoft.TypeSpec.Generator
         private PreparedPocSupplementalFile.Cursor? _pocSupplementalCursor;
         private PreparedPocTypeConstraint? _pocTypeConstraint;
         private PreparedPocFileConsumption? _pocFileConsumption;
+        private PreparedPocFileConsumption? _pocDeclarationConsumption;
+        private PreparedPocFileConsumption? _pocBoundConsumption;
         internal PreparedSourceOccurrence? CurrentSourceOccurrence => _sourceCursor?.Current;
         internal PreparedSourceObservations.PreparedOccurrenceObservations? CurrentSourceObservations => _sourceCursor?.Current is { } occurrence
             ? _sourceFile?.Observations?.GetCurrent(occurrence) : null;
@@ -30,7 +32,23 @@ namespace Microsoft.TypeSpec.Generator
             _sourceCursor = _sourceFile?.Start();
             var pocFile = preparation.PocGenerationEnvelope?.GetFile(owner);
             _pocTypeConstraint = pocFile?.TypeConstraint;
-            _pocFileConsumption = pocFile?.StartNativeConsumption(preparation, standardWriter);
+            _pocBoundConsumption = pocFile?.NativeConsumption;
+            var consumption = pocFile?.StartNativeConsumption(preparation, standardWriter, this);
+            if (consumption is not null)
+            {
+                _pocFileConsumption = consumption;
+                _pocDeclarationConsumption = consumption;
+                // A competing failure or disposal can race publication.
+                if (!ReferenceEquals(System.Threading.Volatile.Read(ref _pocBoundConsumption), consumption))
+                {
+                    System.Threading.Interlocked.CompareExchange(ref _pocFileConsumption, null, consumption);
+                    System.Threading.Interlocked.CompareExchange(ref _pocDeclarationConsumption, null, consumption);
+                    consumption.ReleaseFailureObserver(this);
+                }
+                else if (consumption.HasFailed) { OnPocConsumptionFailed(consumption); }
+            }
+            else if (_pocBoundConsumption is { HasFailed: true } failed && !failed.HasParameterSelectionFailure)
+            { PublishPendingPocDeclaration(failed); }
             if (_sourceFile is { } file && _sourceCursor is not null)
             { _pocSupplementalCursor = preparation.GetPocSupplementalFile(file)?.Start(preparation, standardWriter); }
         }
@@ -46,7 +64,7 @@ namespace Microsoft.TypeSpec.Generator
             if (_sourcePreparation is not { } preparation || _sourceFile is not { } file ||
                 _standardSourceWriter?.OwnsPreparation(preparation, file.FileOwner) != true ||
                 CurrentSourceOccurrence is not { } occurrence || !ReferenceEquals(occurrence.Producer, producer) ||
-                preparation.GetTypeOfNamePermission(file, occurrence) is not { } permission) { return false; }
+                preparation.GetTask03TypeOfNamePermission(file, occurrence) is not { } permission) { return false; }
             // Exactly the namespace the original native type formatter registers.
             UseNamespace(namespaceName);
             if (!permission.IsCurrent || !TryAppendPreparedBodyName(permission.SimpleSpelling, permission.QualifiedSpelling)) { return false; }
@@ -56,37 +74,74 @@ namespace Microsoft.TypeSpec.Generator
 
         internal T ObserveSourceRootProducer<T>(T producer) where T : class
         {
-            _pocFileConsumption?.ObserveRootProducer(producer);
+            if (_pocFileConsumption is { } consumption && !consumption.ObserveRootProducer(producer))
+            { OnPocConsumptionFailed(consumption); }
             return producer;
+        }
+
+        internal void OnPocConsumptionFailed(PreparedPocFileConsumption consumption)
+        {
+            if (!ReferenceEquals(System.Threading.Volatile.Read(ref _pocBoundConsumption), consumption)) { return; }
+            // The notifier may be delayed after taking the observer. The
+            // physical writer can also help detach its exact failed sidecar.
+            // Release the reverse reference if it has not yet been taken.
+            consumption.ReleaseFailureObserver(this);
+            // Retain a pending declaration veto when no declaration is in
+            // progress and none has yet been missed.
+            System.Threading.Interlocked.CompareExchange(ref _pocFileConsumption, null, consumption);
+            if (!consumption.HasParameterSelectionFailure && consumption.HasOpenDeclaration)
+            { consumption.MarkOpenDeclarationUnavailable(); }
+            if (consumption.HasParameterSelectionFailure)
+            { System.Threading.Interlocked.CompareExchange(ref _pocDeclarationConsumption, null, consumption); }
+            else { PublishPendingPocDeclaration(consumption); }
+        }
+
+        private void PublishPendingPocDeclaration(PreparedPocFileConsumption consumption)
+        {
+            // A declaration or disposal may have cleared the exact reference
+            // after the notification's earlier state check. Publish only into
+            // an empty slot, then undo this publication if it is now stale.
+            System.Threading.Interlocked.CompareExchange(ref _pocDeclarationConsumption, consumption, null);
+            if (consumption.HasParameterSelectionFailure ||
+                !ReferenceEquals(System.Threading.Volatile.Read(ref _pocBoundConsumption), consumption))
+            { System.Threading.Interlocked.CompareExchange(ref _pocDeclarationConsumption, null, consumption); }
         }
 
         private void DetachRejectedPocDeclaration(PreparedPocFileConsumption consumption)
         {
-            // A rejected sidecar must not continue input-proportional work on
-            // later native parameters or roots. Other observers stay attached.
-            if (consumption.HasParameterSelectionFailure && ReferenceEquals(_pocFileConsumption, consumption))
-            { _pocFileConsumption = null; }
+            if (!consumption.HasParameterSelectionFailure) { return; }
+            consumption.ReleaseFailureObserver(this);
+            System.Threading.Interlocked.CompareExchange(ref _pocFileConsumption, null, consumption);
+            System.Threading.Interlocked.CompareExchange(ref _pocDeclarationConsumption, null, consumption);
         }
 
         private void ObservePocDeclarationStart(MethodSignatureBase? signature)
         {
-            if (_pocFileConsumption is not { } consumption) { return; }
+            if (_pocDeclarationConsumption is not { } consumption) { return; }
             consumption.BeginDeclaration(signature);
             DetachRejectedPocDeclaration(consumption);
         }
 
         private void ObservePocParameter(MethodSignatureBase? signature, int ordinal, ParameterProvider? parameter)
         {
-            if (_pocFileConsumption is not { } consumption) { return; }
+            if (_pocDeclarationConsumption is not { } consumption) { return; }
             consumption.ObserveParameter(signature, ordinal, parameter);
             DetachRejectedPocDeclaration(consumption);
         }
 
         private void ObservePocDeclarationComplete(MethodSignatureBase? signature)
         {
-            if (_pocFileConsumption is not { } consumption) { return; }
+            if (_pocDeclarationConsumption is not { } consumption) { return; }
             consumption.CompleteDeclaration(signature);
             DetachRejectedPocDeclaration(consumption);
+        }
+
+        private void ReleasePocFailureObserver()
+        {
+            var bound = System.Threading.Interlocked.Exchange(ref _pocBoundConsumption, null);
+            bound?.ReleaseFailureObserver(this);
+            _pocFileConsumption = null;
+            _pocDeclarationConsumption = null;
         }
 
         internal IDisposable BeginSourceRoot(TypeProvider owner, string role, int index)
@@ -95,7 +150,11 @@ namespace Microsoft.TypeSpec.Generator
             _sourcePreparation?.ObservePocHeaderAfterSourceCallback(_sourceFile);
             var shared = _sourceCursor?.BeginRoot(owner, role, index) ?? PreparedSourceFile.EmptyScope.Instance;
             if (_pocFileConsumption is { } consumption)
-            { shared = new SupplementalScope(shared, consumption.BeginRoot(owner, role, index)); }
+            {
+                var poc = consumption.BeginRoot(owner, role, index);
+                if (consumption.HasFailed) { poc.Dispose(); OnPocConsumptionFailed(consumption); }
+                else if (!ReferenceEquals(poc, PreparedSourceFile.EmptyScope.Instance)) { shared = new SupplementalScope(shared, poc); }
+            }
             if (role == "type-constraint" && index == 0 && ReferenceEquals(owner, _sourceFile?.FileOwner) && _pocTypeConstraint is { } constraint)
             { return new SupplementalScope(shared, constraint.BeginNativeRoot()); }
             return shared;
@@ -111,15 +170,21 @@ namespace Microsoft.TypeSpec.Generator
             var shared = _sourceCursor?.Enter(producer) ?? PreparedSourceFile.EmptyScope.Instance;
             var supplemental = _pocSupplementalCursor?.Enter(producer, _sourceCursor?.Current) ?? PreparedSourceFile.EmptyScope.Instance;
             var original = ReferenceEquals(supplemental, PreparedSourceFile.EmptyScope.Instance) ? shared : new SupplementalScope(shared, supplemental);
-            return _pocFileConsumption is { } consumption
-                ? new SupplementalScope(original, consumption.Enter(producer)) : original;
+            if (_pocFileConsumption is not { } consumption) { return original; }
+            var poc = consumption.Enter(producer);
+            if (consumption.HasFailed) { poc.Dispose(); OnPocConsumptionFailed(consumption); return original; }
+            return ReferenceEquals(poc, PreparedSourceFile.EmptyScope.Instance) ? original : new SupplementalScope(original, poc);
         }
 
         internal SourceConsumptionReceipt? CompleteSourceFile()
         {
             _sourcePreparation?.ObserveSourceSnapshot();
             _sourcePreparation?.ObservePocHeaderAfterSourceCallback(_sourceFile);
-            _pocFileConsumption?.Complete();
+            if (_pocFileConsumption is { } consumption)
+            {
+                consumption.Complete();
+                if (consumption.HasFailed) { OnPocConsumptionFailed(consumption); }
+            }
             if (_sourceFile is null || _sourceCursor is null) { return null; }
             var current = _sourceCursor.Complete();
             var consumed = _sourceCursor.Consumed;

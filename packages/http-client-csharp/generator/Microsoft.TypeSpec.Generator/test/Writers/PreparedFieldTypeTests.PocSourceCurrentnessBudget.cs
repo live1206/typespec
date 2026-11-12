@@ -256,7 +256,8 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     type => compilation.GetTypeByMetadataName(type.FrameworkType.FullName!));
             }
             Assert.That(proof, Is.Not.Null, "A supported actual header/documentation/constructor proof must precede the credit contrast.");
-            var observe = proof!.GetType().GetMethod("IsCurrentWithoutInvalidating", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var observe = proof!.GetType().GetMethod("IsCurrentWithoutInvalidating",
+                BindingFlags.Instance | BindingFlags.NonPublic, binder: null, types: [typeof(PocWorkBudget)], modifiers: null)!;
             var full = new PocWorkBudget(65536);
             Assert.That(observe.Invoke(proof, new object[] { full }), Is.True);
             var required = 65536 - full.Remaining;

@@ -69,6 +69,23 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
         }
 
         [Test]
+        public void OutputLibraryRootWitnessRejectsSameReferenceAndRestoredStores()
+        {
+            var output = new OutputLibrary();
+            var first = new List<TypeProvider> { Target() };
+            var second = new List<TypeProvider> { Target("Other") };
+            output.TypeProviders = first;
+            Assert.That(output.TryCaptureMaterializedTypeProviders(out var captured, out var revision), Is.True);
+            output.TypeProviders = first;
+            Assert.That(output.IsMaterializedTypeProviderSnapshotCurrent(captured!, revision), Is.False);
+            Assert.That(output.TryCaptureMaterializedTypeProviders(out captured, out revision), Is.True);
+            output.TypeProviders = second;
+            output.TypeProviders = first;
+            Assert.That(output.TypeProviders, Is.SameAs(first));
+            Assert.That(output.IsMaterializedTypeProviderSnapshotCurrent(captured!, revision), Is.False);
+        }
+
+        [Test]
         public void OutputLibraryRootWitnessFailsClosedAtRevisionSaturation()
         {
             var output = new OutputLibrary();

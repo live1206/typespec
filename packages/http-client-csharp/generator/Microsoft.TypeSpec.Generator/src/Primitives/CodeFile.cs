@@ -10,6 +10,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
     public class CodeFile
     {
         private readonly ImmutableArray<PreparedNameAlternative> _nameAlternatives;
+        private readonly bool? _writerHasPocAlternatives;
         internal int PreparedBodyNameCount => _nameAlternatives.IsDefault ? 0 :
             _nameAlternatives.Count(alternative => alternative.Channel == PreparedNameChannel.Body);
         internal int PreparedPocNameCount => _nameAlternatives.IsDefault ? 0 :
@@ -17,12 +18,25 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
         internal CodeFile(string content, string name, string? qualifiedContent = null, SourceConsumptionReceipt? sourceConsumption = null,
             ImmutableArray<PreparedNameAlternative> nameAlternatives = default)
+            : this(content, name, qualifiedContent, sourceConsumption, nameAlternatives, null)
+        {
+        }
+
+        internal CodeFile(string content, string name, string? qualifiedContent, SourceConsumptionReceipt? sourceConsumption,
+            PreparedNameAlternativesSnapshot writerAlternatives)
+            : this(content, name, qualifiedContent, sourceConsumption, writerAlternatives.Alternatives, writerAlternatives.HasPoc)
+        {
+        }
+
+        private CodeFile(string content, string name, string? qualifiedContent, SourceConsumptionReceipt? sourceConsumption,
+            ImmutableArray<PreparedNameAlternative> nameAlternatives, bool? writerHasPocAlternatives)
         {
             Name = name;
             Content = content;
             QualifiedContent = qualifiedContent;
             SourceConsumption = sourceConsumption;
             _nameAlternatives = nameAlternatives;
+            _writerHasPocAlternatives = writerHasPocAlternatives;
         }
 
         public string Name { get; }
@@ -31,6 +45,10 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
         internal string? QualifiedContent { get; }
         internal SourceConsumptionReceipt? SourceConsumption { get; }
+
+        // Read-only native metadata handoff for the standalone POC frame adapter.
+        // The adapter does not change any legacy selection/fast-path behavior.
+        internal ImmutableArray<PreparedNameAlternative> NativeLegacyAlternatives => _nameAlternatives;
 
         internal CodeFile WithoutPreparedNames() => QualifiedContent is null ? this : new CodeFile(QualifiedContent, Name, sourceConsumption: SourceConsumption);
 
@@ -44,7 +62,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         // A rendered result is terminal, not a new preparation lifetime.
         internal CodeFile SelectPreparedNames(bool fieldAllowed, bool bodyAllowed, bool pocAllowed)
         {
-            if (QualifiedContent is null || (fieldAllowed && bodyAllowed && (pocAllowed || PreparedPocNameCount == 0)))
+            if (QualifiedContent is null || (fieldAllowed && bodyAllowed &&
+                (pocAllowed || !(_writerHasPocAlternatives ?? (PreparedPocNameCount != 0)))))
             {
                 return this;
             }

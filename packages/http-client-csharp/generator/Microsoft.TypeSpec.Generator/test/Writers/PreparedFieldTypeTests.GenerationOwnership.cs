@@ -19,6 +19,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
         [Test]
         public async Task ReentrantGeneratorSwitchCannotBindAnotherGeneratorsOutput()
         {
+            using var globalState = new GeneratorGlobalStateSnapshot();
             var directory = Path.Combine(Path.GetTempPath(), "typespec-generation-owner-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
             try
@@ -54,6 +55,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
         [Test]
         public async Task ForwardedOutputObservationDoesNotClaimExclusiveProvenance()
         {
+            using var globalState = new GeneratorGlobalStateSnapshot();
             var directory = Path.Combine(Path.GetTempPath(), "typespec-forwarded-owner-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
             try

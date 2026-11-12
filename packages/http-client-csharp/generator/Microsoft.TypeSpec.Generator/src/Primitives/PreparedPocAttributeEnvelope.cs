@@ -80,7 +80,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             out ImmutableArray<MethodBodyStatement> items)
         {
             if (ContractCollections.TryCopyForPoc(carrier, budget, out items)) { return true; }
-            return !budget.Exhausted && nativeOwner is not null && nativeOwner.TryCopyCurrentPocAttributeProjection(carrier, budget, out items);
+            return !ContractCollections.IsExactList(carrier) && !budget.Exhausted && nativeOwner is not null &&
+                nativeOwner.TryCopyCurrentPocAttributeProjection(carrier, budget, out items);
         }
 
         internal bool IsCurrent(PocWorkBudget budget)

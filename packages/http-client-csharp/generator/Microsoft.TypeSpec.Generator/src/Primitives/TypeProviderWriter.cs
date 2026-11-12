@@ -106,7 +106,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 }
             }
             var content = writer.ToString();
-            return new CodeFile(content, _provider.RelativeFilePath, writer.QualifiedContent, writer.CompleteSourceFile(), writer.NameAlternatives);
+            return new CodeFile(content, _provider.RelativeFilePath, writer.QualifiedContent, writer.CompleteSourceFile(), writer.NameAlternativesSnapshot);
         }
 
         private bool IsPublicContext(TypeProvider provider)

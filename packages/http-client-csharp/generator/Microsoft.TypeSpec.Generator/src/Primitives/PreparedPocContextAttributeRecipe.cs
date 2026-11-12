@@ -422,7 +422,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         {
             if (owner.CachedWriteAttributes is not { } attributes) { items = []; return true; }
             return ContractCollections.TryCopyForPoc(attributes, budget, out items) ||
-                !budget.Exhausted && owner.TryCopyCurrentPocAttributeProjection(attributes, budget, out items);
+                !ContractCollections.IsExactList(attributes) && !budget.Exhausted && owner.TryCopyCurrentPocAttributeProjection(attributes, budget, out items);
         }
         private static bool TryCopyOriginal(TypeProvider owner, PocWorkBudget budget, out ImmutableArray<MethodBodyStatement> items)
         {

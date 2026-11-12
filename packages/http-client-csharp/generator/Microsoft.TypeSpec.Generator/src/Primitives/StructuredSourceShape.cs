@@ -640,6 +640,12 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             cached = null;
             if (parameter.Name is null || parameter.Type is null || !SimpleIdentifier(parameter.Name))
             { RejectPoc("Missing or unsupported parameter metadata."); return false; }
+            // Both the uncached emitted state and the cached expected-name
+            // check can normalize through a virtual CultureInfo.TextInfo.
+            // Decline before either accessor; native writing keeps its timing.
+            if (parameter.InputParameter?.IsExactName != true &&
+                System.Globalization.CultureInfo.CurrentCulture.GetType() != typeof(System.Globalization.CultureInfo))
+            { RejectPoc("Unknown parameter name normalization culture."); return false; }
             cached = parameter.CachedVariableExpression;
             if (cached is not null)
             {

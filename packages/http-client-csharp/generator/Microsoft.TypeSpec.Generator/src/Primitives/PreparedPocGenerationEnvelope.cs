@@ -121,9 +121,10 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             private readonly PocDeclarationWorkBudget _declarationBudget;
             internal bool HasCompleteNativeConsumption => _native?.HasCompleted == true;
             internal bool HasObservedParameterSelectionFailure => _native?.HasParameterSelectionFailure == true;
+            internal PreparedPocFileConsumption? NativeConsumption => _native;
             internal string? NativeConsumptionFailure => _native is null ? "plan-unavailable:" + _captureFailure : _native.Failure;
-            internal PreparedPocFileConsumption? StartNativeConsumption(PreparedFieldTypes preparation, TypeProviderWriter writer) =>
-                _native?.Start(preparation, writer, _declarationBudget);
+            internal PreparedPocFileConsumption? StartNativeConsumption(PreparedFieldTypes preparation, TypeProviderWriter writer, CodeWriter? observer = null) =>
+                _native?.Start(preparation, writer, _declarationBudget, observer);
             private readonly ImmutableArray<SourceOccurrenceId> _consumed;
 
             internal FilePlan(PreparedSourceFile source, int index, ImmutableArray<SourceOccurrenceId> consumed,

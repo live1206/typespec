@@ -37,6 +37,40 @@ namespace Microsoft.TypeSpec.Generator.Tests.Providers
         }
 
         [Test]
+        public void UnderfundedGrammarQueryDoesNotPoisonFundedRetry()
+        {
+            var variable = new VariableExpression(new CSharpType(typeof(string)), "message");
+            var declaration = new DeclarationExpression(variable, IsUsing: true);
+            var call = new InvokeMethodExpression(new KeywordExpression("this", null), "CreateRequest", []);
+            var statements = new MethodBodyStatements([new ExpressionStatement(new AssignmentExpression(declaration, call))]);
+            var grammar = Capture(statements);
+            Assert.That(grammar, Is.Not.Null);
+            Assert.That(grammar!.IsCurrent(new PocWorkBudget(65536)), Is.True);
+            var insufficient = new PocWorkBudget(0);
+            Assert.That(grammar.IsCurrent(insufficient), Is.False);
+            Assert.That(insufficient.Exhausted, Is.True);
+            Assert.That(grammar.IsCurrent(new PocWorkBudget(65536)), Is.True,
+                "A fresh funded grammar query must not inherit another query's exhausted budget.");
+        }
+
+        [Test]
+        public void ObservedGrammarMismatchRemainsStaleAfterRestoration()
+        {
+            var variable = new VariableExpression(new CSharpType(typeof(string)), "message");
+            var declaration = new DeclarationExpression(variable, IsUsing: true);
+            var call = new InvokeMethodExpression(new KeywordExpression("this", null), "CreateRequest", []);
+            var grammar = Capture(new MethodBodyStatements([new ExpressionStatement(new AssignmentExpression(declaration, call))]));
+            Assert.That(grammar, Is.Not.Null);
+            Assert.That(grammar!.IsCurrent(new PocWorkBudget(65536)), Is.True);
+            variable.Update(name: "changed");
+            var funded = new PocWorkBudget(65536);
+            Assert.That(grammar.IsCurrent(funded), Is.False);
+            Assert.That(funded.Exhausted, Is.False);
+            variable.Update(name: "message");
+            Assert.That(grammar.IsCurrent(new PocWorkBudget(65536)), Is.False);
+        }
+
+        [Test]
         public void SignatureDrivenInvocationUsesTheNativeSelectedName()
         {
             var signature = new MethodSignature("Actual", null, MethodSignatureModifiers.None,

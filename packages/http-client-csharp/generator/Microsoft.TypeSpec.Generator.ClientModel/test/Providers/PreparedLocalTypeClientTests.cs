@@ -67,10 +67,36 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
                 var declaration = file.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
                     .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
                 Assert.That(prepared.GetPrecomputedPocOrdinaryCandidate(file, declaration), Is.Not.Null);
-                Assert.That(prepared.GetTypeOfNamePermission(file, declaration), Is.Null,
+                var store = (System.Collections.IDictionary)typeof(PreparedFieldTypes).GetField("_typeOfNames",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(prepared)!;
+                Assert.That(store.Contains(declaration.Id), Is.False,
                     "Task04 owned-root preparation must not populate Task03's single-file permission store.");
+                Assert.That(prepared.GetTask03TypeOfNamePermission(file, declaration), Is.Null,
+                    "The standard writer must not acquire Task03 authority from a Task04 candidate.");
+                var inspection = prepared.GetTypeOfNamePermission(file, declaration);
+                if (inspection is not null)
+                {
+                    Assert.That(inspection, Is.Not.InstanceOf<PreparedFieldTypes.PreparedTypeOfNamespacePermission>(),
+                        "A separately prepared Task04 inspection is not Task03 writer authority.");
+                    Assert.That(inspection.Occurrence, Is.SameAs(declaration));
+                }
                 Assert.That(prepared.SourceFiles.All(source => !source.HasStarted), Is.True);
             }, finalizePocHeaders: true);
+        }
+
+        [Test]
+        public void TypeNameInspectionAndTask03WriterHaveSeparateReturnContracts()
+        {
+            var inspection = typeof(PreparedFieldTypes).GetMethod(nameof(PreparedFieldTypes.GetTypeOfNamePermission),
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            var writer = typeof(PreparedFieldTypes).GetMethod(nameof(PreparedFieldTypes.GetTask03TypeOfNamePermission),
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+            Assert.That(inspection.ReturnType, Is.EqualTo(typeof(PreparedFieldTypes.IPreparedTypeOfNameInspection)));
+            Assert.That(writer.ReturnType, Is.EqualTo(typeof(PreparedFieldTypes.PreparedTypeOfNamespacePermission)));
+            Assert.That(writer.ReturnType.IsSealed, Is.True);
+            Assert.That(typeof(PreparedFieldTypes.IPreparedTypeOfNameInspection).GetProperties()
+                .All(property => !property.CanWrite), Is.True);
         }
 
         [Test]
@@ -2461,10 +2487,47 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
                 var required = 65536 - full.Remaining;
                 Assert.That(required, Is.GreaterThan(0));
                 Assert.That(prepared.GetPocHeaderObservation(file, new PocWorkBudget(required)), Is.True);
-                Assert.That(prepared.GetPocHeaderObservation(file, new PocWorkBudget(required - 1)), Is.False);
+                var shortBudget = new PocWorkBudget(required - 1);
+                Assert.That(prepared.GetPocHeaderObservation(file, shortBudget), Is.False);
+                Assert.That(shortBudget.Exhausted, Is.True);
+                Assert.That(prepared.GetPocHeaderObservation(file, new PocWorkBudget(required)), Is.True,
+                    "A separate funded header query must not inherit the short-query exhaustion.");
                 Assert.That(proofCalls, Is.EqualTo(beforeQuery));
                 Assert.That(prepared.CanCommit(), Is.True);
             }, precomputePoc: true, sourceCurrent: () => { proofCalls++; return true; });
+        }
+
+        [Test]
+        public void RealFooHeaderChildExhaustionDoesNotPoisonFundedRetry()
+        {
+            var parameters = new List<Microsoft.TypeSpec.Generator.Statements.XmlDocParamStatement>();
+            var docs = new XmlDocProvider(parameters: parameters);
+            WithRealFoo((owner, prepared) =>
+            {
+                var file = prepared.SourceFiles.Single(source => ReferenceEquals(source.FileOwner, owner));
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+                Assert.That(output.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                Assert.That(prepared.GetPocHeaderObservation(file, new PocWorkBudget(65536)), Is.True);
+                var parameter = new ParameterProvider("arg", $"argument", typeof(string));
+                var item = new Microsoft.TypeSpec.Generator.Statements.XmlDocParamStatement(parameter);
+                for (int i = 0; i < 5000; i++) { parameters.Add(item); }
+                var outer = new PocWorkBudget(65536);
+                try
+                {
+                    Assert.That(prepared.GetPocHeaderObservation(file, outer), Is.False);
+                    Assert.That(outer.Exhausted, Is.False,
+                        "The linked 4096 child, not the independently funded parent, must exhaust.");
+                }
+                finally { parameters.Clear(); }
+                Assert.That(prepared.GetPocHeaderObservation(file, new PocWorkBudget(65536)), Is.True,
+                    "A child-limit unavailable result must not poison a later funded header query after restoration.");
+                Assert.That(prepared.CanCommit(), Is.True);
+            }, precomputePoc: true, beforePocPreparation: (output, _) =>
+            {
+                var client = output.TypeProviders.OfType<Microsoft.TypeSpec.Generator.ClientModel.Providers.ClientProvider>()
+                    .Single(provider => provider.Name == "Foo");
+                client.Update(xmlDocs: docs);
+            });
         }
 
         [TestCase(false)]
@@ -2847,6 +2910,398 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
                 }
                 Assert.That(reached, Is.True);
             });
+        }
+
+        private sealed record PocFieldWriterAttachmentProbe(Action<CodeWriter> OnWrite) : Microsoft.TypeSpec.Generator.Expressions.ValueExpression
+        {
+            internal override void WriteCore(CodeWriter writer)
+            {
+                OnWrite(writer);
+                writer.AppendRaw("0");
+            }
+        }
+
+        [Test]
+        public void RealFooNativeWriterDetachesGenericFailureBeforeFieldTail()
+        {
+            PreparedPocFileConsumption? consumption = null;
+            var started = typeof(PreparedPocFileConsumption).GetField("_started", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var attached = typeof(CodeWriter).GetField("_pocFileConsumption", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var armed = false;
+            var injected = false;
+            var probeWrites = 0;
+            bool? observerAttached = null;
+            WithRealFoo((_, _) => { }, precomputePoc: true, fooGroupOnly: true, sourceCurrent: () =>
+            {
+                if (armed && !injected && consumption is not null && (bool)started.GetValue(consumption)!)
+                {
+                    injected = true;
+                    consumption.Complete();
+                }
+                return true;
+            }, beforePocPreparation: (output, _) =>
+            {
+                var rest = output.TypeProviders.OfType<Microsoft.TypeSpec.Generator.ClientModel.Providers.RestClientProvider>()
+                    .Single(provider => provider.RelativeFilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                var probe = new PocFieldWriterAttachmentProbe(writer =>
+                {
+                    probeWrites++;
+                    observerAttached = attached.GetValue(writer) is not null;
+                });
+                var field = new FieldProvider(FieldModifiers.Private, typeof(int), "_pocFieldProbe", rest, initializationValue: probe);
+                rest.Update(fields: new[] { field }.Concat(rest.CachedFields!).ToArray());
+            }, inspectGeneration: (output, referenceMap, _, prepared) =>
+            {
+                var rest = prepared.SourceFiles.Single(source => source.FilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                Assert.That(rest.Roots.SelectMany(root => root.DescendantsAndSelf())
+                    .Any(occurrence => prepared.GetPrecomputedPocOrdinaryCandidate(rest, occurrence)?.Type.Name == "PipelineMessage"), Is.True);
+                var reached = false;
+                foreach (var provider in GetWrittenProviderStream(output, referenceMap))
+                {
+                    var writer = new TypeProviderWriter(provider) { PreparedFieldTypes = prepared };
+                    prepared.BeginPocProviderWrite(provider, writer);
+                    var target = ReferenceEquals(provider, rest.FileOwner);
+                    var plan = target ? prepared.PocGenerationEnvelope!.GetFile(provider)! : null;
+                    if (target)
+                    {
+                        consumption = (PreparedPocFileConsumption?)plan!.GetType().GetField("_native", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(plan);
+                        Assert.That(consumption, Is.Not.Null);
+                        armed = true;
+                    }
+                    var file = writer.Write();
+                    armed = false;
+                    prepared.EndPocProviderWrite(provider, writer, file);
+                    if (!target) { continue; }
+                    reached = true;
+                    Assert.That(injected, Is.True);
+                    Assert.That(probeWrites, Is.EqualTo(1), "The native field initializer must execute exactly once before declarations.");
+                    Assert.That(file.Content, Does.Contain("_pocFieldProbe = 0"));
+                    Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                    Assert.That(prepared.CanCommit(), Is.True);
+                    Assert.That(prepared.IsPocCandidateFileWriteReceiptCurrent(rest, new PocWorkBudget(65536)), Is.False,
+                        "A later unobserved declaration must not produce a current POC receipt.");
+                    Assert.That(observerAttached, Is.False, "A generically rejected sidecar must not remain attached for field roots before the first declaration.");
+                    break;
+                }
+                Assert.That(reached, Is.True);
+            });
+        }
+
+        [Test]
+        public void RealFooLateSidecarFailureRetainsIndependentReceiptButDetaches()
+        {
+            PreparedPocFileConsumption? consumption = null;
+            var attached = typeof(CodeWriter).GetField("_pocFileConsumption", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var failureWrites = 0;
+            var laterWrites = 0;
+            bool? observerAttached = null;
+            WithRealFoo((_, _) => { }, precomputePoc: true, fooGroupOnly: true, beforePocPreparation: (output, _) =>
+            {
+                var rest = output.TypeProviders.OfType<Microsoft.TypeSpec.Generator.ClientModel.Providers.RestClientProvider>()
+                    .Single(provider => provider.RelativeFilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                var fail = new PocNativeWriterAttachmentProbe(_ =>
+                {
+                    failureWrites++;
+                    consumption!.Complete();
+                });
+                var later = new PocNativeWriterAttachmentProbe(writer =>
+                {
+                    laterWrites++;
+                    observerAttached = attached.GetValue(writer) is not null;
+                });
+                var signature = new MethodSignature("PocLateFailureProbe", null, MethodSignatureModifiers.Private, null, null, []);
+                var body = new Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements([fail, later]);
+                rest.Update(methods: rest.CachedMethods!.Concat(new[] { new MethodProvider(signature, body, rest) }).ToArray());
+            }, inspectGeneration: (output, referenceMap, _, prepared) =>
+            {
+                var rest = prepared.SourceFiles.Single(source => source.FilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                Assert.That(rest.Roots.SelectMany(root => root.DescendantsAndSelf())
+                    .Any(occurrence => prepared.GetPrecomputedPocOrdinaryCandidate(rest, occurrence)?.Type.Name == "PipelineMessage"), Is.True);
+                var reached = false;
+                foreach (var provider in GetWrittenProviderStream(output, referenceMap))
+                {
+                    var writer = new TypeProviderWriter(provider) { PreparedFieldTypes = prepared };
+                    prepared.BeginPocProviderWrite(provider, writer);
+                    var target = ReferenceEquals(provider, rest.FileOwner);
+                    var plan = target ? prepared.PocGenerationEnvelope!.GetFile(provider)! : null;
+                    if (target)
+                    {
+                        consumption = (PreparedPocFileConsumption?)plan!.GetType().GetField("_native", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(plan);
+                        Assert.That(consumption, Is.Not.Null);
+                    }
+                    var file = writer.Write();
+                    prepared.EndPocProviderWrite(provider, writer, file);
+                    if (!target) { continue; }
+                    reached = true;
+                    Assert.That(failureWrites, Is.EqualTo(1));
+                    Assert.That(laterWrites, Is.EqualTo(1));
+                    Assert.That(file.Content, Does.Contain("PocLateFailureProbe()"));
+                    Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                    Assert.That(prepared.CanCommit(), Is.True);
+                    Assert.That(plan!.HasCompleteNativeConsumption, Is.False);
+                    Assert.That(consumption!.HasParameterSelectionFailure, Is.False,
+                        "A generic failure after the final declaration is not an observed parameter-selection failure.");
+                    Assert.That(prepared.IsPocCandidateFileWriteReceiptCurrent(rest, new PocWorkBudget(65536)), Is.True,
+                        "The independent traversal receipt does not require the separate native sidecar to complete.");
+                    Assert.That(observerAttached, Is.False, "A generically rejected sidecar must detach even when there is no later declaration.");
+                    break;
+                }
+                Assert.That(reached, Is.True);
+            });
+        }
+
+        [Test]
+        public void RealFooSidecarFailureDuringDeclarationRejectsSelection()
+        {
+            PreparedPocFileConsumption? consumption = null;
+            MethodSignature? probeSignature = null;
+            var active = typeof(PreparedPocFileConsumption).GetField("_active", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var state = typeof(PreparedPocFileConsumption).GetField("_declarationState", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var armed = false;
+            var injected = false;
+            WithRealFoo((_, _) => { }, precomputePoc: true, fooGroupOnly: true, sourceCurrent: () =>
+            {
+                if (!armed || injected || consumption is null || (int)state.GetValue(consumption)! != 1) { return true; }
+                var root = active.GetValue(consumption);
+                var declaration = root?.GetType().GetProperty("Declaration")?.GetValue(root);
+                if (!ReferenceEquals(declaration?.GetType().GetProperty("Signature")?.GetValue(declaration), probeSignature)) { return true; }
+                injected = true;
+                consumption.Complete();
+                return true;
+            }, beforePocPreparation: (output, _) =>
+            {
+                var rest = output.TypeProviders.OfType<Microsoft.TypeSpec.Generator.ClientModel.Providers.RestClientProvider>()
+                    .Single(provider => provider.RelativeFilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                var parameter = new ParameterProvider("arg", $"arg", typeof(int), defaultValue: new Microsoft.TypeSpec.Generator.Expressions.LiteralExpression(0), validation: ParameterValidationType.None);
+                probeSignature = new MethodSignature("PocMidDeclarationProbe", null, MethodSignatureModifiers.Private, null, null, [parameter]);
+                var body = new Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements([]);
+                rest.Update(methods: rest.CachedMethods!.Concat(new[] { new MethodProvider(probeSignature, body, rest) }).ToArray());
+            }, inspectGeneration: (output, referenceMap, _, prepared) =>
+            {
+                var rest = prepared.SourceFiles.Single(source => source.FilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                Assert.That(rest.Roots.SelectMany(root => root.DescendantsAndSelf())
+                    .Any(occurrence => prepared.GetPrecomputedPocOrdinaryCandidate(rest, occurrence)?.Type.Name == "PipelineMessage"), Is.True);
+                var reached = false;
+                foreach (var provider in GetWrittenProviderStream(output, referenceMap))
+                {
+                    var writer = new TypeProviderWriter(provider) { PreparedFieldTypes = prepared };
+                    prepared.BeginPocProviderWrite(provider, writer);
+                    var target = ReferenceEquals(provider, rest.FileOwner);
+                    var plan = target ? prepared.PocGenerationEnvelope!.GetFile(provider)! : null;
+                    if (target)
+                    {
+                        consumption = (PreparedPocFileConsumption?)plan!.GetType().GetField("_native", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(plan);
+                        Assert.That(consumption, Is.Not.Null);
+                        armed = true;
+                    }
+                    var file = writer.Write();
+                    armed = false;
+                    prepared.EndPocProviderWrite(provider, writer, file);
+                    if (!target) { continue; }
+                    reached = true;
+                    Assert.That(injected, Is.True, "The existing native source callback must reach the selected in-progress declaration.");
+                    Assert.That(file.Content, Does.Contain("PocMidDeclarationProbe(int arg = 0)"));
+                    Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                    Assert.That(prepared.CanCommit(), Is.True);
+                    Assert.That(plan!.HasCompleteNativeConsumption, Is.False);
+                    Assert.That(consumption!.HasParameterSelectionFailure, Is.True,
+                        "A declaration already in progress cannot finish with its sidecar unavailable.");
+                    Assert.That(prepared.IsPocCandidateFileWriteReceiptCurrent(rest, new PocWorkBudget(65536)), Is.False);
+                    break;
+                }
+                Assert.That(reached, Is.True);
+            });
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void RealFooNativeWriterReleasesFailureObserver(bool throwDuringWrite)
+        {
+            PreparedPocFileConsumption? consumption = null;
+            var observer = typeof(PreparedPocFileConsumption).GetField("_failureObserver", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var writes = 0;
+            var wasBound = false;
+            WithRealFoo((_, _) => { }, precomputePoc: true, fooGroupOnly: true, beforePocPreparation: (output, _) =>
+            {
+                var rest = output.TypeProviders.OfType<Microsoft.TypeSpec.Generator.ClientModel.Providers.RestClientProvider>()
+                    .Single(provider => provider.RelativeFilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                var probe = new PocNativeWriterAttachmentProbe(writer =>
+                {
+                    writes++;
+                    wasBound = ReferenceEquals(observer.GetValue(consumption), writer);
+                    if (throwDuringWrite) { throw new InvalidOperationException("native-probe-failure"); }
+                });
+                var signature = new MethodSignature("PocLifetimeProbe", null, MethodSignatureModifiers.Private, null, null, []);
+                var body = new Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements([probe]);
+                rest.Update(methods: rest.CachedMethods!.Concat(new[] { new MethodProvider(signature, body, rest) }).ToArray());
+            }, inspectGeneration: (output, referenceMap, _, prepared) =>
+            {
+                var rest = prepared.SourceFiles.Single(source => source.FilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                Assert.That(rest.Roots.SelectMany(root => root.DescendantsAndSelf())
+                    .Any(occurrence => prepared.GetPrecomputedPocOrdinaryCandidate(rest, occurrence)?.Type.Name == "PipelineMessage"), Is.True);
+                var reached = false;
+                foreach (var provider in GetWrittenProviderStream(output, referenceMap))
+                {
+                    var writer = new TypeProviderWriter(provider) { PreparedFieldTypes = prepared };
+                    prepared.BeginPocProviderWrite(provider, writer);
+                    var target = ReferenceEquals(provider, rest.FileOwner);
+                    if (!target)
+                    {
+                        var other = writer.Write();
+                        prepared.EndPocProviderWrite(provider, writer, other);
+                        continue;
+                    }
+                    reached = true;
+                    var plan = prepared.PocGenerationEnvelope!.GetFile(provider)!;
+                    consumption = (PreparedPocFileConsumption?)plan.GetType().GetField("_native", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(plan);
+                    Assert.That(consumption, Is.Not.Null);
+                    if (throwDuringWrite)
+                    {
+                        var error = Assert.Throws<InvalidOperationException>(() => writer.Write());
+                        Assert.That(error!.Message, Is.EqualTo("native-probe-failure"));
+                    }
+                    else
+                    {
+                        var file = writer.Write();
+                        prepared.EndPocProviderWrite(provider, writer, file);
+                        Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                        Assert.That(plan.HasCompleteNativeConsumption, Is.True, plan.NativeConsumptionFailure);
+                    }
+                    Assert.That(writes, Is.EqualTo(1), "The native body callback must not be replayed.");
+                    Assert.That(wasBound, Is.True, "The exact physical writer was bound before native execution.");
+                    Assert.That(observer.GetValue(consumption), Is.Null, "A completed or exceptional writer must not be retained by its sidecar.");
+                    break;
+                }
+                Assert.That(reached, Is.True);
+            });
+        }
+
+        [Test]
+        public void RealFooCompetingSidecarStartsCannotBothSucceed()
+        {
+            WithRealFoo((_, _) => { }, precomputePoc: true, fooGroupOnly: true, inspectGeneration: (output, referenceMap, _, prepared) =>
+            {
+                var rest = prepared.SourceFiles.Single(source => source.FilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                Assert.That(rest.Roots.SelectMany(root => root.DescendantsAndSelf())
+                    .Any(occurrence => prepared.GetPrecomputedPocOrdinaryCandidate(rest, occurrence)?.Type.Name == "PipelineMessage"), Is.True);
+                var reached = false;
+                foreach (var provider in GetWrittenProviderStream(output, referenceMap))
+                {
+                    var writer = new TypeProviderWriter(provider) { PreparedFieldTypes = prepared };
+                    prepared.BeginPocProviderWrite(provider, writer);
+                    if (!ReferenceEquals(provider, rest.FileOwner))
+                    {
+                        var other = writer.Write();
+                        prepared.EndPocProviderWrite(provider, writer, other);
+                        continue;
+                    }
+                    reached = true;
+                    var plan = prepared.PocGenerationEnvelope!.GetFile(provider)!;
+                    using var barrier = new System.Threading.Barrier(2);
+                    var starts = Enumerable.Range(0, 2).Select(_ => System.Threading.Tasks.Task.Run(() =>
+                    {
+                        if (!barrier.SignalAndWait(TimeSpan.FromSeconds(10))) { throw new TimeoutException("Competing starts did not rendezvous."); }
+                        return plan.StartNativeConsumption(prepared, writer);
+                    })).ToArray();
+                    System.Threading.Tasks.Task.WaitAll(starts);
+                    Assert.That(starts.Count(task => task.Result is not null), Is.LessThanOrEqualTo(1));
+                    var file = writer.Write();
+                    prepared.EndPocProviderWrite(provider, writer, file);
+                    Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                    Assert.That(prepared.CanCommit(), Is.True);
+                    Assert.That(plan.HasCompleteNativeConsumption, Is.False);
+                    Assert.That(prepared.IsPocCandidateFileWriteReceiptCurrent(rest, new PocWorkBudget(65536)), Is.False);
+                    break;
+                }
+                Assert.That(reached, Is.True);
+            });
+        }
+
+        [Test]
+        public void RealFooExhaustedCompetingStartsPreserveNativeWriteAndRejectLaterDeclaration()
+        {
+            WithRealFoo((_, _) => { }, precomputePoc: true, fooGroupOnly: true, inspectGeneration: (output, referenceMap, _, prepared) =>
+            {
+                var rest = prepared.SourceFiles.Single(source => source.FilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                Assert.That(rest.Roots.SelectMany(root => root.DescendantsAndSelf())
+                    .Any(occurrence => prepared.GetPrecomputedPocOrdinaryCandidate(rest, occurrence)?.Type.Name == "PipelineMessage"), Is.True);
+                var reached = false;
+                foreach (var provider in GetWrittenProviderStream(output, referenceMap))
+                {
+                    var writer = new TypeProviderWriter(provider) { PreparedFieldTypes = prepared };
+                    prepared.BeginPocProviderWrite(provider, writer);
+                    if (!ReferenceEquals(provider, rest.FileOwner))
+                    {
+                        var other = writer.Write();
+                        prepared.EndPocProviderWrite(provider, writer, other);
+                        continue;
+                    }
+                    reached = true;
+                    var plan = prepared.PocGenerationEnvelope!.GetFile(provider)!;
+                    var ledger = (PocDeclarationWorkBudget)plan.GetType().GetField("_declarationBudget", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(plan)!;
+                    var remaining = (int)typeof(PocDeclarationWorkBudget).GetField("_remaining", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(ledger)!;
+                    Assert.That(remaining, Is.GreaterThan(0));
+                    Assert.That(ledger.TrySpendReferenceLookup(remaining - 1), Is.True);
+                    using var barrier = new System.Threading.Barrier(8);
+                    var starts = Enumerable.Range(0, 8).Select(_ => System.Threading.Tasks.Task.Run(() =>
+                    {
+                        if (!barrier.SignalAndWait(TimeSpan.FromSeconds(30))) { throw new TimeoutException("Exhausted starts did not rendezvous."); }
+                        return plan.StartNativeConsumption(prepared, writer);
+                    })).ToArray();
+                    System.Threading.Tasks.Task.WaitAll(starts);
+                    Assert.That(starts.All(task => task.Result is null), Is.True);
+                    var file = writer.Write();
+                    prepared.EndPocProviderWrite(provider, writer, file);
+                    Assert.That(file.Content, Does.Contain("CreateThreeRequest("));
+                    Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                    Assert.That(rest.IsCurrent(), Is.True);
+                    Assert.That(prepared.CanCommit(), Is.True);
+                    Assert.That(plan.HasCompleteNativeConsumption, Is.False);
+                    Assert.That(plan.NativeConsumptionFailure, Is.EqualTo("start-budget"));
+                    Assert.That(plan.HasObservedParameterSelectionFailure, Is.True);
+                    Assert.That(prepared.IsPocCandidateFileWriteReceiptCurrent(rest, new PocWorkBudget(65536)), Is.False);
+                    break;
+                }
+                Assert.That(reached, Is.True);
+            });
+        }
+
+        [TestCase(0)]
+        [TestCase(200)]
+        public void RealFooCandidateReceiptRequiresNativeDeclarationPlan(int extraFiles)
+        {
+            WithRealFoo((_, _) => { }, precomputePoc: true, fooGroupOnly: true, pocExtraRoots: extraFiles,
+                beforePocPreparation: (output, _) =>
+                {
+                    // Keep the real, pre-map provider set for this control.
+                    foreach (var provider in output.TypeProviders)
+                    { ProviderReferenceMapAnalyzer.LatestResult!.RemoveCandidates.Remove(ProviderReferenceMapAnalyzer.GetProviderTypeName(provider.Type)); }
+                },
+                inspectGeneration: (output, referenceMap, _, prepared) =>
+                {
+                    var rest = prepared.SourceFiles.Single(source => source.FilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                    Assert.That(rest.Roots.SelectMany(root => root.DescendantsAndSelf())
+                        .Any(occurrence => prepared.GetPrecomputedPocOrdinaryCandidate(rest, occurrence)?.Type.Name == "PipelineMessage"), Is.True);
+                    var plan = prepared.PocGenerationEnvelope!.GetFile(rest.FileOwner);
+                    Assert.That(plan?.NativeConsumption is not null, Is.EqualTo(extraFiles == 0), "The control must distinguish a real plan from an unavailable one.");
+                    var reached = false;
+                    foreach (var provider in GetWrittenProviderStream(output, referenceMap))
+                    {
+                        var writer = new TypeProviderWriter(provider) { PreparedFieldTypes = prepared };
+                        prepared.BeginPocProviderWrite(provider, writer);
+                        var file = writer.Write();
+                        prepared.EndPocProviderWrite(provider, writer, file);
+                        if (!ReferenceEquals(provider, rest.FileOwner)) { continue; }
+                        reached = true;
+                        Assert.That(file.Content, Does.Contain("CreateThreeRequest("));
+                        Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                        Assert.That(rest.IsCurrent(), Is.True);
+                        Assert.That(prepared.CanCommit(), Is.True);
+                        Assert.That(prepared.IsPocCandidateFileWriteReceiptCurrent(rest, new PocWorkBudget(65536)), Is.EqualTo(extraFiles == 0));
+                        break;
+                    }
+                    Assert.That(reached, Is.True);
+                });
         }
 
         [TestCase(false)]
@@ -3362,7 +3817,8 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
                 var file = prepared.SourceFiles.Single(source => ReferenceEquals(source.FileOwner, owner));
                 var occurrence = file.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
                     .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
-                Assert.That(prepared.GetPrecomputedPocOrdinaryCandidate(file, occurrence), Is.Not.Null,
+                var candidate = prepared.GetPrecomputedPocOrdinaryCandidate(file, occurrence);
+                Assert.That(candidate, Is.Not.Null,
                     "The actual finalized Foo inventory/proposal must be supported before the zero-credit contrast.");
                 Assert.That(prepared.CanCommit(), Is.True);
                 var observe = typeof(PreparedFieldTypes).GetMethod("PocObservedInputsAreCurrent",
@@ -3370,11 +3826,45 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
                 var budget = new PocWorkBudget(262144);
                 Assert.That(observe.Invoke(prepared, new object[] { budget }), Is.True);
                 Assert.That(budget.Remaining, Is.LessThan(262144));
-                Assert.That(observe.Invoke(prepared, new object[] { new PocWorkBudget(0) }), Is.False,
+                var shortBudget = new PocWorkBudget(0);
+                Assert.That(observe.Invoke(prepared, new object[] { shortBudget }), Is.False,
                     "Stored namespace facts and a previous observation do not fund root/name/removal/receipt scans again.");
-                Assert.That(prepared.GetPrecomputedPocOrdinaryCandidate(file, occurrence), Is.Null,
-                    "The enclosing POC observation owns a sticky veto after an exhausted query.");
+                Assert.That(shortBudget.Exhausted, Is.True);
+                Assert.That(observe.Invoke(prepared, new object[] { new PocWorkBudget(262144) }), Is.True,
+                    "A separate funded observation must remain usable after the underfunded query.");
+                Assert.That(prepared.GetPrecomputedPocOrdinaryCandidate(file, occurrence), Is.SameAs(candidate),
+                    "A later independently funded POC query must not inherit the exhausted query's veto.");
                 Assert.That(prepared.CanCommit(), Is.True, "POC query exhaustion must not revoke independent Task03 choices.");
+                Assert.That(prepared.SourceFiles.All(source => !source.HasStarted), Is.True);
+            }, precomputePoc: true);
+        }
+
+        [Test]
+        public void RealFooPocInputObservationRetainsActualMismatchAfterRestoration()
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                var file = prepared.SourceFiles.Single(source => ReferenceEquals(source.FileOwner, owner));
+                var occurrence = file.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
+                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
+                Assert.That(prepared.GetPrecomputedPocOrdinaryCandidate(file, occurrence), Is.Not.Null);
+                var observe = typeof(PreparedFieldTypes).GetMethod("PocObservedInputsAreCurrent",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                Assert.That(observe.Invoke(prepared, new object[] { new PocWorkBudget(262144) }), Is.True);
+                var removed = ProviderReferenceMapAnalyzer.LatestResult!.RemoveCandidates;
+                var added = "Poc.InputMismatch." + Guid.NewGuid().ToString("N");
+                Assert.That(removed.Add(added), Is.True);
+                try
+                {
+                    var mismatchBudget = new PocWorkBudget(262144);
+                    Assert.That(observe.Invoke(prepared, new object[] { mismatchBudget }), Is.False);
+                    Assert.That(mismatchBudget.Exhausted, Is.False, "The veto must be caused by actual divergence, not exhausted credits.");
+                }
+                finally { removed.Remove(added); }
+                Assert.That(observe.Invoke(prepared, new object[] { new PocWorkBudget(262144) }), Is.False);
+                Assert.That(prepared.GetPrecomputedPocOrdinaryCandidate(file, occurrence), Is.Null,
+                    "An actually observed input mismatch must remain stale after restoration.");
+                Assert.That(prepared.CanCommit(), Is.True);
                 Assert.That(prepared.SourceFiles.All(source => !source.HasStarted), Is.True);
             }, precomputePoc: true);
         }
@@ -5012,6 +5502,29 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
                     Assert.That(supplemental.IsRejected, Is.False, "Late external exhaustion must not stale the completed POC receipt.");
                     Assert.That(supplemental.IsDocumentationConsumedExactlyOnce(memberDocs[0].Id, new PocWorkBudget(65536)), Is.True);
                     Assert.That(prepared.CanCommit(), Is.True, "POC-only traversal observation must not veto an independent field.");
+
+                    var retryNode = memberDocs.FirstOrDefault(node => ((XmlDocProvider)node.Producer).Parameters is
+                        List<Microsoft.TypeSpec.Generator.Statements.XmlDocParamStatement>);
+                    Assert.That(retryNode, Is.Not.Null, "The real Foo receipt must have a mutable documentation parameter carrier.");
+                    var retryParameters = (List<Microsoft.TypeSpec.Generator.Statements.XmlDocParamStatement>)((XmlDocProvider)retryNode!.Producer).Parameters;
+                    var originalCount = retryParameters.Count;
+                    var extraDoc = new Microsoft.TypeSpec.Generator.Statements.XmlDocParamStatement(new ParameterProvider("extra", $"extra", typeof(int)));
+                    retryParameters.AddRange(Enumerable.Repeat(extraDoc, 4097));
+                    try
+                    {
+                        var retryEnvelope = supplemental.GetDocumentation(retryNode.Id)!;
+                        Assert.That(retryEnvelope.IsCurrentWithoutInvalidating(new PocWorkBudget(65536), out var unavailable), Is.False);
+                        Assert.That(unavailable, Is.True, "The real Foo documentation child must exhaust its local limit.");
+                        var retryBudget = new PocWorkBudget(65536);
+                        Assert.That(supplemental.IsDocumentationConsumedExactlyOnce(retryNode.Id, retryBudget), Is.False);
+                        Assert.That(retryBudget.Exhausted, Is.False);
+                        Assert.That(supplemental.IsRejected, Is.False, "A child-local point-query veto must not stale the completed receipt.");
+                    }
+                    finally { retryParameters.RemoveRange(originalCount, retryParameters.Count - originalCount); }
+                    Assert.That(supplemental.IsDocumentationConsumedExactlyOnce(retryNode.Id, new PocWorkBudget(65536)), Is.True,
+                        "The original real Foo receipt remains available after an independently funded retry.");
+                    Assert.That(source.IsCurrent(), Is.True);
+                    Assert.That(prepared.CanCommit(), Is.True);
 
                     var sibling = source.Roots.SelectMany(root => root.DescendantsAndSelf()).Select(node => node.Producer)
                         .OfType<Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements>().Select(body => body.Statements)
@@ -7575,7 +8088,8 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
             bool addPocOrderingRoots = false, bool addPocDeclaringRoot = false, bool addPocFilteredRoot = false,
             bool addPocEmptyFactory = false, bool addPocParentDecisionRoots = false, bool addPocReentrantFactory = false,
             bool addPocImportReference = false, string? licenseHeader = null, bool pocFooFirst = false, bool finalizePocHeaders = false,
-            bool addPocUnreferencedModel = false, Func<GeneratorContext, ScmCodeModelGenerator>? generatorFactory = null)
+            bool addPocUnreferencedModel = false, Func<GeneratorContext, ScmCodeModelGenerator>? generatorFactory = null,
+            int pocExtraRoots = 0)
         {
             var directory = Path.Combine(Path.GetTempPath(), "typespec-prepared-foo-local-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
@@ -7689,6 +8203,13 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
                     var factory = new PocReentrantModelFactory(owner.Type.Namespace);
                     factory.EnsureBuilt();
                     output.TypeProviders = output.TypeProviders.Append(factory).ToArray();
+                }
+                if (pocExtraRoots > 0)
+                {
+                    var extras = Enumerable.Range(0, pocExtraRoots)
+                        .Select(index => new PocReceiptProvider("PocExtra" + index, "Sample.Extra", $"src/Generated/PocExtra{index}.cs")).ToArray();
+                    foreach (var extra in extras) { extra.EnsureBuilt(); }
+                    output.TypeProviders = output.TypeProviders.Concat(extras).ToArray();
                 }
                 using var referenceMap = observeAnalyzerActivity || precomputePoc || finalizePocHeaders
                     ? ProviderReferenceMapAnalyzer.PrepareForGenerationWithRootWitness(output, output.TypeProviders)

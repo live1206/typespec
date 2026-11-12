@@ -143,9 +143,15 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         internal bool IsCurrent => IsCurrentCore(invalidate: true);
         internal bool IsCurrentWithoutInvalidating(PocWorkBudget? budget = null) => IsCurrentCore(invalidate: false, budget);
 
-        private bool IsCurrentCore(bool invalidate, PocWorkBudget? budget = null)
+        internal bool IsCurrentWithoutInvalidating(PocWorkBudget? budget, out bool unavailable) => IsCurrentCore(invalidate: false, budget, out unavailable);
+
+        private bool IsCurrentCore(bool invalidate, PocWorkBudget? budget = null) => IsCurrentCore(invalidate, budget, out _);
+
+        private bool IsCurrentCore(bool invalidate, PocWorkBudget? budget, out bool unavailable)
         {
-            if (System.Threading.Volatile.Read(ref _stale) != 0 || !SourceCurrentnessChecks.Spend(budget)) { return false; }
+            unavailable = false;
+            if (System.Threading.Volatile.Read(ref _stale) != 0) { return false; }
+            if (!SourceCurrentnessChecks.Spend(budget)) { unavailable = budget?.Exhausted == true; return false; }
             if (_fileProfile)
             {
                 // Enforce the existing 4,096 child limit while charging each
@@ -153,9 +159,16 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 // A fixed maximum is not the work performed by every envelope.
                 var precheckBudget = new PocWorkBudget(4096, budget);
                 if (_filePrechecks.Any(check => !check(precheckBudget)))
-                { if (invalidate) { System.Threading.Interlocked.Exchange(ref _stale, 1); } return false; }
+                {
+                    // A child can exhaust without exhausting its parent. Keep
+                    // unavailability distinct from an observed mismatch.
+                    unavailable = precheckBudget.Exhausted;
+                    if (invalidate) { System.Threading.Interlocked.Exchange(ref _stale, 1); }
+                    return false;
+                }
             }
             if (_checks.All(check => SourceCurrentnessChecks.Spend(budget) && check(budget))) { return true; }
+            unavailable = budget?.Exhausted == true;
             if (invalidate) { System.Threading.Interlocked.Exchange(ref _stale, 1); }
             return false;
         }

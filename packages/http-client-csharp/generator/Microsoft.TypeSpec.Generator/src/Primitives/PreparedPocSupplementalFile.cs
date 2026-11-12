@@ -277,11 +277,14 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         internal void ObserveCurrent()
         {
             var budget = new PocWorkBudget(65536);
-            if (!ObserveCurrent(budget) && budget.Exhausted) { Fail(); }
+            if (!ObserveCurrent(budget, out var unavailable) && (budget.Exhausted || unavailable)) { Fail(); }
         }
 
-        private bool ObserveCurrent(PocWorkBudget budget)
+        private bool ObserveCurrent(PocWorkBudget budget) => ObserveCurrent(budget, out _);
+
+        private bool ObserveCurrent(PocWorkBudget budget, out bool unavailable)
         {
+            unavailable = false;
             if (Volatile.Read(ref _failed) != 0 || !budget.TrySpend()) { return false; }
             if (!_file.IsShapeCurrentWithoutInvalidating(budget)) { return RejectObservedMismatch(budget); }
             // Dictionary value views can be initialized lazily; pay before
@@ -296,7 +299,13 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             foreach (var envelope in _documentation.Values)
             {
                 if (!budget.TrySpend()) { return false; }
-                if (!envelope.IsCurrentWithoutInvalidating(budget)) { return RejectObservedMismatch(budget); }
+                if (!envelope.IsCurrentWithoutInvalidating(budget, out unavailable))
+                {
+                    // A child-local limit is not a funded mismatch, even when
+                    // the enclosing point-query budget still has credits.
+                    if (unavailable) { return false; }
+                    return RejectObservedMismatch(budget);
+                }
             }
             foreach (var field in _safeFields)
             {

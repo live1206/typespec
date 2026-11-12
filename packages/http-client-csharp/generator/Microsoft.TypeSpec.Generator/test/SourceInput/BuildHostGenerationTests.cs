@@ -119,6 +119,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.SourceInput
         [Test]
         public async Task PocProposalIsPreparedBeforeActualOutputProviderWrites()
         {
+            using var globalState = new GeneratorGlobalStateSnapshot();
             var directory = Path.Combine(Path.GetTempPath(), "typespec-poc-generation", Guid.NewGuid().ToString("N"));
             var original = Path.Combine(directory, "original");
             var isolated = Path.Combine(directory, "isolated");

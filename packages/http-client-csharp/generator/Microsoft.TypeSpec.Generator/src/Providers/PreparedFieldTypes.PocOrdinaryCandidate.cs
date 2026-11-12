@@ -785,11 +785,13 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 // Reserve the possible POC-only rejection before observing a
                 // mismatch; do not partly record it after exhausting credits.
                 !budget.TrySpendReferenceLookup(_pocInvalidCandidateFiles.Count)) { return false; }
-            if (PocGenerationEnvelope is { } envelope)
-            {
-                var plan = envelope.GetFile(file.FileOwner, budget);
-                if (budget.Exhausted || plan is { HasObservedParameterSelectionFailure: true } && ReferenceEquals(plan.Source, file)) { return false; }
-            }
+            // An absent native declaration plan cannot certify selection for
+            // this candidate file. This is a query-only veto: do not poison
+            // shared state or require full native completion after a late failure.
+            if (PocGenerationEnvelope is not { } envelope) { return false; }
+            var plan = envelope.GetFile(file.FileOwner, budget);
+            if (budget.Exhausted || plan is null || !ReferenceEquals(plan.Source, file) ||
+                plan.NativeConsumption is null || plan.HasObservedParameterSelectionFailure) { return false; }
             if (file.IsCurrentWithoutInvalidating(budget)) { return true; }
             // Running out of credits does not establish a source mismatch and
             // must not poison a later independently funded POC query.
@@ -896,11 +898,18 @@ namespace Microsoft.TypeSpec.Generator.Providers
             if (budget.Exhausted || !budget.TrySpendReferenceLookup(_pocHeaders.Count)) { return false; }
             if (!_pocHeaders.TryGetValue(file.FileOwner, out var header) || !ReferenceEquals(header.File, file) || header.Invalid) { return true; }
             if (!budget.TrySpendReferenceLookup(_pocInvalidCandidateFiles.Count)) { return false; }
+            bool unavailable = false;
             if ((header.WarningsSeen && (!ReferenceEquals(file.FileOwner.CachedDisabledFileWarnings, header.Warnings) ||
                     header.WarningEnvelope?.IsCurrentWithoutInvalidating(budget) != true)) ||
                 (header.DocsSeen && header.DocsEmitted &&
-                    (!ReferenceEquals(file.FileOwner.CachedXmlDocs, header.Docs) || header.DocumentationEnvelope?.IsCurrentWithoutInvalidating(budget) != true)))
-            { InvalidatePocHeader(header); }
+                    (!ReferenceEquals(file.FileOwner.CachedXmlDocs, header.Docs) || header.DocumentationEnvelope is not { } envelope ||
+                        !envelope.IsCurrentWithoutInvalidating(budget, out unavailable))))
+            {
+                // Point-query exhaustion is not evidence of divergence. The
+                // void native observer separately rejects unavailable coverage.
+                if (budget.Exhausted || unavailable) { return false; }
+                InvalidatePocHeader(header);
+            }
             return true;
         }
 

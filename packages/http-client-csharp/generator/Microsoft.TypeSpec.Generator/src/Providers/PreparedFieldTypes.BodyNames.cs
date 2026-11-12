@@ -47,7 +47,12 @@ namespace Microsoft.TypeSpec.Generator.Providers
             if (_bodyImports.TryGetValue(owner, out var imports)) { imports.Add(namespaceName); }
         }
 
-        internal PreparedTypeOfNamespacePermission? GetTypeOfNamePermission(PreparedSourceFile file, PreparedSourceOccurrence occurrence)
+        // Inspection remains separate from the Task03 writer lookup. A future
+        // Task04 inspection result must never become Task03 emission authority.
+        internal IPreparedTypeOfNameInspection? GetTypeOfNamePermission(PreparedSourceFile file, PreparedSourceOccurrence occurrence) =>
+            GetTask03TypeOfNamePermission(file, occurrence);
+
+        internal PreparedTypeOfNamespacePermission? GetTask03TypeOfNamePermission(PreparedSourceFile file, PreparedSourceOccurrence occurrence)
         {
             // No new permission means no new environment/currentness callbacks.
             if (_prospectiveAwaitingDecision || !_typeOfNames.TryGetValue(occurrence.Id, out var permission) || !ReferenceEquals(permission.File, file) ||

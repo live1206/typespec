@@ -61,11 +61,28 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         private PocDeclarationWorkBudget? _declarationBudget;
         private Root? _active;
         private int _nextRoot, _nextNode, _opaqueDepth, _events;
-        private int _declarationState, _nextParameter, _parameterSelectionFailure;
-        private bool _started, _failed, _completed, _rootObserved;
+        private int _declarationState, _nextParameter, _parameterSelectionFailure, _startClaim, _failed;
+        private bool _started, _completed, _rootObserved;
         private string? _failure;
+        private CodeWriter? _failureObserver;
         internal string? Failure => _failure ?? (_completed && _constraint is not null && !_constraint.HasObservedExpectedEmission ? "constraint-contract" : null);
-        private void Fail(string reason) { _failure ??= reason; _failed = true; }
+        internal bool HasFailed => System.Threading.Volatile.Read(ref _failed) != 0;
+        internal bool HasOpenDeclaration => System.Threading.Volatile.Read(ref _declarationState) == 1;
+
+        private void Fail(string reason)
+        {
+            System.Threading.Interlocked.CompareExchange(ref _failure, reason, null);
+            if (System.Threading.Interlocked.Exchange(ref _failed, 1) == 0)
+            {
+                // The observer is the exact sealed physical writer, not a
+                // user callback. Exchange releases the reverse reference even
+                // when a native write fails before its normal completion.
+                NotifyFailureObserver();
+            }
+        }
+
+        private void NotifyFailureObserver() =>
+            System.Threading.Interlocked.Exchange(ref _failureObserver, null)?.OnPocConsumptionFailed(this);
 
         private PreparedPocFileConsumption(PreparedSourceFile source, ImmutableArray<Root> roots, PreparedPocTypeConstraint? constraint)
         { _source = source; _roots = roots; _constraint = constraint; }
@@ -141,6 +158,9 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                     }
                 }
             }
+            // Prepay the fixed physical-writer binding, one failure
+            // notification/pending veto, and release before any of them occur.
+            if (!budget.TrySpend(24)) { failure = "notification-budget"; return null; }
             failure = null;
             return new PreparedPocFileConsumption(source, roots.ToImmutable(), constraint);
         }
@@ -203,23 +223,59 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return true;
         }
 
-        internal PreparedPocFileConsumption? Start(PreparedFieldTypes preparation, TypeProviderWriter writer, PocDeclarationWorkBudget declarationBudget)
+        internal PreparedPocFileConsumption? Start(PreparedFieldTypes preparation, TypeProviderWriter writer,
+            PocDeclarationWorkBudget declarationBudget, CodeWriter? observer)
         {
-            if (_started || !preparation.OwnsPocSupplementalWrite(_source, writer)) { Fail("start-or-ownership"); return null; }
-            _started = true; _preparation = preparation; _writer = writer; _declarationBudget = declarationBudget;
+            // Once rejected, repeated starts must not repeat failure
+            // bookkeeping after the shared ledger has stopped paying for work.
+            if (HasFailed) { return null; }
+            // Fund the actual ownership probe and atomic start claim before
+            // either operation; this ledger is shared by the generation.
+            if (!declarationBudget.TrySpendReferenceLookup(preparation.PocSourceFileCount))
+            {
+                // Publish rejection in the same atomic claim that selects the
+                // notifier. A separate claim before _failed would let another
+                // start return while the writer still sees an unfailed plan.
+                System.Threading.Interlocked.CompareExchange(ref _failure, "start-budget", null);
+                if (System.Threading.Interlocked.CompareExchange(ref _failed, 1, 0) == 0)
+                { NotifyFailureObserver(); }
+                return null;
+            }
+            if (System.Threading.Interlocked.CompareExchange(ref _startClaim, 1, 0) != 0 ||
+                !preparation.OwnsPocSupplementalWrite(_source, writer)) { Fail("start-or-ownership"); return null; }
+            _preparation = preparation; _writer = writer; _declarationBudget = declarationBudget;
+            if (observer is not null) { System.Threading.Volatile.Write(ref _failureObserver, observer); }
+            System.Threading.Volatile.Write(ref _started, true);
+            // A competing failed start may have happened before publication.
+            if (HasFailed)
+            {
+                NotifyFailureObserver();
+                return null;
+            }
             return this;
         }
 
+        internal void ReleaseFailureObserver(CodeWriter observer) =>
+            System.Threading.Interlocked.CompareExchange(ref _failureObserver, null, observer);
+
         private bool ObserveBoundary()
         {
-            if (_failed || _completed || ++_events > 262144 || _preparation is null || _writer is null ||
+            if (HasFailed)
+            {
+                // Help the first failure publish detachment if its thread was
+                // delayed before taking the one-time physical-writer observer.
+                NotifyFailureObserver();
+                return false;
+            }
+            if (_completed || ++_events > 262144 || _preparation is null || _writer is null ||
                 !_preparation.OwnsPocSupplementalWrite(_source, _writer)) { Fail("boundary-or-ownership"); return false; }
             return true;
         }
 
         internal IDisposable BeginRoot(TypeProvider owner, string role, int index)
         {
-            if (!ObserveBoundary() || _active is not null || _nextRoot >= _roots.Length)
+            if (!ObserveBoundary()) { return PreparedSourceFile.EmptyScope.Instance; }
+            if (_active is not null || _nextRoot >= _roots.Length)
             { Fail($"root-state:{role}[{index}]"); return PreparedSourceFile.EmptyScope.Instance; }
             var root = _roots[_nextRoot];
             if (!ReferenceEquals(root.Owner, owner) || root.Role != role || root.Index != index)
@@ -230,7 +286,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return new Scope(() =>
             {
                 if (System.Threading.Volatile.Read(ref _declarationState) == 1 && !HasParameterSelectionFailure) { FailParameterSelection("declaration-incomplete"); }
-                if (!_failed && (!ReferenceEquals(_active, root) || !_rootObserved || _nextNode != root.Entries.Length))
+                if (!HasFailed && (!ReferenceEquals(_active, root) || !_rootObserved || _nextNode != root.Entries.Length))
                 { Fail($"root-incomplete:{root.Role}[{root.Index}]:{_nextNode}/{root.Entries.Length}"); }
                 _active = null; _opaqueDepth = 0;
             });
@@ -239,13 +295,14 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         // Root roles alone do not identify a field/property/method/constructor.
         // Observe the object actually retained by the native writer after its
         // existing root-entry callbacks, including every repeated enum access.
-        internal void ObserveRootProducer(object producer)
+        internal bool ObserveRootProducer(object producer)
         {
-            if (!ObserveBoundary() || _active is not { Producer: not null } root)
-            { Fail("root-producer-state"); return; }
+            if (!ObserveBoundary()) { return false; }
+            if (_active is not { Producer: not null } root) { Fail("root-producer-state"); return false; }
             if (!ReferenceEquals(root.Producer, producer))
-            { Fail($"root-producer:{root.Role}[{root.Index}]"); return; }
+            { Fail($"root-producer:{root.Role}[{root.Index}]"); return false; }
             _rootObserved = true;
+            return true;
         }
 
         internal IDisposable Enter(object producer)
@@ -260,7 +317,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return new Scope(() =>
             {
                 if (entry.Opaque) { _opaqueDepth--; }
-                if (!_failed && _nextNode != entry.End) { Fail($"subtree-incomplete:{root.Role}[{root.Index}]:{_nextNode}/{entry.End}"); }
+                if (!HasFailed && _nextNode != entry.End) { Fail($"subtree-incomplete:{root.Role}[{root.Index}]:{_nextNode}/{entry.End}"); }
             });
         }
 
@@ -270,11 +327,20 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             Fail(reason);
         }
 
+        internal void MarkOpenDeclarationUnavailable() => FailParameterSelection("declaration-unavailable");
+
         private bool ObserveDeclarationBoundary()
         {
             // An earlier sidecar failure does not invalidate shared traversal,
             // but a later native declaration is no longer observable here.
-            if (_failed || _completed) { FailParameterSelection("declaration-unavailable"); return false; }
+            if (HasFailed || _completed)
+            {
+                // A notifier can transiently republish a pending declaration
+                // after this sticky veto was already recorded. Do not repeat
+                // failure bookkeeping when the writer observes that pointer.
+                if (!HasParameterSelectionFailure) { FailParameterSelection("declaration-unavailable"); }
+                return false;
+            }
             if (_preparation is null || _writer is null || _declarationBudget is null ||
                 !_declarationBudget.TrySpendReferenceLookup(_preparation.PocSourceFileCount))
             { FailParameterSelection("declaration-budget-or-state"); return false; }
@@ -313,11 +379,11 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
         internal void Complete()
         {
-            if (!ObserveBoundary() || _active is not null || _nextRoot != _roots.Length) { Fail($"file-incomplete:{_nextRoot}/{_roots.Length}"); }
+            if (ObserveBoundary() && (_active is not null || _nextRoot != _roots.Length)) { Fail($"file-incomplete:{_nextRoot}/{_roots.Length}"); }
             _completed = true;
         }
 
-        internal bool HasCompleted => _started && _completed && !_failed &&
+        internal bool HasCompleted => _started && _completed && !HasFailed &&
             (_constraint is null || _constraint.HasObservedExpectedEmission);
 
         private sealed class Scope(Action end) : IDisposable

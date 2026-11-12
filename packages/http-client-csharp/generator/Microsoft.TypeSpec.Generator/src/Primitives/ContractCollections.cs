@@ -73,8 +73,28 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return budget.TrySpend(count);
         }
 
+        internal static bool IsExactList<T>(IReadOnlyList<T>? list) => list is List<T> && list.GetType() == typeof(List<T>);
+
         internal static bool TryCopyForPoc<T>(IReadOnlyList<T>? list, PocWorkBudget budget, out ImmutableArray<T> items)
         {
+            if (IsExactList(list))
+            {
+                var values = (List<T>)list!;
+                // Bind the enumerator before reading the size and never copy
+                // beyond the paid size, even if the live list grows later.
+                var enumerator = values.GetEnumerator();
+                int count = values.Count;
+                if (!budget.TrySpend(count)) { items = []; return false; }
+                var builder = ImmutableArray.CreateBuilder<T>(count);
+                for (int index = 0; index < count; index++)
+                {
+                    if (!TryMoveNextExactList(ref enumerator, out var moved) || !moved) { items = []; return false; }
+                    builder.Add(enumerator.Current);
+                }
+                if (!TryMoveNextExactList(ref enumerator, out var extra) || extra) { items = []; return false; }
+                items = builder.MoveToImmutable();
+                return true;
+            }
             if (!ReserveForPoc(list, budget)) { items = []; return false; }
             if (list is ProducerOwnedReadOnlyList<T> owned)
             {
@@ -86,12 +106,23 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return TryCopy(list, out items);
         }
 
+        // Exact List<T> uses the BCL enumerator, not a user callback. Contain
+        // mutation exceptions only at that operation and publish no partial copy.
+        private static bool TryMoveNextExactList<T>(ref List<T>.Enumerator enumerator, out bool moved)
+        {
+            try { moved = enumerator.MoveNext(); return true; }
+            catch (InvalidOperationException) { moved = false; return false; }
+            catch (IndexOutOfRangeException) { moved = false; return false; }
+        }
+
         // Capture-only provenance. Do not use this fallback to claim that an
         // opaque carrier's current elements still match its construction values.
         internal static bool TryCopyPocConstruction<T>(IReadOnlyList<T>? list, PocWorkBudget budget, out ImmutableArray<T> items)
         {
             if (TryCopyForPoc(list, budget, out items)) { return true; }
-            return !budget.Exhausted && ConstructedCollectionWitness.TryCopyConstruction(list, budget, out items);
+            // An admitted list that changed during capture is not an opaque
+            // carrier eligible for a construction-time witness fallback.
+            return !IsExactList(list) && !budget.Exhausted && ConstructedCollectionWitness.TryCopyConstruction(list, budget, out items);
         }
 
         internal static bool SameReferencesForPoc<T>(IReadOnlyList<T>? list, ImmutableArray<T> snapshot, PocWorkBudget budget) where T : class

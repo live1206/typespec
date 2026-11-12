@@ -106,7 +106,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                     !ReferenceEquals(_occurrence.Producer, _root.Producer) ||
                 !Current(_root, _disableXmlDocs, budget, 0))
             {
-                _stale = true;
+                if (!budget.Exhausted) { _stale = true; }
                 return false;
             }
             return true;

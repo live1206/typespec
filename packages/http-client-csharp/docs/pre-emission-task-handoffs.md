@@ -5,8 +5,12 @@ the [shared implementation guide](./pre-emission-implementation-guide.md), then
 the owning task's handoff and authoritative issue comment.
 
 Tasks01-03 are integrated at baseline 674e6ca. Task04's existing handoff is copied
-here from its planning branch; Tasks05-19 below are planning documents, not claims
-that their implementation, missing facts or validation already exist.
+here from its planning branch. The handoffs below define task plans, not claims
+of full implementation or validation. Task05 has a bounded
+[first-checkpoint implementation](./pre-emission-task05-checkpoint.md) whose
+final-currentness and suppression-admission corrections passed fresh canonical
+validation and complete stable independent review. This bounded checkpoint is
+accepted; broader Task05 work and SDK adoption remain open.
 
 | Task | Implementation handoff                                                                                | Authoritative contract                                                               |
 | ---- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |

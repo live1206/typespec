@@ -68,7 +68,21 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             }
         }
 
-        private static bool HasKnownHeader(TypeProvider owner, CSharpType? permittedMetadataBase = null)
+        private static bool HasKnownHeader(TypeProvider owner, CSharpType? permittedMetadataBase = null) =>
+            HasKnownNativeEmissionHeaderCore(owner, permittedMetadataBase) &&
+            owner.PinnedRelativeFilePath is { Length: > 0 } path &&
+            path.IndexOfAny(['\r', '\n', '\u0085', '\u2028', '\u2029']) < 0;
+
+        // Native cached-input/dispatch facts only: no documentation, path,
+        // symbol selection or grouping permission. Ordinary grammar consumes
+        // only the no-base profile; metadata-base callers retain their proof.
+        internal static bool HasKnownNativeEmissionHeader(TypeProvider owner) => HasKnownNativeEmissionHeaderCore(owner, null);
+
+        internal static bool HasKnownNativeEmissionHeader(TypeProvider owner, PreparedNativeFileWarningFacts warningFacts) =>
+            warningFacts is not null && HasKnownNativeEmissionHeaderCore(owner, null, warningFacts);
+
+        private static bool HasKnownNativeEmissionHeaderCore(TypeProvider owner, CSharpType? permittedMetadataBase,
+            PreparedNativeFileWarningFacts? warningFacts = null)
         {
             if (owner.CachedType is not { } type || type.GetType() != typeof(CSharpType) || type.IsFrameworkType ||
                 type.DeclaringType is not null || !ReferenceEquals(type.BaseType, permittedMetadataBase) || !Identifier(type.Name) ||
@@ -78,19 +92,21 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             const TypeSignatureModifiers allowed = TypeSignatureModifiers.Class | TypeSignatureModifiers.Public | TypeSignatureModifiers.Internal | TypeSignatureModifiers.Partial;
             if ((modifiers & ~allowed) != 0 || (modifiers & (TypeSignatureModifiers.Public | TypeSignatureModifiers.Internal)) ==
                 (TypeSignatureModifiers.Public | TypeSignatureModifiers.Internal)) { return false; }
-            // An observed path is not a cached value of the intentionally uncached
-            // RelativeFilePath getter. This first family requires explicit pinning.
-            if (owner.PinnedRelativeFilePath is not { Length: > 0 } path || path.IndexOfAny(['\r', '\n', '\u0085', '\u2028', '\u2029']) >= 0 ||
-                !owner.IsCustomCodeViewMaterialized || owner.CachedCustomCodeView is not null || owner.SerializationProviderOwner is not null ||
+            if (!owner.IsCustomCodeViewMaterialized || owner.CachedCustomCodeView is not null || owner.SerializationProviderOwner is not null ||
                 owner.CachedWhereClause is not null || !ContractCollections.TryCopy(owner.CachedImplements, out var interfaces) || !interfaces.IsEmpty ||
                 !ContractCollections.TryCopy(owner.CachedWriteAttributes, out var attributes) || !attributes.IsEmpty ||
-                !ContractCollections.TryCopy(owner.CachedDisabledFileWarnings, out var warnings) || !warnings.IsEmpty) { return false; }
+                !HasKnownEmptyFileWarnings(owner, warningFacts)) { return false; }
             // These null-returning getters are not memoized when they return null.
             // Inspect dispatch metadata rather than calling an override to guess
             // what its next invocation during writing might do.
             return DefaultMethod(owner, "BuildWhereClause") && DefaultMethod(owner, "BuildDeclaringTypeProvider") &&
                 DefaultMethod(owner, "get_ShouldWriteTypeXmlDocs") && DefaultMethod(owner, "get_ShouldAnalyzeAttributesInReferenceMap");
         }
+
+        private static bool HasKnownEmptyFileWarnings(TypeProvider owner, PreparedNativeFileWarningFacts? facts) =>
+            facts is null
+                ? ContractCollections.TryCopy(owner.CachedDisabledFileWarnings, out var warnings) && warnings.IsEmpty
+                : facts.IsCurrentAndEmptyFor(owner);
 
         private static bool DefaultMethod(TypeProvider owner, string name) =>
             owner.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance, null, Type.EmptyTypes, null)?.DeclaringType == typeof(TypeProvider);

@@ -41,6 +41,16 @@ dummy field or type reference. Use the actual parent role, plus an observed
 counterpart that retains. Assert prepared/raw form, native operations/diagnostics
 and captured text, one traversal and changed-child same-pass fallback.
 
+## Checkpoint implementation status
+
+The bounded first-checkpoint implementation and its remaining allocation debt are
+described in [Task05 first checkpoint](./pre-emission-task05-checkpoint.md).
+The final-currentness and suppression-admission corrections passed fresh focused
+and broader canonical validation and complete stable independent review. This
+bounded first checkpoint is accepted. See its status for precise scope, evidence
+and limits. Neither the checkpoint nor
+the isolated trial is full task or SDK adoption evidence.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

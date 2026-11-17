@@ -86,6 +86,8 @@ namespace Microsoft.TypeSpec.Generator
         public virtual TypeFactory TypeFactory { get; }
 
         private SourceInputModel? _sourceInputModel;
+        // Nonforcing base storage, not a certificate for arbitrary virtual getter behavior.
+        internal SourceInputModel? CachedSourceInputModel => _sourceInputModel;
         private List<LibraryRewriter> _rewriters = [];
 
         public virtual SourceInputModel SourceInputModel

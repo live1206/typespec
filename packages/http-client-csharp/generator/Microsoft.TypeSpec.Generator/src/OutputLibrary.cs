@@ -12,6 +12,8 @@ namespace Microsoft.TypeSpec.Generator
     public class OutputLibrary
     {
         private IReadOnlyList<TypeProvider>? _typeProviders;
+        // Observe the actual invocation owner's slot without rebuilding a root list.
+        internal IReadOnlyList<TypeProvider>? CachedTypeProviders => _typeProviders;
         public IReadOnlyList<TypeProvider> TypeProviders
         {
             get => _typeProviders ??= BuildTypeProviders();

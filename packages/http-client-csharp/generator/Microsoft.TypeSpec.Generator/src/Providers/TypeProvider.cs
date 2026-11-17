@@ -411,6 +411,25 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         // Generated declaration restrictions. Preparation separately validates
         // and merges the scope of any already-loaded custom partial declarations.
+        // A final veto for Task05's mixed-file selection path. Null-returning
+        // builders are not memoized, so only native default null dispatch is
+        // inspected here; this predicate must never invoke those builders.
+        internal bool HasCachedSimpleFieldTypeScope
+        {
+            get
+            {
+                bool Default(string name) => GetType().GetMethod(name,
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+                    binder: null, types: System.Type.EmptyTypes, modifiers: null)?.DeclaringType == typeof(TypeProvider);
+                return _declarationModifiers is { } modifiers && modifiers.HasFlag(TypeSignatureModifiers.Class) &&
+                    _type is { DeclaringType: null } type && ContractCollections.TryCopy(type.Arguments, out var arguments) && arguments.IsEmpty &&
+                    _baseType is null && _whereClause is null && _declaringTypeProvider is null &&
+                    _customCodeView.IsValueCreated && _customCodeView.Value is null &&
+                    Default(nameof(BuildBaseType)) && Default(nameof(BuildWhereClause)) && Default(nameof(BuildDeclaringTypeProvider)) &&
+                    ContractCollections.TryCopy(_implements, out var interfaces) && interfaces.IsEmpty;
+            }
+        }
+
         internal bool HasSimpleFieldTypeScope =>
             DeclarationModifiers.HasFlag(TypeSignatureModifiers.Class) &&
             DeclaringTypeProvider is null && Type.DeclaringType is null && !Type.IsGenericType &&

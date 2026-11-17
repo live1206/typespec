@@ -99,7 +99,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                             producer is KeywordExpression { Keyword: "return" } && child.Role == "value" ? _methodReturnType : null),
                     child.MethodReturnType ?? (producer is MethodBodyStatement and not DeclareLocalFunctionStatement ||
                         producer is ScopedApi scope && PreparedCallProofs.IsTransparentWrapper(scope) ? _methodReturnType : null),
-                    child.ParameterOwner is { } parameterOwner ? PreparedMethodParameterFrame.TryCapture(parameterOwner, child.Producer) : _parameterFrame, resolveGeneratedGroup, resolveReducedGroup,
+                    child.ParameterOwner is { } parameterOwner ? PreparedMethodParameterFrame.TryCaptureForSource(parameterOwner, child.Producer) : _parameterFrame, resolveGeneratedGroup, resolveReducedGroup,
                     child.ParameterOwner is { } methodOwner
                         ? PreparedLambdaParameterPlan.TryCapture(methodOwner, child.Producer, id with { EdgePath = id.EdgePath + "/" + child.Role }, compilation, resolveCallType, callEnvironmentCurrent)
                         : lambdaParameterPlan, allowBaseInitializer, _constructorFrame)).ToImmutableArray();
@@ -137,6 +137,20 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         private CSharpType? ResolveDirectParameterType(ParameterProvider parameter, string emittedName) => _parameterFrame?.Resolve(parameter, emittedName);
 
         private CSharpType? ResolveOwningType(InvokeMethodExpression invocation) => _parameterFrame?.ResolveOwningType(invocation);
+
+        // Include opaque nodes and frame-held parameters: neither an indexer
+        // formal nor a formal behind an opaque signature must be a child node.
+        // This is a nonforcing fact, not currentness or simplification permission.
+        internal bool HasCachedParameterEmittedStates =>
+            (_parameterFrame?.HasCachedParameterEmittedStates != false) &&
+            (Producer is not ParameterProvider parameter || parameter.HasCachedEmittedDeclarationState) &&
+            (Producer is not IndexPropertyProvider indexer || indexer.IndexerParameter?.HasCachedEmittedDeclarationState == true) &&
+            // An opaque signature has no parameter children, and a newly declined
+            // binary frame cannot lend its retained list to this availability veto.
+            (!IsOpaque || Producer is not MethodSignatureBase signature ||
+                ContractCollections.TryCopy(signature.Parameters, out var parameters) &&
+                parameters.All(formal => formal is not null && formal.HasCachedEmittedDeclarationState)) &&
+            Children.All(child => child.HasCachedParameterEmittedStates);
 
         internal bool IsCurrent()
         {

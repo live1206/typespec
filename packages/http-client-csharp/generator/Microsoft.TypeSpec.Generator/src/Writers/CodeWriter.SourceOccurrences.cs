@@ -13,6 +13,30 @@ namespace Microsoft.TypeSpec.Generator
         private PreparedFieldTypes? _sourcePreparation;
         private TypeProviderWriter? _standardSourceWriter;
         private PreparedSourceFile? _sourceFile;
+
+        internal int PreparedGroupingCount { get; private set; }
+        internal bool TryBeginPocGrouping(BinaryOperatorExpression binary)
+        {
+            bool used = _qualifiedBuilder is not null && !_atBeginningOfLine && _sourcePreparation is not null &&
+                _sourceFile is not null && _sourceCursor?.Current is { } node &&
+                _sourcePreparation.TryUsePocGrouping(_sourceFile, node, binary);
+            if (used) { PreparedGroupingCount++; }
+            return used;
+        }
+
+        internal void PocAfterGroupingOpening() => _sourcePreparation?.PocAfterOpening?.Invoke();
+
+        internal void AppendPocGroupingDelimiter(char delimiter)
+        {
+            // Prefix/children already establish a non-BOL token. The omitted
+            // delimiter has no selected bytes, line break or indentation effect.
+            if (_qualifiedBuilder is null || _atBeginningOfLine) { throw new System.InvalidOperationException("Probe delimiter precondition"); }
+            var destination = _qualifiedBuilder.GetSpan(1);
+            destination[0] = delimiter;
+            _qualifiedBuilder.Advance(1);
+            _qualifiedPayloadLength = checked(_qualifiedPayloadLength + 1);
+        }
+
         private PreparedSourceFile.Cursor? _sourceCursor;
         internal PreparedSourceOccurrence? CurrentSourceOccurrence => _sourceCursor?.Current;
         internal PreparedSourceObservations.PreparedOccurrenceObservations? CurrentSourceObservations => _sourceCursor?.Current is { } occurrence
@@ -54,6 +78,7 @@ namespace Microsoft.TypeSpec.Generator
 
         internal IDisposable EnterSourceNode(object producer)
         {
+            _sourcePreparation?.PocNativeWriteObserver?.Invoke(producer);
             _sourcePreparation?.ObserveSourceSnapshot();
             return _sourceCursor?.Enter(producer) ?? PreparedSourceFile.EmptyScope.Instance;
         }

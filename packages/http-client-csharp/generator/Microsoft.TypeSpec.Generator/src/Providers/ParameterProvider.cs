@@ -296,6 +296,10 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private VariableExpression? _asVariable;
         internal VariableExpression? CachedVariableExpression => _asVariable;
 
+        // The emitted-state accessor falls back to culture-sensitive spelling
+        // only when this native cached name is absent. Never materialize it here.
+        internal bool HasCachedEmittedDeclarationState => _asVariable?.Declaration?.RequestedName is not null;
+
         // Canonical lazy materialization has zero revisions and the same expected
         // spelling; observe its cached carrier without creating it during capture.
         internal (long Variable, long Declaration, string Name) EmittedDeclarationState =>

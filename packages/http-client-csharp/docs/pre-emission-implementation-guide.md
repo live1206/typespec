@@ -8,8 +8,9 @@ the individual handoff and its linked authoritative issue comment.
 Planning is centralized on fork branch **feature/pre-emission-field-types**,
 starting at 674e6ca75851acab5e4289e4034878664b102264, after Tasks01-03 merged.
 These documents authorize no new public/default rollout or source changes by
-the documentation commit itself. Task04 and later capabilities described here
-are plans, not already implemented interfaces.
+the documentation commit itself. Task04 and later handoffs describe plans unless an owning task explicitly records
+a bounded implementation checkpoint. A checkpoint is not full task completion;
+its validation and review status must be stated separately.
 
 The revised task comments and
 [Task19](https://github.com/microsoft/typespec/issues/12454#issuecomment-6543557177)

@@ -187,7 +187,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 HasNoMappedSuppressionProvider(factory, returns) && ContractCollections.TryCopy(method.Suppressions, out var suppressions) && suppressions.IsEmpty;
         }
 
-        private static TypeFactory? AuditedTypeFactory(CodeModelGenerator generator)
+        internal static TypeFactory? AuditedTypeFactory(CodeModelGenerator generator)
         {
             // The default accessor only reads its readonly, eagerly constructed
             // service. Inspect dispatch BEFORE invocation: an override can mutate

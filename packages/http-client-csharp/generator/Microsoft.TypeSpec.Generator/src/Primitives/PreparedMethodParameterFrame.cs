@@ -24,10 +24,13 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         private readonly ImmutableArray<ParameterState> _states;
         private readonly ImmutableArray<(object Producer, StructuredSourceShape Shape)> _region;
         private readonly InvokeMethodExpression? _ownedBlockInvocation;
+        private readonly PreparedEqualityRegion? _equalityRegion;
+        internal bool HasDirectEqualityRegion => _equalityRegion is not null;
         private int _stale;
 
         private PreparedMethodParameterFrame(MethodProvider method, object body, ImmutableArray<ParameterState> states,
-            ImmutableArray<(object Producer, StructuredSourceShape Shape)> region, InvokeMethodExpression? ownedBlockInvocation)
+            ImmutableArray<(object Producer, StructuredSourceShape Shape)> region, InvokeMethodExpression? ownedBlockInvocation,
+            PreparedEqualityRegion? equalityRegion)
         {
             _method = method;
             _revision = method.DeclarationRevision;
@@ -38,9 +41,16 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             _states = states;
             _region = region;
             _ownedBlockInvocation = ownedBlockInvocation;
+            _equalityRegion = equalityRegion;
         }
 
-        internal static PreparedMethodParameterFrame? TryCapture(MethodProvider method, object body)
+        internal static PreparedMethodParameterFrame? TryCapture(MethodProvider method, object body) =>
+            TryCaptureCore(method, body, sourceCapture: false);
+
+        internal static PreparedMethodParameterFrame? TryCaptureForSource(MethodProvider method, object body) =>
+            TryCaptureCore(method, body, sourceCapture: true);
+
+        private static PreparedMethodParameterFrame? TryCaptureCore(MethodProvider method, object body, bool sourceCapture)
         {
             if (!ReferenceEquals((object?)method.BodyStatements ?? method.BodyExpression, body) ||
                 !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters)) { return null; }
@@ -49,13 +59,23 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             if (!CaptureRegion(body, region, new HashSet<object>(ReferenceEqualityComparer.Instance), 0,
                 allowThis: PreparedGeneratedMethodGroup.HasOwningRootCallProfile(method),
                 allowDeclarations: ownedBlockInvocation is not null)) { return null; }
+            var capturedRegion = region.ToImmutable();
+            // Binary regions are a new source-capture family. Do not introduce
+            // parameter-spelling callbacks where the old grammar returned no frame.
+            // Explicit frame capture keeps its original observation order; source
+            // capture admits the new family only with actual native cached spellings.
+            if (sourceCapture && capturedRegion.Any(entry => entry.Item1 is BinaryOperatorExpression) &&
+                parameters.Any(parameter => parameter is null || !parameter.HasCachedEmittedDeclarationState)) { return null; }
+            // Capture before parameter spelling observations: an uncached name
+            // can invoke ambient culture code and mutate this retained region.
+            var equalityRegion = ownedBlockInvocation is null ? PreparedEqualityRegion.TryCapture(body, capturedRegion) : null;
             var states = ImmutableArray.CreateBuilder<ParameterState>();
             foreach (var parameter in parameters)
             {
                 if (parameter is null || !DeclaredTypeSnapshot.TryCapture(parameter.Type, out var type)) { return null; }
                 states.Add(new(parameter, parameter.DeclarationRevision, parameter.Type, type!, parameter.EmittedDeclarationState, parameter.CachedVariableExpression));
             }
-            return new(method, body, states.ToImmutable(), region.ToImmutable(), ownedBlockInvocation);
+            return new(method, body, states.ToImmutable(), capturedRegion, ownedBlockInvocation, equalityRegion);
         }
 
         // Block ownership never lends method-parameter types through locals.
@@ -95,6 +115,9 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return _method.EnclosingType.CachedType;
         }
 
+        internal bool HasCachedParameterEmittedStates =>
+            _states.All(state => state.Parameter.HasCachedEmittedDeclarationState);
+
         internal bool IsCurrent()
         {
             if (System.Threading.Volatile.Read(ref _stale) != 0) { return false; }
@@ -103,7 +126,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 ReferenceEquals(_signature.Parameters, _parameters) && ContractCollections.TryCopy(_parameters, out var parameters) &&
                 parameters.Length == _states.Length && parameters.Where((p, i) => !ReferenceEquals(p, _states[i].Parameter)).Any() == false &&
                 _signatureShape.Matches(StructuredSourceShape.Capture(_signature, true)) && _states.All(s => s.IsCurrent()) &&
-                _region.All(r => r.Shape.Matches(StructuredSourceShape.Capture(r.Producer, true))) &&
+                (_equalityRegion?.MatchesCurrent() == true ||
+                    _region.All(r => r.Shape.Matches(StructuredSourceShape.Capture(r.Producer, true)))) &&
                 (_ownedBlockInvocation is null || ReferenceEquals(PreparedUnusedDefaultLocalCallBlock.GetInvocation(_method), _ownedBlockInvocation));
             if (!current) { System.Threading.Interlocked.Exchange(ref _stale, 1); }
             return current;
@@ -131,6 +155,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 (keyword.Expression is null && (keyword.Keyword is "null" or "default" || allowThis && keyword.Keyword == "this") ||
                     returnPosition && keyword.Keyword == "return" && keyword.Expression is not null),
             MemberExpression member => member.GetType() == typeof(MemberExpression) && member.Declaration is null,
+            BinaryOperatorExpression binary => binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
             _ => allowDeclarations && (producer.GetType() == typeof(DeclarationExpression) || producer.GetType() == typeof(AssignmentExpression)) ||
                 producer.GetType() == typeof(MethodBodyStatements) || producer.GetType() == typeof(ExpressionStatement) ||
                 producer.GetType() == typeof(IfStatement) || producer.GetType() == typeof(IfElseStatement) ||

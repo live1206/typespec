@@ -85,7 +85,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 return null;
             }
 
-            var result = CreateCore(providers, sourceInputs.Compilation, shouldWrite, outputDirectory, sourceInputs, sourceModel);
+            var result = CreateCore(providers, sourceInputs.Compilation, shouldWrite, outputDirectory, sourceInputs, sourceModel, pocGrouping: true);
             result._sourceInputs = sourceInputs;
             result._sourceModel = sourceModel;
             result._sourceOutputDirectory = outputDirectory;
@@ -109,7 +109,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
             => CreateCore(providers, customization, shouldWrite, outputDirectory, null, null);
 
         private static PreparedFieldTypes CreateCore(IEnumerable<TypeProvider> providers, Compilation? customization,
-            Func<TypeProvider, bool> shouldWrite, string? outputDirectory, CompleteSourceInputSnapshot? sourceInputs, SourceInputModel? sourceModel)
+            Func<TypeProvider, bool> shouldWrite, string? outputDirectory, CompleteSourceInputSnapshot? sourceInputs, SourceInputModel? sourceModel,
+            bool pocGrouping = false)
         {
             var result = new PreparedFieldTypes
             {
@@ -303,7 +304,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 rootStates.All(root => root.Written && root.SerializationWritten.All(written => written)));
 
             result.CaptureBodyNames();
-            if (result._owners.Count == 0 && !result.HasBodyNameCandidates)
+            if (pocGrouping) { result.CapturePocGrouping(); }
+            if (result._owners.Count == 0 && !result.HasBodyNameCandidates && result.PocGroupingCount == 0)
             {
                 return result;
             }
@@ -605,7 +607,10 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     }
                 }
             }
-            return true;
+            // Task05 adds callbackful checks after the field decision. Preserve
+            // the initial host observation, and close its path-callback window
+            // only when grouping was actually used by the native writer.
+            return _pocUsedByFile.Count == 0 || SourceInputsAreCurrent();
         }
 
         internal static bool HasUnstablePath(string path)
@@ -630,7 +635,10 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         private bool SourceInputsAreCurrent() => _sourceInputs is null ||
             _sourceModel is not null && ReferenceEquals(_sourceModel.PreEmissionSourceInputs, _sourceInputs) &&
-            _sourceOutputDirectory is not null && _sourceInputs.IsCurrentFor(_sourceOutputDirectory);
+            _sourceOutputDirectory is not null && _sourceInputs.IsCurrentFor(_sourceOutputDirectory) &&
+            // The truthful host check can run user code. Retain the original
+            // identity check and reject identity expiry during that callback.
+            ReferenceEquals(_sourceModel.PreEmissionSourceInputs, _sourceInputs);
 
         private static bool ShouldWriteRoot(TypeProvider provider, Func<TypeProvider, bool> shouldWrite) =>
             shouldWrite(provider) && (provider is not ModelFactoryProvider || provider.Methods.Count != 0);

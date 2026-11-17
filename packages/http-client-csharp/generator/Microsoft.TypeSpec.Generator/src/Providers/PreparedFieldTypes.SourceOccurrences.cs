@@ -138,23 +138,9 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         private static bool CaptureFileWarnings(TypeProvider owner, ImmutableArray<Func<bool>>.Builder checks)
         {
-            var root = owner.CachedDisabledFileWarnings;
-            var envelope = root is null ? null : PreparedSuppressionEnvelope.TryCapture(root);
-            if (root is not null && envelope is null) { return false; }
-            if (root is null && (owner.HasFileWarningInput || !DefaultEmissionMethod(owner, "BuildDisabledFileWarnings"))) { return false; }
-            checks.Add(() =>
-            {
-                var current = owner.CachedDisabledFileWarnings;
-                if (current is null) { return root is null && !owner.HasFileWarningInput; }
-                // The default empty list can be materialized by the actual writer.
-                // Observe it without invoking the getter or its builder here.
-                if (root is null)
-                {
-                    root = current;
-                    envelope = PreparedSuppressionEnvelope.TryCapture(current);
-                }
-                return ReferenceEquals(current, root) && envelope?.IsCurrent == true;
-            });
+            var facts = PreparedNativeFileWarningFacts.TryCapture(owner);
+            if (facts is null) { return false; }
+            checks.Add(facts.IsCurrent);
             return true;
         }
 

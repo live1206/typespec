@@ -1,5 +1,15 @@
 # Task04 acceptance and representation map (in progress)
 
+> **2026-11-17 checkpoint: experimental baseline consolidation, not completion.**
+> The [status and evidence record](./pre-emission-task04-status-and-evidence.md)
+> separates accepted metadata prerequisites from reviewed partial native-effect
+> components and excluded constructor/REST-positive-red work. The user's approval
+> is for a fresher development baseline with explicit open cost/storage and
+> consumption/confinement gates—not shortening activation or production acceptance.
+> The first Foo prepared choice/raw shortening remains unimplemented; all accepted
+> positives below stay pending, not excluded. Independent Task05 work retains
+> native child spellings and its unchanged Task04 composition dependency.
+
 Authority: [Task04 handoff](./pre-emission-task04-implementation-handoff.md),
 [Task03 acceptance map](./pre-emission-task03-acceptance-map.md), and
 [follow-up ledger](./pre-emission-task03-follow-up-ledger.md). Original names

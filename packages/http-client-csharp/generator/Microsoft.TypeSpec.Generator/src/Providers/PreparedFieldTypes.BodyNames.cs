@@ -184,6 +184,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         {
             if (System.Threading.Volatile.Read(ref _sharedSnapshotStale) != 0) { return false; }
             if (CheckSnapshotCurrent()) { return true; }
+            RejectNativeMetadataInputs();
             System.Threading.Interlocked.Exchange(ref _sharedSnapshotStale, 1);
             return false;
         }

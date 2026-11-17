@@ -561,7 +561,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Func<TypeProvider, bool> shouldWrite)
         {
             var core = typeof(PreparedFieldTypes).GetMethod("CreateForGenerationCore", BindingFlags.NonPublic | BindingFlags.Static)!;
-            return (PreparedFieldTypes?)core.Invoke(null, new object?[] { generator, null, shouldWrite, true, output, false });
+            return (PreparedFieldTypes?)core.Invoke(null, new object?[] { generator, null, shouldWrite, true, output, false, null, false });
         }
 
         private static PreparedFieldTypes? CreateProspectiveForGeneration(CodeModelGenerator generator, TypeProvider[] owners,

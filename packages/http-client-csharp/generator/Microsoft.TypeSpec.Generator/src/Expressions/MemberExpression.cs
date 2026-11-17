@@ -11,7 +11,17 @@ namespace Microsoft.TypeSpec.Generator.Expressions
     {
         public ValueExpression? Inner { get; internal set; } = Inner;
         public string MemberName { get; private set; } = MemberName;
-        internal CodeWriterDeclaration? Declaration { get; set; }
+        private CodeWriterDeclaration? _declaration;
+        internal CodeWriterDeclaration? Declaration
+        {
+            get => _declaration;
+            set
+            {
+                if (ReferenceEquals(_declaration, value)) { return; }
+                TouchSource();
+                _declaration = value;
+            }
+        }
         internal override void WriteCore(CodeWriter writer)
         {
             if (Inner is not null)

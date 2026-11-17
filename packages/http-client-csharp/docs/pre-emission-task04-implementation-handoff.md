@@ -2,18 +2,36 @@
 
 Tracking [issue #12454](https://github.com/microsoft/typespec/issues/12454), specifically
 [Task04](https://github.com/microsoft/typespec/issues/12454#issuecomment-6543541243),
-Implementation work is assigned to `feature/pre-emission-task04` in the fork;
-this handoff is maintained on the parent `feature/pre-emission-field-types` branch.
+Implementation work and the current development checkpoint are on
+`feature/pre-emission-task04` in the fork. The planning handoff originated on
+`feature/pre-emission-field-types`; that parent is not the newer Task04 source baseline.
 Also apply the [shared implementation guide](./pre-emission-implementation-guide.md)
 and [task handoff index](./pre-emission-task-handoffs.md).
 
+> **2026-11-17: explicitly approved, reviewed experimental development baseline.**
+> The [status/evidence record](./pre-emission-task04-status-and-evidence.md)
+> distinguishes accepted prerequisites, reviewed partial components and unfinished
+> delivery. The current source snapshot includes request-driven planning,
+> local/owned native effects, the scalar revision/helper repairs and partial
+> method-head association; it excludes the later constructor/REST-positive-red
+> increment. The complete review's two findings were reproduced and repaired;
+> targeted validation and independent follow-up closed them with the evidence's
+> precise broader-results carry-forward. No shortening or production acceptance is
+> implied; complete ordinary-path cost/storage/lifetime and actual-consumed
+> declaration/member/file/export authority remain open. Original positives are
+> unchanged. Task05's independent type-spelling-free work retains its own scope;
+> combined composition and completion still require the missing Task04 capabilities.
+
 ## Authority, baseline and objective
 
-Task03 is merged. Start from `feature/pre-emission-field-types` at
-[`674e6ca`](https://github.com/live1206/typespec/commit/674e6ca75851acab5e4289e4034878664b102264),
-which contains Tasks01-03. Its production source matches the reviewed Task03
-checkpoint `ac0fc0746`. Do not restart Task03 or use upstream `main` as though it
-already contains this preparation core.
+Task03 is merged. Continue Task04 from the reviewed experimental checkpoint on
+`feature/pre-emission-task04`, with its documented open gates and unchanged Foo
+acceptance expectations. The historical parent
+[`674e6ca`](https://github.com/live1206/typespec/commit/674e6ca75851acab5e4289e4034878664b102264)
+on `feature/pre-emission-field-types` contains Tasks01-03 and matches the reviewed
+Task03 production checkpoint `ac0fc0746`; it does not contain this newer Task04
+baseline. Do not restart Task03 or use upstream `main` as though it contains the
+preparation core.
 
 **Deliver useful ordinary type-slot reductions through one shared preparation
 mechanism. Do not complete an increasingly general proof system first.**

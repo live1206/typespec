@@ -23,13 +23,14 @@ namespace Microsoft.TypeSpec.Generator
         internal PreparedSourceObservations.PreparedOccurrenceObservations? CurrentSourceObservations => _sourceCursor?.Current is { } occurrence
             ? _sourceFile?.Observations?.GetCurrent(occurrence) : null;
 
-        internal void AttachSourceFile(PreparedFieldTypes preparation, TypeProvider owner, TypeProviderWriter standardWriter)
+        internal void AttachSourceFile(PreparedFieldTypes preparation, TypeProvider owner, TypeProviderWriter standardWriter,
+            PreparedPocOwnedRootEffect? ownedEffect = null)
         {
             if (!standardWriter.OwnsPreparation(preparation, owner)) { return; }
             _standardSourceWriter = standardWriter;
             _sourcePreparation = preparation;
             _sourceFile = preparation.GetSourceFile(owner);
-            _sourceCursor = _sourceFile?.Start();
+            _sourceCursor = _sourceFile?.Start(ownedEffect, standardWriter);
             var pocFile = preparation.PocGenerationEnvelope?.GetFile(owner);
             _pocTypeConstraint = pocFile?.TypeConstraint;
             _pocBoundConsumption = pocFile?.NativeConsumption;
@@ -74,6 +75,7 @@ namespace Microsoft.TypeSpec.Generator
 
         internal T ObserveSourceRootProducer<T>(T producer) where T : class
         {
+            _sourceCursor?.ObserveRootProducer(producer);
             if (_pocFileConsumption is { } consumption && !consumption.ObserveRootProducer(producer))
             { OnPocConsumptionFailed(consumption); }
             return producer;
@@ -117,6 +119,7 @@ namespace Microsoft.TypeSpec.Generator
 
         private void ObservePocDeclarationStart(MethodSignatureBase? signature)
         {
+            _sourceCursor?.BeginDeclaration(signature);
             if (_pocDeclarationConsumption is not { } consumption) { return; }
             consumption.BeginDeclaration(signature);
             DetachRejectedPocDeclaration(consumption);
@@ -131,6 +134,7 @@ namespace Microsoft.TypeSpec.Generator
 
         private void ObservePocDeclarationComplete(MethodSignatureBase? signature)
         {
+            _sourceCursor?.CompleteDeclaration(signature);
             if (_pocDeclarationConsumption is not { } consumption) { return; }
             consumption.CompleteDeclaration(signature);
             DetachRejectedPocDeclaration(consumption);

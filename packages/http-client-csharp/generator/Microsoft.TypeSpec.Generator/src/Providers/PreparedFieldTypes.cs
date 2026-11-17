@@ -90,6 +90,13 @@ namespace Microsoft.TypeSpec.Generator.Providers
             IEnumerable<TypeProvider> providers,
             Func<TypeProvider, bool> shouldWrite) => CreateForGenerationCore(generator, providers, shouldWrite, false, null, true);
 
+        // Trial2: retain the complete ordinary inventory without eagerly making
+        // optional proposals. A source-owned request must be sealed before writing.
+        // Neither this entry nor its result grants a writer/name permission.
+        internal static PreparedFieldTypes? CreateForGenerationWithPocRequestInventory(
+            CodeModelGenerator generator, IEnumerable<TypeProvider> providers, Func<TypeProvider, bool> shouldWrite) =>
+            CreateForGenerationCore(generator, providers, shouldWrite, false, null, true, requestDriven: true);
+
         // Explicitly approved header lifecycle, distinct from legacy diagnostic
         // POC capture. Unknown/side-effecting headers are never forced here.
         internal static PreparedFieldTypes? CreateForGenerationWithFinalizedPocHeaders(
@@ -101,6 +108,108 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 ? CreateForGenerationCore(generator, providers, shouldWrite, false, null, true, headers)
                 : null;
         }
+
+        // Descriptor-only opt-in. The session was bootstrapped before the caller's
+        // original file factories; it never runs the ordinary candidate producer.
+        internal static PreparedFieldTypes? CreateForGenerationWithNativeMetadataInputs(
+            CodeModelGenerator generator, IEnumerable<TypeProvider> providers, Func<TypeProvider, bool> shouldWrite,
+            PocNativeMetadataInputSession? inputs)
+        {
+            var access = inputs?.BeginPreparation();
+            PreparedFieldTypes? result = null;
+            var completed = false;
+            CompleteSourceInputSnapshot? sourceInputs = null;
+            try
+            {
+                if (!IsPolicyEnabled(generator)) { return null; }
+                var sourceModel = generator.SourceInputModel;
+                sourceInputs = sourceModel.PreEmissionSourceInputs;
+                var outputDirectory = generator.Configuration.OutputDirectory;
+                if (sourceInputs is null || sourceModel.Customization is null || !sourceInputs.IsCurrentFor(outputDirectory)) { return null; }
+                result = CreateCore(providers, sourceInputs.Compilation, shouldWrite, outputDirectory, sourceInputs, sourceModel,
+                    nativeInputs: inputs, nativeAccess: access, mode: PocPreparationMode.NativeMetadataInputs);
+                result._preparedGenerator = generator;
+                if ((System.Threading.Volatile.Read(ref result._valid) == 0 && !result.HasSourceFiles) ||
+                    !sourceInputs.IsCurrentFor(outputDirectory))
+                {
+                    result.Dispose();
+                    return null;
+                }
+                completed = true;
+                return result;
+            }
+            finally
+            {
+                // No catch/filter: original compiler/factory/host exceptions escape
+                // unchanged. A missing result cannot publish optional observations.
+                if (access is not null)
+                {
+                    if (!completed) { inputs!.Dispose(); }
+                    inputs!.EndPreparation(access, completed && result is not null && System.Threading.Volatile.Read(ref result._valid) != 0 ? result : null,
+                        providers, sourceInputs?.Compilation);
+                }
+            }
+        }
+
+        internal bool TryReadNativeMetadataExternalHeader(int ordinal, out PocNativeMetadataExternalHeader header)
+        {
+            header = default;
+            if (_pocLookup is not PocNativeMetadataInputSession inputs) { return false; }
+            // Inspect only sticky observations, never replay a currentness callback.
+            // Check both sides of the scalar copy to close publication vs retirement.
+            if (NativeMetadataPublicationIsRetired()) { inputs.Dispose(); return false; }
+            if (!inputs.TryReadExternalHeader(ordinal, out header)) { return false; }
+            if (!NativeMetadataPublicationIsRetired()) { return true; }
+            inputs.Dispose();
+            header = default;
+            return false;
+        }
+
+        internal bool TryReadNativeMetadataExternalLayout(int ordinal, out PocNativeMetadataLayout layout)
+        {
+            layout = default;
+            if (_pocLookup is not PocNativeMetadataInputSession inputs) { return false; }
+            // Exactly the header's observed-retirement gate; no callback replay.
+            if (NativeMetadataPublicationIsRetired()) { inputs.Dispose(); return false; }
+            if (!inputs.TryReadExternalLayout(ordinal, out layout)) { return false; }
+            if (!NativeMetadataPublicationIsRetired()) { return true; }
+            inputs.Dispose();
+            layout = default;
+            return false;
+        }
+
+        internal bool TryReadNativeMetadataCheckedNameInputs(int ordinal, out PocNativeMetadataCheckedNameInputs result)
+        {
+            result = default;
+            if (_pocLookup is not PocNativeMetadataInputSession inputs) { return false; }
+            if (NativeMetadataPublicationIsRetired()) { inputs.Dispose(); return false; }
+            if (!inputs.TryReadCheckedNameInputs(ordinal, out result)) { return false; }
+            if (!NativeMetadataPublicationIsRetired()) { return true; }
+            inputs.Dispose();
+            result = default;
+            return false;
+        }
+
+        // Recorded bits only; also checked before each live-image byte load.
+        // _valid starts at zero while CreateCore constructs the prepared owner;
+        // it is not a retirement bit in that live frame. Seal separately requires
+        // the completed _valid owner. Source/shared retirement bits ARE sticky.
+        internal bool NativeMetadataRecordedInputsAreCurrent => !System.Threading.Volatile.Read(ref _sourceDisposed) &&
+            System.Threading.Volatile.Read(ref _sharedSnapshotStale) == 0;
+
+        private bool NativeMetadataPublicationIsRetired() => System.Threading.Volatile.Read(ref _valid) == 0 ||
+            System.Threading.Volatile.Read(ref _sourceDisposed) || System.Threading.Volatile.Read(ref _sharedSnapshotStale) != 0;
+
+        // Identity only: no exposed union, caller certificate or currentness callback.
+        // Native assignment precedes Bind/exposure and cannot be replaced in that mode.
+        internal bool IsNativeMetadataInputSession(PocNativeMetadataInputSession inputs) => ReferenceEquals(_pocLookup, inputs);
+
+        private void RejectNativeMetadataInputs()
+        {
+            if (_pocLookup is PocNativeMetadataInputSession inputs) { inputs.Dispose(); }
+        }
+
+        private enum PocPreparationMode { None, OrdinaryCandidates, NativeMetadataInputs }
 
         internal PreparedPocHeaderFinalization? FinalizedPocHeaders { get; private set; }
 
@@ -143,7 +252,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
             Func<TypeProvider, bool> shouldWrite,
             bool captureProspectiveLifetime,
             OutputLibrary? prospectiveOutput,
-            bool capturePocPlans = false, PreparedPocHeaderFinalization? finalizedHeaders = null)
+            bool capturePocPlans = false, PreparedPocHeaderFinalization? finalizedHeaders = null, bool requestDriven = false)
         {
             if (!IsPolicyEnabled(generator))
             {
@@ -218,16 +327,21 @@ namespace Microsoft.TypeSpec.Generator.Providers
             result._prospectiveGenerator = captureProspectiveLifetime ? generator : null;
             result._prospectiveRootRevision = prospectiveRootRevision;
             result._prospectiveListVersion = prospectiveListVersion;
-            if (capturePocPlans) { result.CapturePocOrdinaryCandidates(); }
+            if (capturePocPlans)
+            {
+                if (requestDriven) { result._pocRequestPending = result.CapturePocOrdinaryInventory() ? 1 : 0; }
+                else { result.CapturePocOrdinaryCandidates(); }
+            }
             if ((System.Threading.Volatile.Read(ref result._valid) == 0 && (captureProspectiveLifetime || !result.HasSourceFiles)) ||
                 !sourceInputs.IsCurrentFor(outputDirectory))
             {
                 result.Dispose();
                 return null;
             }
-            if (capturePocPlans)
+            if (capturePocPlans && !requestDriven)
             {
                 result.FinalizePocOrdinaryCandidates();
+                result.Trial2FinalRemaining = result.Trial2SourceRemaining;
                 result.AttachPocProviderStream();
             }
             // Source currentness can run host code. Check the prospective facts
@@ -263,8 +377,12 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private static PreparedFieldTypes CreateCore(IEnumerable<TypeProvider> providers, Compilation? customization,
             Func<TypeProvider, bool> shouldWrite, string? outputDirectory, CompleteSourceInputSnapshot? sourceInputs, SourceInputModel? sourceModel,
             bool captureProspectiveLifetime = false, bool capturePocPlans = false, PreparedPocHeaderFinalization? finalizedHeaders = null,
-            InputNamespace? loadedInput = null, PreparedPocPostMapAttributeBoundary? postMapAttributeBoundary = null)
+            InputNamespace? loadedInput = null, PreparedPocPostMapAttributeBoundary? postMapAttributeBoundary = null,
+            PocNativeMetadataInputSession? nativeInputs = null, PocNativeMetadataInputSession.PreparationAccess? nativeAccess = null,
+            PocPreparationMode mode = PocPreparationMode.None)
         {
+            if (mode == PocPreparationMode.NativeMetadataInputs) { capturePocPlans = false; }
+            else if (capturePocPlans) { mode = PocPreparationMode.OrdinaryCandidates; }
             var result = new PreparedFieldTypes
             {
                 _sourceInputs = sourceInputs,
@@ -276,6 +394,13 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 customization is not CSharpCompilation compilation || HasUnsupportedSource(compilation))
             {
                 return result;
+            }
+
+            if (mode == PocPreparationMode.NativeMetadataInputs && nativeInputs is not null)
+            {
+                result._pocLookup = nativeInputs;
+                result._pocCandidateSourceBudget = nativeInputs.SourceBudget;
+                nativeInputs.Bind(nativeAccess, result, providers, compilation);
             }
 
             var all = new List<TypeProvider>();
@@ -355,7 +480,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 }
             }
             var importLookup = new PreparedFieldImportLookup(compilation, byName, namespacePrefixes);
-            result._pocLookup = capturePocPlans ? importLookup : null;
+            if (capturePocPlans) { result._pocLookup = importLookup; }
             var safeTargets = new Dictionary<CSharpType, bool>(ReferenceEqualityComparer.Instance);
             var referencedTargets = new Dictionary<CSharpType, INamedTypeSymbol?>(ReferenceEqualityComparer.Instance);
             var sourceScopes = new Dictionary<(string Namespace, string Name), (bool Supported, bool Exists, string[] Names)>();
@@ -437,7 +562,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                         if (!referencedTargets.TryGetValue(type, out var referencedTarget))
                         {
                             referencedTarget = namespacePrefixes.Contains(type.Namespace + "." + type.Name)
-                                ? null : ResolveReferencedTarget(compilation, type, byName);
+                                ? null : ResolveReferencedTargetCore(compilation, type, byName, false, false, nativeInputs, nativeAccess);
                             referencedTargets.Add(type, referencedTarget);
                         }
                         if (referencedTarget is null)
@@ -517,7 +642,11 @@ namespace Microsoft.TypeSpec.Generator.Providers
             return result;
         }
 
-        internal void Invalidate() => System.Threading.Interlocked.Exchange(ref _valid, 0);
+        internal void Invalidate()
+        {
+            System.Threading.Interlocked.Exchange(ref _valid, 0);
+            RejectNativeMetadataInputs();
+        }
 
         // The symbol work is completed during preparation. Writing only validates
         // that later namespace registration does not violate the captured scope.
@@ -534,6 +663,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         public void Dispose()
         {
             PocGenerationEnvelope?.Reject();
+            RejectNativeMetadataInputs();
             System.Threading.Interlocked.Exchange(ref _sharedSnapshotStale, 1);
             Invalidate();
             InvalidateSourceFiles();
@@ -657,6 +787,11 @@ namespace Microsoft.TypeSpec.Generator.Providers
         // generated syntax or speculate on a generated expression to make this decision.
         internal static INamedTypeSymbol? ResolveReferencedTarget(CSharpCompilation compilation, CSharpType type,
             IReadOnlyDictionary<(string Namespace, string Name), TypeProvider[]> generated, bool forStaticCall = false, bool forLoadedSourceCall = false)
+            => ResolveReferencedTargetCore(compilation, type, generated, forStaticCall, forLoadedSourceCall, null, null);
+
+        private static INamedTypeSymbol? ResolveReferencedTargetCore(CSharpCompilation compilation, CSharpType type,
+            IReadOnlyDictionary<(string Namespace, string Name), TypeProvider[]> generated, bool forStaticCall, bool forLoadedSourceCall,
+            PocNativeMetadataInputSession? nativeInputs, PocNativeMetadataInputSession.PreparationAccess? nativeAccess)
         {
             var current = compilation.GlobalNamespace;
             var prefix = string.Empty;
@@ -691,6 +826,13 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     target.BaseType?.SpecialType == SpecialType.System_Object && target.DeclaringSyntaxReferences.Length != 0 &&
                     SymbolEqualityComparer.Default.Equals(target.ContainingAssembly, compilation.Assembly) &&
                     target.DeclaringSyntaxReferences.All(r => compilation.ContainsSyntaxTree(r.SyntaxTree)) ? target : null;
+            }
+
+            // Only the genuine original field call supplies this observer. Body,
+            // lookup and POC-invented Resolve calls use the unchanged null route.
+            if (nativeInputs?.CreateOriginalMatchPredicate(nativeAccess, compilation, target) is { } predicate)
+            {
+                return compilation.References.Any(predicate) ? target : null;
             }
 
             // Extern-alias-only metadata is not visible to the writer's unaliased
@@ -823,6 +965,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
             // No callback replay: inspect an already-captured active header
             // immediately after the existing source-proof observation.
             ObservePocActiveHeaderAfterSourceCallback();
+            if (!current) { RejectNativeMetadataInputs(); }
             return current;
         }
 

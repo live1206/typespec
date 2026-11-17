@@ -273,7 +273,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         private void InvalidateSourceFiles()
         {
-            _sourceDisposed = true;
+            RejectNativeMetadataInputs();
+            System.Threading.Volatile.Write(ref _sourceDisposed, true);
             foreach (var file in _sourceFiles.Values) { file.Invalidate(); }
         }
     }

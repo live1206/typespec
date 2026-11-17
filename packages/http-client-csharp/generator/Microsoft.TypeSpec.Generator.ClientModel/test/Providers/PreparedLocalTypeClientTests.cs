@@ -11,6 +11,7 @@ using System.Runtime.CompilerServices;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.TypeSpec.Generator.ClientModel.Providers;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
 using Microsoft.TypeSpec.Generator.SourceInput;
@@ -21,6 +22,1088 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
     [NonParallelizable]
     internal class PreparedLocalTypeClientTests
     {
+        private static (PreparedSourceFile File, PreparedSourceOccurrence Root, PreparedSourceOccurrence Body,
+            Task04OrdinaryObservation Observation, PreparedPocOwnedRootEffect Effect) PrepareRootExport(
+            TypeProvider owner, PreparedFieldTypes prepared)
+        {
+            var file = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
+            var root = file.Roots.Single(node => node.Id.RootRole == "method" && node.Id.RootIndex == 0);
+            var method = (MethodProvider)root.Producer;
+            var body = root.Children.Single(child => ReferenceEquals(child.Producer, method.BodyStatements));
+            var target = root.DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
+            var candidate = prepared.TrySealPocOrdinaryRequest(file, target);
+            Assert.That(candidate, Is.Not.Null);
+            Assert.That(prepared.GetPrecomputedPocOrdinaryCandidate(file, target), Is.SameAs(candidate));
+            var effect = prepared.PrepareTask04OwnedRootEffect(file, root, body);
+            Assert.That(effect, Is.Not.Null, "Actual unchanged Foo method[0] must be admitted, not classified unsupported.");
+            var observation = prepared.PrepareTask04OrdinaryObservation(candidate!)!;
+            Assert.That(observation, Is.Not.Null);
+            observation.OwnedRootEffect = effect;
+            return (file, root, body, observation, effect!);
+        }
+
+        [Test]
+        public void RealFooScalarDeclarationMutationAndRestorationMustInvalidateCapturedEffect()
+        {
+            var member = new Microsoft.TypeSpec.Generator.Expressions.MemberExpression(
+                new Microsoft.TypeSpec.Generator.Expressions.KeywordExpression("this", null), "Pipeline");
+            var budget = new PocWorkBudget(65536);
+            var captured = PreparedPocNativeCallEffect.TryCapture(member, false, budget, out var failure);
+            Assert.That(captured, Is.Not.Null, failure);
+            var initial = member.SourceRevision;
+            member.Declaration = null;
+            Assert.That(member.SourceRevision, Is.EqualTo(initial), "Same-reference assignment need not fabricate a mutation.");
+            var substituted = new CodeWriterDeclaration("Pipeline/*SCALAR_SLOT_CONTROL*/");
+            member.Declaration = substituted;
+            var assigned = member.SourceRevision;
+            member.Declaration = substituted;
+            Assert.That(member.SourceRevision, Is.EqualTo(assigned), "Same-reference assignment remains idempotent.");
+            member.Declaration = null;
+            Assert.That(member.Declaration, Is.Null);
+            TestContext.Out.WriteLine("SCALAR REVISION: initial=" + initial + "; assigned=" + assigned + "; restored=" + member.SourceRevision);
+            Assert.That(assigned, Is.GreaterThan(initial), "Changing an emitting slot must advance source revision.");
+            Assert.That(member.SourceRevision, Is.GreaterThan(assigned), "Restoration must also be observable.");
+            Assert.That(captured!.IsCurrent(budget), Is.False, "A restored endpoint must not hide an intervening emitting-slot change.");
+            Assert.That(captured.IsCurrent(new PocWorkBudget(65536)), Is.False, "Observed mismatch remains sticky.");
+        }
+
+        [Test]
+        public void RealFooScalarVisibleMemberChangeWithdrawsReceiptBeforeRestoration()
+        {
+            PreparedPocOwnedRootEffect? effect = null;
+            Microsoft.TypeSpec.Generator.Expressions.MemberExpression? member = null;
+            CodeWriterDeclaration? original = null;
+            var receiverEntry = -1;
+            var exitsBefore = -1;
+            var trace = new List<string>();
+            string? failureBeforeMutation = null;
+            var changed = false;
+            var restored = false;
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                effect = setup.Effect;
+                var steps = (ImmutableArray<PreparedPocNativeCallEffect.NativeStep>)typeof(PreparedPocOwnedRootEffect)
+                    .GetField("_nativeSteps", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(effect)!;
+                var index = Enumerable.Range(0, steps.Length).First(i => steps[i].Producer is Microsoft.TypeSpec.Generator.Expressions.MemberExpression { Inner: not null });
+                member = (Microsoft.TypeSpec.Generator.Expressions.MemberExpression)steps[index].Producer;
+                original = member.Declaration;
+                receiverEntry = index + 1;
+                Assert.That(ReferenceEquals(steps[receiverEntry].Producer, member.Inner), Is.True);
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(setup.Observation);
+                TestContext.Out.WriteLine("SCALAR FINAL: changed=" + changed + "; restored=" + restored + "; target=" + receiverEntry + "; entries=" + effect.NativeEntries + "; exits=" + effect.NativeExits + "; body=" + effect.BodyEntries + "; completed=" + effect.HasCompleted + "; failure=" + effect.Failure + "; emitted=" + output.Content.Contains("ROOT_SCALAR_SUBSTITUTION"));
+                TestContext.Out.WriteLine(string.Join(Environment.NewLine, trace));
+                Assert.That(changed, Is.True, "The original native callback must actually mutate the emitting slot.");
+                Assert.That(failureBeforeMutation, Is.Null, "The mutation must not start after an unrelated component rejection.");
+                Assert.That(restored, Is.False, "Existing source invalidation prevents the later callback; this is not a successful change/restore bypass.");
+                member.Declaration = original;
+                Assert.That(member.Declaration, Is.SameAs(original), "Only test cleanup restores the object after native return.");
+                Assert.That(output.Content, Does.Contain("ROOT_SCALAR_SUBSTITUTION"), "The native formatter actually emitted the temporary scalar.");
+                Assert.That(setup.Observation.NativeFile, Is.SameAs(output));
+                TestContext.Out.WriteLine($"ROOT scalar substitution: changed={changed}; restored={restored}; completed={effect.HasCompleted}; failure={effect.Failure}; entries={effect.NativeEntries}; exits={effect.NativeExits}");
+                Assert.That(effect.HasCompleted, Is.False, "A captured effect must not confirm an unversioned temporary emitting-slot substitution.");
+            }, requestInventory: true, beforePreparation: owner =>
+            {
+                var method = owner.CachedMethods![0];
+                var body = (Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements)method.BodyStatements!;
+                var receiver = new Microsoft.TypeSpec.Generator.Expressions.MemberExpression(new Microsoft.TypeSpec.Generator.Expressions.KeywordExpression("this", null), "Pipeline");
+                var call = new Microsoft.TypeSpec.Generator.Expressions.InvokeMethodExpression(receiver, "ToString", new Microsoft.TypeSpec.Generator.Expressions.ValueExpression[] { new Microsoft.TypeSpec.Generator.Expressions.KeywordExpression("null", null) });
+                var wrapper = new Microsoft.TypeSpec.Generator.Snippets.ScopedApi(typeof(object), call);
+                method.Update(bodyStatements: new Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements(body.Statements.Concat(new[] { new Microsoft.TypeSpec.Generator.Statements.ExpressionStatement(wrapper) }).ToArray()));
+            }, sourceCurrent: () =>
+            {
+                if (effect is not null && member is not null && effect.BodyEntries > 0)
+                {
+                    var state = "SCALAR CALLBACK: entries=" + effect.NativeEntries + "; exits=" + effect.NativeExits + "; body=" + effect.BodyEntries + "; failure=" + effect.Failure + "; changed=" + changed + "; restored=" + restored;
+                    if (trace.Count == 0 || trace[^1] != state) { trace.Add(state); }
+                }
+                if (effect is not null && member is not null && !changed && effect.BodyEntries == 1 && effect.NativeEntries == receiverEntry)
+                {
+                    failureBeforeMutation = effect.Failure;
+                    if (failureBeforeMutation is not null) { return true; }
+                    exitsBefore = effect.NativeExits;
+                    member.Declaration = new CodeWriterDeclaration("Pipeline/*ROOT_SCALAR_SUBSTITUTION*/\n}\nclass RootScalarEscape {}\n//");
+                    changed = true;
+                }
+                else if (changed && !restored && effect is not null && effect.NativeExits > exitsBefore)
+                {
+                    member!.Declaration = original;
+                    restored = true;
+                }
+                return true;
+            });
+        }
+
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void Task04MemberHeadActualFooAdmittedAndRequiredRestFrontierIsExplicit(bool rest)
+        {
+            CodeFile? expected = null;
+            WithRealFoo((owner, prepared) =>
+            {
+                var target = rest ? ((ClientProvider)owner).RestClient : owner;
+                expected = new TypeProviderWriter(target) { PreparedFieldTypes = prepared }.Write();
+            }, requestInventory: true);
+            WithRealFoo((owner, prepared) =>
+            {
+                var target = rest ? ((ClientProvider)owner).RestClient : owner;
+                var file = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, target));
+                var root = file.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0);
+                var method = (MethodProvider)root.Producer;
+                var body = root.Children.Single(child => ReferenceEquals(child.Producer, method.BodyStatements));
+                var effect = prepared.PrepareTask04OwnedRootEffect(file, root, body);
+                var local = PreparedPocNativeCallEffect.TryCaptureStatement(method.BodyStatements!, file.DisableXmlDocs, new PocWorkBudget(65536), out var localFailure);
+                TestContext.Out.WriteLine($"MEMBER rest={rest}; owner={ReferenceEquals(method.EnclosingType, file.FileOwner)}; shape={file.IsShapeCurrentWithoutInvalidating(new PocWorkBudget(65536))}; local={local is not null}; localFailure={localFailure}; rootBody={ReferenceEquals(body.Producer, method.BodyStatements)}");
+                if (rest)
+                {
+                    Assert.That(local, Is.Null, "Required actual REST full body remains unsupported, not a member-positive witness.");
+                    Assert.That(localFailure, Does.EndWith("unprofiled-native-effect:NewInstanceExpression"));
+                    Assert.That(effect, Is.Null, "Do not weaken the existing owned-body admission gate to manufacture a REST positive.");
+                    var native = new TypeProviderWriter(target) { PreparedFieldTypes = prepared }.Write();
+                    Assert.That(native.Content, Is.EqualTo(expected!.Content), "Refusal must not suppress or reconstruct native output.");
+                    return;
+                }
+                Assert.That(effect, Is.Not.Null);
+                var head = effect!.PrepareMethodHeadComponent();
+                Assert.That(head, Is.Not.Null, "Actual selected Foo method must not be denied wholesale.");
+                Assert.That(head!.HasCompleted, Is.False, "Preparation is not native proof.");
+                Assert.That(effect.PrepareMethodHeadComponent(), Is.Null, "Fixed choice is not reranked.");
+                var queries = prepared.Trial2FirstQueries;
+                var output = new TypeProviderWriter(target) { PreparedFieldTypes = prepared }.WriteWithTask04OwnedRootEffect(effect);
+                Assert.That(prepared.Trial2FirstQueries, Is.EqualTo(queries), "Native effect handoff does not need a binding query.");
+                Assert.That(head.HasCompleted, Is.True, effect.Failure);
+                Assert.That(head.DeclarationStarts, Is.EqualTo(1));
+                Assert.That(head.DeclarationCompletions, Is.EqualTo(1));
+                Assert.That(head.DocumentationEntries, Is.EqualTo(1));
+                Assert.That(output.Content, Is.EqualTo(expected!.Content));
+                Assert.That(output.QualifiedContent, Is.EqualTo(expected.QualifiedContent));
+                Assert.That(output.NativeLegacyAlternatives, Is.EqualTo(expected.NativeLegacyAlternatives));
+                Assert.That(effect.NativeFile, Is.SameAs(output));
+            }, requestInventory: true);
+        }
+
+        [Test]
+        public void Task04MemberHeadDetachedCaptureCannotBorrowOwnedNativeProof()
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                var method = (MethodProvider)setup.Root.Producer;
+                var detached = PreparedPocMethodHeadComponent.TryCapture(setup.Effect, method, false, new PocWorkBudget(65536));
+                Assert.That(detached, Is.Not.Null);
+                detached!.ObserveDocumentation(method.XmlDocs);
+                detached.BeginDeclaration(method.Signature);
+                detached.CompleteDeclaration(method.Signature);
+                new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(setup.Observation);
+                Assert.That(setup.Effect.HasCompleted, Is.True);
+                Assert.That(detached.HasCompleted, Is.False, "Caller-supplied events/flags cannot borrow an unselected native effect.");
+            }, requestInventory: true);
+        }
+
+        [TestCase("name")]
+        [TestCase("comment")]
+        [TestCase("operator")]
+        [TestCase("funds")]
+        [TestCase("foreign-method")]
+        [TestCase("documentation")]
+        public void Task04MemberHeadRefusesUnsupportedInputsBeforeNativeConsumption(string kind)
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                var method = (MethodProvider)setup.Root.Producer;
+                if (kind == "name") { method.Signature.Update(name: "Unsafe\n#error HEAD\n"); }
+                if (kind == "comment") { method.Signature.Update(nonDocumentComment: "Unsupported comment"); }
+                if (kind == "operator") { method.Signature.Update(modifiers: method.Signature.Modifiers | MethodSignatureModifiers.Operator); }
+                if (kind == "documentation")
+                {
+                    method.XmlDocs.Update(summary: new Microsoft.TypeSpec.Generator.Statements.XmlDocSummaryStatement(
+                        new[] { FormattableStringFactory.Create("{0}", new object()) }));
+                }
+                if (kind == "foreign-method") { method = ((ClientProvider)owner).RestClient.Methods[0]; }
+                var result = PreparedPocMethodHeadComponent.TryCapture(setup.Effect, method, false,
+                    new PocWorkBudget(kind == "funds" ? 1 : 65536));
+                Assert.That(result, Is.Null);
+                Assert.That(setup.Effect.HasCompleted, Is.False);
+            }, requestInventory: true);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void Task04MemberHeadRestoredNameWithdrawsDuringNativeAndFinalObservation(bool final)
+        {
+            PreparedPocOwnedRootEffect? effect = null;
+            PreparedPocMethodHeadComponent? head = null;
+            Task04OrdinaryObservation? observation = null;
+            MethodProvider? method = null;
+            var mutated = false;
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                effect = setup.Effect; observation = setup.Observation;
+                method = (MethodProvider)setup.Root.Producer;
+                head = effect.PrepareMethodHeadComponent();
+                Assert.That(head, Is.Not.Null);
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(observation);
+                Assert.That(mutated, Is.True, "Assert callback facts outside the catch-all host callback.");
+                Assert.That(head!.HasCompleted, Is.False);
+                Assert.That(effect.HasCompleted, Is.False);
+                Assert.That(output.Content, Does.Contain("global::System.ClientModel.Primitives.PipelineMessage"));
+            }, requestInventory: true, sourceCurrent: () =>
+            {
+                if (!mutated && method is not null && head is not null && effect is not null &&
+                    (final ? effect.RootExits == 1 : head.DeclarationCompletions == 1 && effect.BodyEntries == 0))
+                {
+                    var original = method.Signature.Name;
+                    method.Signature.Update(name: original + "Temporary");
+                    method.Signature.Update(name: original);
+                    mutated = true;
+                }
+                return true;
+            });
+        }
+
+        [Test]
+        public void Task04MemberHeadUnsafeDeclarationNameAlreadyRejectsOriginalCandidate()
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                var file = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
+                var root = file.Roots.Single(node => node.Id.RootRole == "method" && node.Id.RootIndex == 0);
+                var target = root.DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
+                Assert.That(prepared.TrySealPocOrdinaryRequest(file, target), Is.Null,
+                    "Before reproduction refused at the existing candidate gate; no owned-body bypass was reproduced.");
+            }, requestInventory: true, beforePreparation: owner => owner.Methods[0].Signature.Update(name: "UnsafeName\n#error MEMBER_HEAD_BEFORE\n"));
+        }
+
+        [Test]
+        public void RealFooRootExportActualOwnedBodyIsConfirmedByNativeConsumptionWithoutPermission()
+        {
+            CodeFile? expected = null;
+            var nativeProofCalls = 0;
+            WithRealFoo((owner, prepared) => expected = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write(),
+                requestInventory: true, sourceCurrent: () => { nativeProofCalls++; return true; });
+            var proofCalls = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                Assert.That(setup.Effect.HasCompleted, Is.False);
+                Assert.That(setup.File.Generation, Is.EqualTo(setup.Root.Id.Generation));
+                Assert.That(setup.File.Roots, Does.Contain(setup.Root));
+                Assert.That(setup.Root.Children, Does.Contain(setup.Body));
+                Assert.That(prepared.SourceFiles.Count(), Is.EqualTo(39));
+                Assert.That(prepared.SourceFiles.All(file => !file.HasStarted), Is.True);
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(setup.Observation);
+                Assert.That(setup.Effect.Failure, Is.Null);
+                Assert.That(setup.Effect.HasCompleted, Is.True);
+                Assert.That(setup.Effect.NativeFile, Is.SameAs(output));
+                Assert.That(setup.Effect.RootEntries, Is.EqualTo(1));
+                Assert.That(setup.Effect.ProducerObservations, Is.EqualTo(1));
+                Assert.That(setup.Effect.BodyEntries, Is.EqualTo(1));
+                Assert.That(setup.Effect.BodyExits, Is.EqualTo(1));
+                Assert.That(setup.Effect.RootExits, Is.EqualTo(1));
+                Assert.That(setup.Effect.NativeEntries, Is.EqualTo(setup.Effect.ExpectedNativeEntries));
+                Assert.That(setup.Effect.NativeExits, Is.EqualTo(setup.Effect.ExpectedNativeEntries));
+                Assert.That(setup.Effect.NativeEntries, Is.GreaterThan(2));
+                Assert.That(output.Content, Is.EqualTo(expected!.Content));
+                Assert.That(output.QualifiedContent, Is.EqualTo(expected.QualifiedContent));
+                Assert.That(output.Name, Is.EqualTo(expected.Name));
+                Assert.That(setup.Observation.NativeFile, Is.SameAs(output));
+                Assert.That(setup.Observation.NativeUse, Is.Not.Null);
+                Assert.That(setup.Observation.CandidateCurrentAtReturn, Is.True);
+                Assert.That(setup.Observation.MechanicalSelectionRetainedNative, Is.True);
+                Assert.That(output.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                Assert.That(prepared.PocGenerationEnvelope!.HasUncoveredEmission, Is.True);
+                Assert.That(prepared.GetTask03TypeOfNamePermission(setup.File, setup.Observation.Candidate.Occurrence), Is.Null);
+                Assert.That(prepared.SourceFiles.Where(file => !ReferenceEquals(file, setup.File)).All(file => !file.HasStarted), Is.True);
+            }, requestInventory: true, sourceCurrent: () => { proofCalls++; return true; });
+            Assert.That(proofCalls, Is.EqualTo(nativeProofCalls), "No new host proof callback or replay.");
+        }
+
+        [TestCase("file")]
+        [TestCase("root")]
+        [TestCase("body")]
+        public void RealFooRootExportForeignOwnedPairIsRefusedBeforeWriters(string kind)
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                var file = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
+                var root = file.Roots.Single(node => node.Id.RootRole == "method" && node.Id.RootIndex == 0);
+                var body = root.Children.Single(child => ReferenceEquals(child.Producer, ((MethodProvider)root.Producer).BodyStatements));
+                var otherFile = prepared.SourceFiles.First(other => !ReferenceEquals(other, file));
+                var otherRoot = file.Roots.First(other => !ReferenceEquals(other, root));
+                Assert.That(prepared.PrepareTask04OwnedRootEffect(kind == "file" ? otherFile : file,
+                    kind == "root" ? otherRoot : root, kind == "body" ? root : body), Is.Null);
+                Assert.That(prepared.SourceFiles.All(source => !source.HasStarted), Is.True);
+            }, requestInventory: true);
+        }
+
+        [Test]
+        public void RealFooRootExportForeignGenerationCannotAttachToNativeWriter()
+        {
+            PreparedPocOwnedRootEffect? foreign = null;
+            WithRealFoo((owner, prepared) => foreign = PrepareRootExport(owner, prepared).Effect, requestInventory: true);
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                Assert.That(foreign!.File.Generation, Is.Not.EqualTo(setup.File.Generation));
+                setup.Observation.OwnedRootEffect = foreign;
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(setup.Observation);
+                Assert.That(output.Content, Is.Not.Empty);
+                Assert.That(output.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                Assert.That(foreign.HasCompleted, Is.False);
+                Assert.That(foreign.Failure, Is.EqualTo("file-generation-writer-or-duplicate-attachment"));
+                Assert.That(setup.Observation.NativeFile, Is.SameAs(output));
+            }, requestInventory: true);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void RealFooRootExportBodyReplacementBeforeNativeUseWithdrawsOnlyTheComponent(bool replaceOwner)
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                var method = (MethodProvider)setup.Root.Producer;
+                if (replaceOwner) { owner.Update(methods: owner.Methods.ToArray()); }
+                else
+                {
+                    method.Update(bodyStatements: new Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements([
+                        new PocNativeWriterAttachmentProbe(writer => writer.WriteRawLine("RootReplacement();"))]));
+                }
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(setup.Observation);
+                Assert.That(setup.Effect.HasCompleted, Is.False);
+                Assert.That(setup.Effect.Failure, Is.Not.Null);
+                Assert.That(output.Content, Is.Not.Empty);
+                if (!replaceOwner) { Assert.That(output.Content, Does.Contain("RootReplacement();")); }
+                Assert.That(setup.Observation.NativeFile, Is.SameAs(output));
+                Assert.That(setup.Observation.CandidateCurrentAtReturn, Is.False);
+            }, requestInventory: true);
+        }
+
+        [TestCase("child")]
+        [TestCase("producer")]
+        [TestCase("duplicate-producer")]
+        [TestCase("reordered-root")]
+        [TestCase("missing-body")]
+        public void RealFooRootExportNativeRootHeaderInterferenceWithdrawsReceipt(string kind)
+        {
+            Action<CodeWriter>? interfere = null;
+            var headerCalls = 0;
+            var rawChildCalls = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                var wrapper = (Microsoft.TypeSpec.Generator.Snippets.ScopedApi)setup.Root.DescendantsAndSelf()
+                    .Single(node => node.Producer is Microsoft.TypeSpec.Generator.ClientModel.Providers.PipelineResponseProvider).Producer;
+                interfere = writer =>
+                {
+                    Assert.That(setup.Effect.Failure, Is.Null, "No prior source-cursor rejection may make this guard test vacuous.");
+                    Assert.That(setup.Effect.RootEntries, Is.EqualTo(1), "Interference occurs inside the actual selected native root.");
+                    Assert.That(setup.Effect.BodyEntries, Is.Zero);
+                    switch (kind)
+                    {
+                        case "child":
+                            wrapper.Update(original: new PocFieldWriterAttachmentProbe(w => { rawChildCalls++; w.AppendRaw("default"); }));
+                            break;
+                        case "producer": writer.ObserveSourceRootProducer(new object()); break;
+                        case "duplicate-producer": writer.ObserveSourceRootProducer(setup.Root.Producer); break;
+                        case "reordered-root": using (writer.BeginSourceRoot(owner, "method", 1)) { } break;
+                        default: ((MethodProvider)setup.Root.Producer).Update(bodyExpression: new Microsoft.TypeSpec.Generator.Expressions.KeywordExpression("true", null)); break;
+                    }
+                };
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(setup.Observation);
+                Assert.That(headerCalls, Is.EqualTo(1), "Only the original native documentation formatter invokes its hole.");
+                Assert.That(rawChildCalls, Is.EqualTo(kind == "child" ? 1 : 0));
+                Assert.That(setup.Effect.HasCompleted, Is.False);
+                Assert.That(setup.Effect.Failure, Is.Not.Null);
+                if (kind is "producer" or "duplicate-producer") { Assert.That(setup.Effect.Failure, Is.EqualTo("root-producer")); }
+                Assert.That(setup.Observation.NativeFile, Is.SameAs(output));
+                Assert.That(output.Content, Is.Not.Empty);
+            }, requestInventory: true, beforePocPreparation: (library, _) =>
+            {
+                var owner = library.TypeProviders.OfType<Microsoft.TypeSpec.Generator.ClientModel.Providers.ClientProvider>()
+                    .Single(provider => provider.Name == "Foo");
+                var method = owner.Methods[0];
+                var probe = new PocFieldWriterAttachmentProbe(writer => { headerCalls++; interfere?.Invoke(writer); writer.AppendRaw("safe"); });
+                method.Update(xmlDocProvider: new XmlDocProvider(summary: new Microsoft.TypeSpec.Generator.Statements.XmlDocSummaryStatement(
+                    [FormattableStringFactory.Create("{0}", probe)])));
+            });
+        }
+
+        [Test]
+        public void RealFooRootExportFinalNativeCallbackMutationIsCaughtBeforeRawReturn()
+        {
+            Task04OrdinaryObservation? observation = null;
+            PreparedPocOwnedRootEffect? effect = null;
+            Microsoft.TypeSpec.Generator.Snippets.ScopedApi? wrapper = null;
+            var changed = false;
+            var rawCalls = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                observation = setup.Observation;
+                effect = setup.Effect;
+                wrapper = (Microsoft.TypeSpec.Generator.Snippets.ScopedApi)setup.Root.DescendantsAndSelf()
+                    .Single(node => node.Producer is Microsoft.TypeSpec.Generator.ClientModel.Providers.PipelineResponseProvider).Producer;
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(observation);
+                Assert.That(changed, Is.True);
+                Assert.That(setup.Effect.BodyEntries, Is.EqualTo(1));
+                Assert.That(setup.Effect.BodyExits, Is.EqualTo(1));
+                Assert.That(setup.Effect.RootExits, Is.EqualTo(1));
+                Assert.That(setup.Effect.HasCompleted, Is.False);
+                Assert.That(setup.Effect.Failure, Is.Not.Null);
+                Assert.That(rawCalls, Is.Zero, "A late mutation does not replay the already consumed body.");
+                Assert.That(observation.NativeFile, Is.SameAs(output));
+            }, requestInventory: true, sourceCurrent: () =>
+            {
+                if (!changed && effect?.RootExits == 1)
+                {
+                    changed = true;
+                    wrapper!.Update(original: new PocFieldWriterAttachmentProbe(_ => rawCalls++));
+                }
+                return true;
+            });
+        }
+
+        [Test]
+        public void RealFooRootExportExhaustedSourceAccountRejectsWithoutSuppressingNativeWrite()
+        {
+            CodeFile? expected = null;
+            WithRealFoo((owner, prepared) => expected = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write(), requestInventory: true);
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                var account = (PocWorkBudget)typeof(PreparedFieldTypes).GetField("_pocCandidateSourceBudget",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(prepared)!;
+                Assert.That(account.TrySpend(account.Remaining), Is.True);
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(setup.Observation);
+                Assert.That(setup.Effect.HasCompleted, Is.False);
+                Assert.That(setup.Effect.Failure, Is.EqualTo("source-budget"));
+                Assert.That(output.Content, Is.EqualTo(expected!.Content));
+                Assert.That(output.QualifiedContent, Is.EqualTo(expected.QualifiedContent));
+                Assert.That(setup.Observation.NativeFile, Is.SameAs(output));
+                Assert.That(output.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+            }, requestInventory: true);
+        }
+
+        private sealed class RootExportCustomWriter(TypeProvider owner) : TypeProviderWriter(owner) { }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void RealFooRootExportWrongPhysicalWriterModeCannotComplete(bool custom)
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                if (custom)
+                {
+                    var writer = new RootExportCustomWriter(owner) { PreparedFieldTypes = prepared };
+                    Assert.Throws<InvalidOperationException>(() => writer.WriteWithTask04OrdinaryObservation(setup.Observation));
+                }
+                else
+                {
+                    using var writer = new CodeWriter();
+                    writer.AttachSourceFile(prepared, owner, new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }, setup.Effect);
+                    writer.CompleteSourceFile();
+                    Assert.That(setup.Effect.Failure, Is.Not.Null);
+                }
+                Assert.That(setup.Effect.HasCompleted, Is.False);
+                Assert.That(setup.Effect.BodyEntries, Is.Zero);
+            }, requestInventory: true);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void RealFooRootExportPreexistingOpaqueExportRootDeniesCompositionBeforeRawFoo(bool counterpartAttack)
+        {
+            TypeProvider? attackOwner = null;
+            string? spelling = null;
+            var calls = 0;
+            void Add(TypeProvider owner)
+            {
+                attackOwner = owner;
+                var probe = new PocNativeWriterAttachmentProbe(writer =>
+                {
+                    calls++;
+                    writer.WriteRawLine("}");
+                    writer.WriteRawLine("private class " + spelling + " {}");
+                    writer.WriteRawLine("private void RootExportBalance() {");
+                });
+                owner.Update(methods: owner.CachedMethods!.Concat([new MethodProvider(new MethodSignature("RootExportOpaqueTail", null,
+                    MethodSignatureModifiers.Private, null, null, []),
+                    new Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements([probe]), owner)]).ToArray());
+            }
+            WithRealFoo((owner, prepared) =>
+            {
+                var setup = PrepareRootExport(owner, prepared);
+                spelling = setup.Observation.Candidate.SimpleSpelling;
+                var attackFile = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, attackOwner));
+                var attackRoot = attackFile.Roots.Single(root => root.Producer is MethodProvider method && method.Signature.Name == "RootExportOpaqueTail");
+                var attackBody = attackRoot.Children.Single(child => ReferenceEquals(child.Producer, ((MethodProvider)attackRoot.Producer).BodyStatements));
+                Assert.That(prepared.PrepareTask04OwnedRootEffect(attackFile, attackRoot, attackBody), Is.Null,
+                    "This required export-capable root has no finite effect contract before raw Foo; an owned body elsewhere cannot cover it.");
+                Assert.That(calls, Is.Zero);
+                Assert.That(prepared.SourceFiles.All(file => !file.HasStarted), Is.True);
+                Assert.That(setup.Observation.Candidate.IsCurrent, Is.True);
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(setup.Observation);
+                Assert.That(setup.Effect.HasCompleted, Is.True, setup.Effect.Failure);
+                Assert.That(output.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                Assert.That(setup.Observation.Candidate.IsCurrent, Is.True);
+                Assert.That(prepared.PocGenerationEnvelope!.HasUncoveredEmission, Is.True);
+                Assert.That(prepared.GetTask03TypeOfNamePermission(setup.File, setup.Observation.Candidate.Occurrence), Is.Null);
+                Assert.That(calls, Is.EqualTo(counterpartAttack ? 0 : 1));
+                Assert.That(prepared.SourceFiles.Count(), Is.EqualTo(39));
+                if (counterpartAttack)
+                {
+                    Assert.That(attackFile.HasStarted, Is.False);
+                    var tail = new TypeProviderWriter(attackOwner!) { PreparedFieldTypes = prepared }.Write();
+                    Assert.That(tail.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                    Assert.That(calls, Is.EqualTo(1));
+                    Assert.That(setup.Observation.Candidate.IsCurrent, Is.True,
+                        "The unsafe producer was present before planning; this is not cross-generation mutation.");
+                }
+            }, requestInventory: true,
+                beforePreparation: owner => { if (!counterpartAttack) { Add(owner); } },
+                beforePocPreparation: (library, _) =>
+                {
+                    if (counterpartAttack)
+                    {
+                        Add(library.TypeProviders.OfType<Microsoft.TypeSpec.Generator.ClientModel.Providers.RestClientProvider>()
+                            .Single(provider => provider.RelativeFilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal)));
+                    }
+                });
+        }
+
+        [Test]
+        public void RealFooNextEffectsDebitSameRequestSourceAccountWithoutChangingNativeWorkSequence()
+        {
+            CodeFile? expected = null;
+            var nativeProofCalls = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                expected = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+            }, requestInventory: true, sourceCurrent: () => { nativeProofCalls++; return true; });
+            var proofCalls = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
+                var root = source.Roots.Single(node => node.Id.RootRole == "method" && node.Id.RootIndex == 0);
+                var occurrence = root.DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
+                Assert.That(prepared.PocCandidateCount, Is.Zero);
+                var candidate = prepared.TrySealPocOrdinaryRequest(source, occurrence);
+                Assert.That(candidate, Is.Not.Null);
+                Assert.That(prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence), Is.SameAs(candidate));
+                var sourceAccount = (PocWorkBudget)typeof(PreparedFieldTypes).GetField("_pocCandidateSourceBudget",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(prepared)!;
+                var before = sourceAccount.Remaining;
+                var effect = PreparedPocNativeCallEffect.TryCaptureStatement(((MethodProvider)root.Producer).BodyStatements!,
+                    source.DisableXmlDocs, sourceAccount, out var failure);
+                Assert.That(effect, Is.Not.Null, failure);
+                Assert.That(effect!.IsCurrent(sourceAccount), Is.True);
+                var afterEffects = sourceAccount.Remaining;
+                Assert.That(afterEffects, Is.LessThan(before), "The extra shape observations are debited, not native credit.");
+                Assert.That(prepared.SourceFiles.Count(), Is.EqualTo(39));
+                Assert.That(prepared.SourceFiles.All(file => !file.HasStarted), Is.True);
+                var observation = prepared.PrepareTask04OrdinaryObservation(candidate!)!;
+                Assert.That(observation, Is.Not.Null);
+                var actual = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(observation);
+                Assert.That(actual.Content, Is.EqualTo(expected!.Content));
+                Assert.That(actual.QualifiedContent, Is.EqualTo(expected.QualifiedContent));
+                Assert.That(actual.Name, Is.EqualTo(expected.Name));
+                Assert.That(observation.NativeFile, Is.SameAs(actual));
+                Assert.That(observation.NativeUse, Is.Not.Null);
+                Assert.That(observation.CandidateCurrentAtReturn, Is.True);
+                Assert.That(observation.MechanicalFrameCreated, Is.True);
+                Assert.That(prepared.Trial2FirstQueries, Is.EqualTo(1));
+                Assert.That(prepared.Trial2ResolverCalls, Is.EqualTo(1));
+                Assert.That(prepared.Trial2CanonicalCalls, Is.EqualTo(1));
+                Assert.That(prepared.PocGenerationEnvelope!.HasUncoveredEmission, Is.True);
+                Assert.That(prepared.GetTask03TypeOfNamePermission(source, occurrence), Is.Null);
+                WriteTrial2PhaseDetails(prepared, observation, actual, expected!);
+                TestContext.Out.WriteLine($"NEXT shared-source before={before}; afterEffects={afterEffects}; effectDebit={before-afterEffects}; final={sourceAccount.Remaining}; callbacks={proofCalls}; nativeCallbacks={nativeProofCalls}; outcome={observation.Outcome}; fullGenerationAuthority=false");
+            }, requestInventory: true, sourceCurrent: () => { proofCalls++; return true; });
+            Assert.That(proofCalls, Is.EqualTo(nativeProofCalls));
+        }
+
+        [Test]
+        public void RealFooNextCounterpartReplacementAfterRawReturnInvalidatesButCannotRecallRawBytes()
+        {
+            TypeProvider? counterpart = null;
+            var writes = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
+                var occurrence = source.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
+                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
+                var candidate = prepared.TrySealPocOrdinaryRequest(source, occurrence);
+                Assert.That(candidate, Is.Not.Null);
+                Assert.That(prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence), Is.SameAs(candidate));
+                Assert.That(candidate!.IsCurrent, Is.True);
+                Assert.That(prepared.SourceFiles.Count(), Is.EqualTo(39));
+                Assert.That(prepared.SourceFiles.All(file => !file.HasStarted), Is.True);
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+                Assert.That(output.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                Assert.That(candidate.IsCurrent, Is.True);
+                Assert.That(writes, Is.Zero);
+                Assert.That(prepared.SourceFiles.Where(file => !ReferenceEquals(file, source)).All(file => !file.HasStarted), Is.True);
+                Assert.That(counterpart, Is.Not.Null);
+                // No initially opaque callback was hidden from preparation. The
+                // ordinary public provider mutation occurs AFTER raw Foo returns.
+                var probe = new PocNativeWriterAttachmentProbe(writer =>
+                {
+                    writes++;
+                    writer.WriteRawLine("}");
+                    writer.WriteRawLine("private class " + candidate.SimpleSpelling + " {}");
+                    writer.WriteRawLine("private void NextBalance() {");
+                });
+                var method = new MethodProvider(new MethodSignature("NextLateOpaqueTail", null,
+                    MethodSignatureModifiers.Private, null, null, []),
+                    new Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements([probe]), counterpart!);
+                counterpart!.Update(methods: counterpart.CachedMethods!.Concat([method]).ToArray());
+                Assert.That(candidate.IsCurrent, Is.False, "Ordinary invalidation remains mandatory, not a bug to suppress.");
+                Assert.That(writes, Is.Zero);
+                var tail = new TypeProviderWriter(counterpart) { PreparedFieldTypes = prepared }.Write();
+                Assert.That(writes, Is.EqualTo(1), "Native fallback still emits the replacement exactly once.");
+                var trees = new[] { CSharpSyntaxTree.ParseText(output.Content), CSharpSyntaxTree.ParseText(tail.Content) };
+                foreach (var tree in trees) { Assert.That(tree.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error), Is.Empty); }
+                static LocalDeclarationStatementSyntax Local(SyntaxNode syntax) => syntax.DescendantNodes().OfType<MethodDeclarationSyntax>()
+                    .Single(method => method.Identifier.ValueText == "Three" && method.ParameterList.Parameters.Single().Identifier.ValueText == "options")
+                    .Body!.Statements.OfType<LocalDeclarationStatementSyntax>().Single();
+                var root = trees[0].GetRoot();
+                var nativeType = Local(root).Declaration.Type;
+                Assert.That(nativeType.ToString(), Is.EqualTo(candidate.QualifiedSpelling));
+                var inputCompilation = CodeModelGenerator.Instance.SourceInputModel.PreEmissionSourceInputs!.Compilation;
+                var nativeCompilation = inputCompilation.AddSyntaxTrees(trees);
+                Assert.That(nativeCompilation.GetSemanticModel(trees[0]).GetTypeInfo(nativeType).Type!.ToDisplayString(),
+                    Is.EqualTo("System.ClientModel.Primitives.PipelineMessage"));
+                var bareRoot = root.ReplaceNode(nativeType, SyntaxFactory.IdentifierName(candidate.SimpleSpelling));
+                var bareTree = CSharpSyntaxTree.Create((CSharpSyntaxNode)bareRoot);
+                var bareCompilation = inputCompilation.AddSyntaxTrees(bareTree, trees[1]);
+                Assert.That(bareCompilation.GetSemanticModel(bareTree).GetTypeInfo(Local(bareTree.GetRoot()).Declaration.Type).Type!.ToDisplayString(),
+                    Is.EqualTo("Client.Structure.Service.Foo.PipelineMessage"));
+                Assert.That(prepared.PocGenerationEnvelope!.HasUncoveredEmission, Is.True);
+                TestContext.Out.WriteLine("NEXT late counterpart replacement: initial preparation had no attack callback; raw Foo receipt/current=true at return; later candidate current=false; native fallback still emits shadow once; native qualified binds target, hypothetical bare binds nested shadow.");
+            }, requestInventory: true, beforePocPreparation: (output, _) =>
+            {
+                counterpart = output.TypeProviders.OfType<Microsoft.TypeSpec.Generator.ClientModel.Providers.RestClientProvider>()
+                    .Single(provider => provider.RelativeFilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+            });
+        }
+
+        // NEXT is deliberately diagnostic-only: no new spelling authority.
+        // 0 is unchanged raw Foo; 1 injects in Foo; 2 injects in its later
+        // counterpart partial declaration, after raw Foo has already returned.
+        [TestCase(0)]
+        [TestCase(1)]
+        [TestCase(2)]
+        public void RealFooNextRawReturnAndOpaqueExportBoundary(int attackLocation)
+        {
+            string? selectedName = null;
+            TypeProvider? counterpart = null;
+            var writes = 0;
+            var sourceCurrentCalls = 0;
+            Microsoft.TypeSpec.Generator.Statements.MethodBodyStatement? opaqueProbe = null;
+            void AddProbe(TypeProvider provider)
+            {
+                var probe = new PocNativeWriterAttachmentProbe(writer =>
+                {
+                    writes++;
+                    writer.WriteRawLine("}");
+                    writer.WriteRawLine("private class " + selectedName + " {}");
+                    writer.WriteRawLine("private void PocNEXTBalance() {");
+                });
+                opaqueProbe = probe;
+                var signature = new MethodSignature("PocNEXTOpaqueTail", null,
+                    MethodSignatureModifiers.Private, null, null, []);
+                var body = new Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements([probe]);
+                provider.Update(methods: provider.CachedMethods!.Concat(new[] { new MethodProvider(signature, body, provider) }).ToArray());
+            }
+
+            WithRealFoo((owner, prepared) =>
+            {
+                Assert.That(prepared.SourceFiles.Count(), Is.EqualTo(39), "Use the complete accepted universe, not a Foo-only fixture.");
+                Assert.That(prepared.SourceFiles.All(file => !file.HasStarted), Is.True);
+                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
+                var occurrence = source.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
+                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
+                Assert.That(prepared.PocCandidateCount, Is.Zero);
+                var sealedRequest = prepared.TrySealPocOrdinaryRequest(source, occurrence);
+                Assert.That(sealedRequest, Is.Not.Null);
+                var candidate = prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence);
+                Assert.That(candidate, Is.SameAs(sealedRequest));
+                Assert.That(candidate, Is.Not.Null);
+                selectedName = candidate!.SimpleSpelling;
+                if (opaqueProbe is not null)
+                {
+                    Assert.That(PreparedPocNativeCallEffect.TryCaptureStatement(opaqueProbe, source.DisableXmlDocs,
+                        new PocWorkBudget(65536), out var rejectedEffect), Is.Null);
+                    Assert.That(rejectedEffect, Does.Contain("PocNativeWriterAttachmentProbe"));
+                    Assert.That(writes, Is.Zero, "Both same-file and future-counterpart opaque effects reject before any callback.");
+                }
+                Assert.That(candidate.IsCurrent, Is.True);
+                var beforeObservedLookup = sourceCurrentCalls;
+                Assert.That(prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence), Is.SameAs(candidate));
+                Assert.That(sourceCurrentCalls, Is.EqualTo(beforeObservedLookup), "Observed lookup is not a host-currentness callback.");
+
+                // No Begin/End batch protocol, no replay, no other native writes
+                // before this accepted raw entry returns its public Content.
+                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+                Assert.That(writes, Is.EqualTo(attackLocation == 1 ? 1 : 0));
+                Assert.That(prepared.SourceFiles.Where(file => !ReferenceEquals(file, source)).All(file => !file.HasStarted), Is.True);
+                Assert.That(output.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                Assert.That(candidate.IsCurrent, Is.True, "This includes the real host-currentness route, not just observed lookup.");
+                Assert.That(candidate.SourceObservation.IsCurrent, Is.True);
+                Assert.That(prepared.PocGenerationEnvelope!.HasUncoveredEmission, Is.True);
+                Assert.That(prepared.GetTask03TypeOfNamePermission(source, occurrence), Is.Null);
+                var rawSourceCurrentCalls = sourceCurrentCalls;
+
+                var trees = new List<SyntaxTree> { CSharpSyntaxTree.ParseText(output.Content) };
+                if (attackLocation == 2)
+                {
+                    Assert.That(counterpart, Is.Not.Null);
+                    Assert.That(counterpart!.Type.Name, Is.EqualTo(owner.Type.Name), "The counterpart declares the same partial type.");
+                    var counterpartOutput = new TypeProviderWriter(counterpart) { PreparedFieldTypes = prepared }.Write();
+                    Assert.That(writes, Is.EqualTo(1), "The counterpart callback executes only after Foo's raw return.");
+                    Assert.That(counterpartOutput.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                    Assert.That(candidate.IsCurrent, Is.True);
+                    trees.Add(CSharpSyntaxTree.ParseText(counterpartOutput.Content));
+                }
+                foreach (var syntaxTree in trees)
+                {
+                    Assert.That(syntaxTree.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), Is.Empty);
+                }
+                static LocalDeclarationStatementSyntax Local(SyntaxNode syntax) => syntax.DescendantNodes().OfType<MethodDeclarationSyntax>()
+                    .Single(method => method.Identifier.ValueText == "Three" && method.ParameterList.Parameters.Single().Identifier.ValueText == "options")
+                    .Body!.Statements.OfType<LocalDeclarationStatementSyntax>().Single();
+                var tree = trees[0];
+                var root = tree.GetRoot();
+                var nativeType = Local(root).Declaration.Type;
+                Assert.That(nativeType.ToString(), Is.EqualTo(candidate.QualifiedSpelling));
+                // Compiler use is test-only evidence, never runtime authority.
+                var inputCompilation = CodeModelGenerator.Instance.SourceInputModel.PreEmissionSourceInputs!.Compilation;
+                var nativeCompilation = inputCompilation.AddSyntaxTrees(trees);
+                var nativeSymbol = nativeCompilation.GetSemanticModel(tree).GetTypeInfo(nativeType).Type!;
+                Assert.That(nativeSymbol.ToDisplayString(), Is.EqualTo("System.ClientModel.Primitives.PipelineMessage"));
+                var bareRoot = root.ReplaceNode(nativeType, SyntaxFactory.IdentifierName(selectedName));
+                var bareTree = CSharpSyntaxTree.Create((CSharpSyntaxNode)bareRoot);
+                var bareCompilation = inputCompilation.AddSyntaxTrees(new[] { bareTree }.Concat(trees.Skip(1)));
+                var bareSymbol = bareCompilation.GetSemanticModel(bareTree).GetTypeInfo(Local(bareTree.GetRoot()).Declaration.Type).Type!;
+                Assert.That(bareSymbol.ToDisplayString(), Is.EqualTo(attackLocation == 0
+                    ? "System.ClientModel.Primitives.PipelineMessage" : "Client.Structure.Service.Foo.PipelineMessage"));
+                Assert.That(writes, Is.EqualTo(attackLocation == 0 ? 0 : 1));
+                Assert.That(prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence), Is.SameAs(candidate));
+                TestContext.Out.WriteLine($"NEXT location={attackLocation}; universe=39; callbacks={writes}; rawSourceCurrentCalls={rawSourceCurrentCalls}; totalSourceCurrentCalls={sourceCurrentCalls}; sourceReceipt={output.SourceConsumption?.WasCurrentAtEndOfWrite}; candidateCurrent=true; native={nativeSymbol}; bare={bareSymbol}; uncovered=true");
+            }, requestInventory: true, sourceCurrent: () => { sourceCurrentCalls++; return true; },
+                beforePreparation: owner => { if (attackLocation == 1) { AddProbe(owner); } },
+                beforePocPreparation: (output, _) =>
+                {
+                    if (attackLocation != 2) { return; }
+                    counterpart = output.TypeProviders.OfType<Microsoft.TypeSpec.Generator.ClientModel.Providers.RestClientProvider>()
+                        .Single(provider => provider.RelativeFilePath.EndsWith("/Foo.RestClient.cs", StringComparison.Ordinal));
+                    AddProbe(counterpart);
+                });
+        }
+
+
+
+        [Test]
+        public void RealFooNextActualNativeCallFrontierHasCompositionalExpressionEffect()
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
+                Assert.That(prepared.SourceFiles.Count(), Is.EqualTo(39));
+                var root = source.Roots.Single(node => node.Id.RootRole == "method" && node.Id.RootIndex == 0);
+                var frontier = root.DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.ClientModel.Providers.PipelineResponseProvider);
+                Assert.That(frontier.Id.EdgePath, Does.EndWith("statement[1]/expression/value/argument[0]"));
+                var budget = new PocWorkBudget(65536);
+                var effect = PreparedPocNativeCallEffect.TryCapture((Microsoft.TypeSpec.Generator.Expressions.ValueExpression)frontier.Producer,
+                    source.DisableXmlDocs, budget, out var failure);
+                Assert.That(effect, Is.Not.Null, failure);
+                Assert.That(effect!.IsCurrent(budget), Is.True);
+                var bodyBudget = new PocWorkBudget(65536);
+                var bodyEffect = PreparedPocNativeCallEffect.TryCaptureStatement(((MethodProvider)root.Producer).BodyStatements!,
+                    source.DisableXmlDocs, bodyBudget, out var bodyFailure);
+                Assert.That(bodyEffect, Is.Not.Null, bodyFailure);
+                Assert.That(bodyEffect!.IsCurrent(bodyBudget), Is.True);
+                TestContext.Out.WriteLine($"NEXT unchanged method[0] statement effect=true; remaining={bodyBudget.Remaining}");
+                Assert.That(prepared.SourceFiles.All(file => !file.HasStarted), Is.True);
+                Assert.That(prepared.PocCandidateCount, Is.Zero, "No candidate before an owned request is sealed.");
+                TestContext.Out.WriteLine($"NEXT actual frontier={frontier.Id.EdgePath}; expressionEffect=true; remaining={budget.Remaining}; universe=39; writers=0");
+            }, requestInventory: true);
+        }
+
+        [Test]
+        public void RealFooNextActualFormattersComposeAllEmittingHoles()
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                var formats = prepared.SourceFiles.SelectMany(file => file.Roots.SelectMany(root => root.DescendantsAndSelf())
+                    .Where(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.FormattableStringExpression)
+                    .Select(node => (file, node))).ToArray();
+                Assert.That(formats, Has.Length.EqualTo(11));
+                foreach (var (file, node) in formats)
+                {
+                    var budget = new PocWorkBudget(65536);
+                    var effect = PreparedPocNativeCallEffect.TryCapture((Microsoft.TypeSpec.Generator.Expressions.ValueExpression)node.Producer,
+                        file.DisableXmlDocs, budget, out var failure);
+                    Assert.That(effect, Is.Not.Null, $"{file.FileOwner.RelativeFilePath}/{node.Id.EdgePath}: {failure}");
+                    Assert.That(effect!.IsCurrent(budget), Is.True);
+                    TestContext.Out.WriteLine($"NEXT formatter={file.FileOwner.RelativeFilePath}/{node.Id.EdgePath}; expressionEffect=true; remaining={budget.Remaining}");
+                }
+                Assert.That(prepared.SourceFiles.All(file => !file.HasStarted), Is.True);
+            }, requestInventory: true);
+        }
+
+        [Test]
+        public void RealFooNextKnownWrapperCannotHideRawChildAndObservedMutationSticks()
+        {
+            var writes = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
+                var root = source.Roots.Single(node => node.Id.RootRole == "method" && node.Id.RootIndex == 0);
+                var wrapper = (Microsoft.TypeSpec.Generator.Snippets.ScopedApi)root.DescendantsAndSelf()
+                    .Single(node => node.Producer is Microsoft.TypeSpec.Generator.ClientModel.Providers.PipelineResponseProvider).Producer;
+                var original = wrapper.Original;
+                var effect = PreparedPocNativeCallEffect.TryCapture(wrapper, source.DisableXmlDocs, new PocWorkBudget(65536), out var failure);
+                Assert.That(effect, Is.Not.Null, failure);
+                wrapper.Update(original: new PocFieldWriterAttachmentProbe(writer => { writes++; writer.WriteRawLine("}); } class Escape {} //"); }));
+                Assert.That(effect!.IsCurrent(new PocWorkBudget(65536)), Is.False);
+                Assert.That(PreparedPocNativeCallEffect.TryCapture(wrapper, source.DisableXmlDocs, new PocWorkBudget(65536), out failure), Is.Null);
+                Assert.That(failure, Does.Contain("PocFieldWriterAttachmentProbe"));
+                Assert.That(writes, Is.Zero, "Preparation must not invoke an opaque native child.");
+                using (var writer = new CodeWriter()) { wrapper.Write(writer); }
+                Assert.That(writes, Is.EqualTo(1), "Only actual native consumption executes it.");
+                wrapper.Update(original: original);
+                Assert.That(effect.IsCurrent(new PocWorkBudget(65536)), Is.False, "Observed mutation is sticky after restore.");
+            }, requestInventory: true);
+        }
+
+        [TestCase("bad-name")]
+        [TestCase("bad-format")]
+        [TestCase("raw-hole")]
+        public void RealFooNextFiniteEffectRejectsActualUnsafeScalarsAndDescendants(string kind)
+        {
+            var writes = 0;
+            Microsoft.TypeSpec.Generator.Expressions.ValueExpression expression = kind switch
+            {
+                "bad-name" => new Microsoft.TypeSpec.Generator.Expressions.MemberExpression(null, "x); } class Escape {} //"),
+                "bad-format" => new Microsoft.TypeSpec.Generator.Expressions.FormattableStringExpression("\"; // escape", []),
+                _ => new Microsoft.TypeSpec.Generator.Expressions.FormattableStringExpression("safe {0}",
+                    [new PocFieldWriterAttachmentProbe(_ => writes++)])
+            };
+            Assert.That(PreparedPocNativeCallEffect.TryCapture(expression, true, new PocWorkBudget(65536), out var failure), Is.Null);
+            Assert.That(failure, Is.Not.Null.And.Not.Empty);
+            Assert.That(writes, Is.Zero);
+        }
+
+        [Test]
+        public void RealFooNextActualOpaqueProducerFrontierInventory()
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                var opaque = prepared.SourceFiles.SelectMany(file => file.Roots.SelectMany(root => root.DescendantsAndSelf())
+                    .Where(node => node.IsOpaque && node.Producer is not Microsoft.TypeSpec.Generator.Snippets.ScopedApi)
+                    .Select(node => new { file = file.FileOwner.RelativeFilePath, path = node.Id.EdgePath,
+                        producer = node.Producer.GetType().FullName, reason = node.UnavailableReason })).ToArray();
+                TestContext.Out.WriteLine("NEXT_OPAQUE_FRONTIER=" + System.Text.Json.JsonSerializer.Serialize(opaque));
+                Assert.That(prepared.SourceFiles.Count(), Is.EqualTo(39));
+                Assert.That(prepared.SourceFiles.All(file => !file.HasStarted), Is.True);
+            }, requestInventory: true);
+        }
+
+        [Test]
+        public void RealFooTrial2EagerSharedLedgerDiagnostic()
+        {
+            CodeFile? expected = null;
+            var nativeProofCalls = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                expected = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+            }, precomputePoc: true, sourceCurrent: () => { nativeProofCalls++; return true; });
+            var proofCalls = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
+                var occurrence = source.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
+                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
+                Assert.That(prepared.SourceFiles.Count(), Is.EqualTo(39));
+                Assert.That(prepared.SourceFiles.All(file => !file.HasStarted), Is.True);
+                var candidate = prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence)!;
+                Assert.That(candidate, Is.Not.Null);
+                var beforeObservation = prepared.Trial2SourceRemaining;
+                var observation = prepared.PrepareTask04OrdinaryObservation(candidate)!;
+                Assert.That(observation, Is.Not.Null);
+                var afterObservation = prepared.Trial2SourceRemaining;
+                var actual = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(observation);
+                Assert.That(actual.Content, Is.EqualTo(expected!.Content));
+                Assert.That(actual.QualifiedContent, Is.EqualTo(expected.QualifiedContent));
+                Assert.That(actual.Name, Is.EqualTo(expected.Name));
+                Assert.That(observation.NativeFile, Is.SameAs(actual));
+                Assert.That(observation.NativeUse, Is.Not.Null);
+                Assert.That(observation.CandidateCurrentAtReturn, Is.True);
+                WriteTrial2PhaseDetails(prepared, observation, actual, expected!);
+                TestContext.Out.WriteLine($"TRIAL2 eager inventoryRemaining={prepared.Trial2InventoryRemaining} requestsRemaining={prepared.Trial2RequestsRemaining} finalRemaining={prepared.Trial2FinalRemaining} beforeObservation={beforeObservation} afterObservation={afterObservation} postWriteRemaining={prepared.Trial2SourceRemaining} attempts={prepared.Trial2CandidateAttempts} firstQueries={prepared.Trial2FirstQueries} resolvers={prepared.Trial2ResolverCalls} secondCanonical={prepared.Trial2CanonicalCalls} visited={prepared.Trial2VisitedOccurrences} candidates={prepared.PocCandidateCount} callbacks={proofCalls} nativeCallbacks={nativeProofCalls} frame={observation.MechanicalFrameCreated} outcome={observation.Outcome}");
+            }, precomputePoc: true, sourceCurrent: () => { proofCalls++; return true; });
+            Assert.That(proofCalls, Is.EqualTo(nativeProofCalls));
+        }
+
+        [Test]
+        public void RealFooTrial2RequestedSharedLedgerDiagnostic()
+        {
+            CodeFile? expected = null;
+            var nativeProofCalls = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                expected = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+            }, precomputePoc: true, sourceCurrent: () => { nativeProofCalls++; return true; });
+            var proofCalls = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
+                var occurrence = source.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
+                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
+                Assert.That(prepared.SourceFiles.Count(), Is.EqualTo(39));
+                Assert.That(prepared.SourceFiles.All(file => !file.HasStarted), Is.True);
+                Assert.That(prepared.PocCandidateCount, Is.Zero);
+                var sealedRequest = prepared.TrySealPocOrdinaryRequest(source, occurrence);
+                Assert.That(sealedRequest, Is.Not.Null);
+                Assert.That(prepared.PocCandidateCount, Is.EqualTo(1));
+                var candidate = prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence)!;
+                Assert.That(candidate, Is.SameAs(sealedRequest));
+                Assert.That(prepared.TrySealPocOrdinaryRequest(source, occurrence), Is.Null, "Request is single use.");
+                Assert.That(candidate, Is.Not.Null);
+                var beforeObservation = prepared.Trial2SourceRemaining;
+                var observation = prepared.PrepareTask04OrdinaryObservation(candidate)!;
+                Assert.That(observation, Is.Not.Null);
+                var afterObservation = prepared.Trial2SourceRemaining;
+                var actual = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(observation);
+                Assert.That(actual.Content, Is.EqualTo(expected!.Content));
+                Assert.That(actual.QualifiedContent, Is.EqualTo(expected.QualifiedContent));
+                Assert.That(actual.Name, Is.EqualTo(expected.Name));
+                Assert.That(observation.NativeFile, Is.SameAs(actual));
+                Assert.That(observation.NativeUse, Is.Not.Null);
+                Assert.That(observation.CandidateCurrentAtReturn, Is.True);
+                WriteTrial2PhaseDetails(prepared, observation, actual, expected!);
+                TestContext.Out.WriteLine($"TRIAL2 requested inventoryRemaining={prepared.Trial2InventoryRemaining} requestsRemaining={prepared.Trial2RequestsRemaining} finalRemaining={prepared.Trial2FinalRemaining} beforeObservation={beforeObservation} afterObservation={afterObservation} postWriteRemaining={prepared.Trial2SourceRemaining} attempts={prepared.Trial2CandidateAttempts} firstQueries={prepared.Trial2FirstQueries} resolvers={prepared.Trial2ResolverCalls} secondCanonical={prepared.Trial2CanonicalCalls} visited={prepared.Trial2VisitedOccurrences} candidates={prepared.PocCandidateCount} callbacks={proofCalls} nativeCallbacks={nativeProofCalls} frame={observation.MechanicalFrameCreated} outcome={observation.Outcome}");
+            }, requestInventory: true, sourceCurrent: () => { proofCalls++; return true; });
+            Assert.That(proofCalls, Is.EqualTo(nativeProofCalls));
+        }
+
+        private static void WriteTrial2PhaseDetails(PreparedFieldTypes prepared, Task04OrdinaryObservation observation, CodeFile actual, CodeFile expected)
+        {
+            foreach (var field in new[] { false, true })
+            {
+                foreach (var body in new[] { false, true })
+                {
+                    Assert.That(actual.SelectPreparedNames(field, body).Content, Is.EqualTo(expected.SelectPreparedNames(field, body).Content));
+                }
+            }
+            var required = PocFrameWorkReservations.AttemptCost(actual.NativeLegacyAlternatives.Length, 1, 1,
+                Math.Max(actual.Content.Length, actual.QualifiedContent?.Length ?? 0));
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            int Remaining(string name) => ((PocWorkBudget)typeof(PreparedFieldTypes).GetField(name, flags)!.GetValue(prepared)!).Remaining;
+            int Count(string name) => ((System.Collections.IDictionary)typeof(PreparedFieldTypes).GetField(name, flags)!.GetValue(prepared)!).Count;
+            var rawHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(actual.Content)));
+            TestContext.Out.WriteLine($"TRIAL2 phases beforeAttach={observation.BeforeAttachObservation} afterAttach={observation.AfterAttachObservation} afterCapture={observation.AfterCaptureReservation} beforePostWrite={observation.BeforePostWriteObservation} afterPostWrite={observation.AfterPostWriteObservation} afterFrame={observation.AfterFrameCreation} afterSetup={observation.AfterMechanicalSetup} afterRender={observation.AfterRender} reservationRequired={required} legacyAlternatives={actual.NativeLegacyAlternatives.Length} rawSHA256={rawHash} relatedScopeRemaining={Remaining("_pocRelatedScopeCaptureBudget")} nameInventoryRemaining={Remaining("_pocNameInventoryCaptureBudget")} modelFactoryRemaining={Remaining("_pocModelFactoryCaptureBudget")} supplementalFiles={Count("_pocSupplementalFiles")} relatedOwners={Count("_pocRelatedOwnerScopes")}");
+        }
+
+        [TestCase("foreign-occurrence")]
+        [TestCase("foreign-file")]
+        public void RealFooTrial2RejectsForeignRequest(string kind)
+        {
+            PreparedSourceFile? foreignFile = null;
+            PreparedSourceOccurrence? foreignOccurrence = null;
+            WithRealFoo((owner, prepared) =>
+            {
+                foreignFile = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
+                foreignOccurrence = foreignFile.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
+                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
+            }, requestInventory: true);
+            WithRealFoo((owner, prepared) =>
+            {
+                var file = prepared.SourceFiles.Single(source => ReferenceEquals(source.FileOwner, owner));
+                Assert.That(prepared.TrySealPocOrdinaryRequest(kind == "foreign-file" ? foreignFile! : file, foreignOccurrence!), Is.Null);
+                Assert.That(prepared.PocCandidateCount, Is.Zero);
+                Assert.That(prepared.Trial2FirstQueries, Is.Zero, "Foreign source identity fails before binding.");
+            }, requestInventory: true);
+        }
+
+        [TestCase("shadow")]
+        [TestCase("changed-occurrence")]
+        [TestCase("changed-scope")]
+        [TestCase("changed-root")]
+        [TestCase("stale-source")]
+        [TestCase("started-file")]
+        public void RealFooTrial2RejectsAdversarialRequest(string kind)
+        {
+            var current = true;
+            var proofCalls = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                var file = prepared.SourceFiles.Single(source => ReferenceEquals(source.FileOwner, owner));
+                var occurrence = file.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
+                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
+                TypeProvider? rest = null;
+                TypeProvider[]? oldNested = null;
+                var output = CodeModelGenerator.Instance.OutputLibrary;
+                var oldRoots = output.TypeProviders;
+                if (kind == "changed-occurrence")
+                { ((Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression)occurrence.Producer).Update(variable: null, isOut: true); }
+                if (kind == "changed-scope")
+                {
+                    rest = prepared.SourceFiles.Single(source => source.FileOwner.GetType() == typeof(Microsoft.TypeSpec.Generator.ClientModel.Providers.RestClientProvider) &&
+                        source.FileOwner.CachedType?.Namespace == owner.CachedType!.Namespace && source.FileOwner.CachedType?.Name == owner.CachedType.Name).FileOwner;
+                    oldNested = rest.NestedTypes.ToArray();
+                    rest.Update(nestedTypes: [new PocNestedPipelineMessageShadow(rest)]);
+                }
+                if (kind == "changed-root") { output.TypeProviders = new List<TypeProvider>(oldRoots); }
+                if (kind == "stale-source") { current = false; prepared.ObserveSnapshot(); }
+                if (kind == "started-file") { new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write(); }
+                try
+                {
+                    var before = proofCalls;
+                    Assert.That(prepared.TrySealPocOrdinaryRequest(file, occurrence), Is.Null);
+                    Assert.That(proofCalls, Is.EqualTo(before), "Request handoff never replays the source proof callback.");
+                    Assert.That(prepared.PocCandidateCount, Is.Zero);
+                    if (kind != "shadow") { Assert.That(prepared.Trial2FirstQueries, Is.Zero); }
+                    if (rest is not null) { rest.Update(nestedTypes: oldNested!); }
+                    output.TypeProviders = oldRoots;
+                    current = true;
+                    Assert.That(prepared.TrySealPocOrdinaryRequest(file, occurrence), Is.Null, "A declined single-use request cannot be retried after restoration.");
+                }
+                finally
+                {
+                    if (rest is not null) { rest.Update(nestedTypes: oldNested!); }
+                    output.TypeProviders = oldRoots;
+                    current = true;
+                }
+            }, requestInventory: true, addFooShadow: kind == "shadow", sourceCurrent: () => { proofCalls++; return current; });
+        }
+
+        [Test]
+        public void RealFooTrial2RejectsStaleRequestedCandidateWithoutTask03Promotion()
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                var file = prepared.SourceFiles.Single(source => ReferenceEquals(source.FileOwner, owner));
+                var occurrence = file.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
+                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
+                var candidate = prepared.TrySealPocOrdinaryRequest(file, occurrence)!;
+                Assert.That(candidate, Is.Not.Null);
+                Assert.That(prepared.GetTask03TypeOfNamePermission(file, occurrence), Is.Null);
+                var queries = prepared.Trial2FirstQueries;
+                Assert.That(prepared.ObserveTask04OrdinaryCandidate(candidate), Is.True);
+                ((Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression)occurrence.Producer).Update(variable: null, isOut: true);
+                Assert.That(prepared.ObserveTask04OrdinaryCandidate(candidate), Is.False);
+                Assert.That(prepared.PrepareTask04OrdinaryObservation(candidate), Is.Null);
+                Assert.That(prepared.Trial2FirstQueries, Is.EqualTo(queries), "Currentness/handoff adds no binding query.");
+            }, requestInventory: true);
+        }
+
         [Test]
         public void RealFooUsingDeclarationWritesPreparedPipelineMessageType()
         {
@@ -6359,6 +7442,90 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
             });
         }
 
+        [TestCase("source-roots")]
+        [TestCase("source-policy")]
+        [TestCase("shared-roots")]
+        public void NativeHeaderReviewObservedInvalidationStaysTerminalAfterRestoration(string path)
+        {
+            var sourceCalls = 0;
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out var published), Is.True);
+                var roots = (List<TypeProvider>)CodeModelGenerator.Instance.OutputLibrary.TypeProviders;
+                const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                var session = (PocNativeMetadataInputSession)typeof(PreparedFieldTypes).GetField("_pocLookup", flags)!.GetValue(prepared)!;
+                if (path == "source-policy")
+                {
+                    var configuration = CodeModelGenerator.Instance.Configuration;
+                    var policy = typeof(Configuration).GetProperty(nameof(Configuration.EnablePreEmissionSimplification), flags)!;
+                    var original = configuration.EnablePreEmissionSimplification;
+                    Assert.That(original, Is.True, "This branch must actually change the existing simplification policy.");
+                    try
+                    {
+                        policy.SetValue(configuration, false);
+                        prepared.ObserveSourceSnapshot();
+                        Assert.That(typeof(PreparedFieldTypes).GetField("_sourceDisposed", flags)!.GetValue(prepared), Is.EqualTo(true),
+                            "The existing source observation must record terminal state before testing header retirement.");
+                    }
+                    finally { policy.SetValue(configuration, original); }
+                }
+                else
+                {
+                    roots.Reverse();
+                    try
+                    {
+                        if (path == "source-roots")
+                        {
+                            prepared.ObserveSourceSnapshot();
+                            Assert.That(typeof(PreparedFieldTypes).GetField("_sourceDisposed", flags)!.GetValue(prepared), Is.EqualTo(true));
+                        }
+                        else
+                        {
+                            var current = typeof(PreparedFieldTypes).GetMethod("IsSnapshotCurrent", flags)!;
+                            Assert.That(current.Invoke(prepared, null), Is.EqualTo(false));
+                            Assert.That(typeof(PreparedFieldTypes).GetField("_sharedSnapshotStale", flags)!.GetValue(prepared), Is.EqualTo(1));
+                        }
+                    }
+                    finally { roots.Reverse(); }
+                }
+                var callsAfterObservation = sourceCalls;
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False,
+                    "An already-observed sticky source/shared invalidation must retire native-header publication.");
+                Assert.That(session.IsRejected, Is.True);
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False);
+                Assert.That(sourceCalls, Is.EqualTo(callsAfterObservation), "Header retirement must not replay source-currentness callbacks.");
+                Assert.That(published.TypeDef, Is.GreaterThan(0), "Previously returned scalar copies survive retirement.");
+            }, beforePocPreparation: (output, _) => output.TypeProviders = output.TypeProviders.ToList(),
+                sourceCurrent: () => { sourceCalls++; return true; }, nativeMetadataInputs: true);
+        }
+
+        [Test]
+        public void NativeHeaderReviewUnchangedRemovalPolicyDoesNotInventInvalidation()
+        {
+            var sourceCalls = 0;
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out var published), Is.True);
+                const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                var policy = typeof(Configuration).GetProperty(nameof(Configuration.UnreferencedTypesHandling), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)!;
+                var original = Configuration.UnreferencedTypesHandling;
+                Assert.That(original, Is.EqualTo(Configuration.UnreferencedTypesHandlingOption.RemoveOrInternalize));
+                try
+                {
+                    policy.SetValue(null, Configuration.UnreferencedTypesHandlingOption.RemoveOrInternalize);
+                    prepared.ObserveSourceSnapshot();
+                }
+                finally { policy.SetValue(null, original); }
+                Assert.That(typeof(PreparedFieldTypes).GetField("_sourceDisposed", flags)!.GetValue(prepared), Is.EqualTo(false));
+                Assert.That(typeof(PreparedFieldTypes).GetField("_sharedSnapshotStale", flags)!.GetValue(prepared), Is.EqualTo(0));
+                var callsAfterObservation = sourceCalls;
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out var retained), Is.True);
+                Assert.That(retained, Is.EqualTo(published));
+                Assert.That(sourceCalls, Is.EqualTo(callsAfterObservation));
+            }, beforePocPreparation: (output, _) => output.TypeProviders = output.TypeProviders.ToList(),
+                sourceCurrent: () => { sourceCalls++; return true; }, nativeMetadataInputs: true);
+        }
+
         [Test]
         public void RealFooPocReportsGenerationConfinementGapsBeforeWriting()
         {
@@ -7576,7 +8743,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
             Func<TypeProvider, bool> shouldWrite)
         {
             var core = typeof(PreparedFieldTypes).GetMethod("CreateForGenerationCore", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-            return (PreparedFieldTypes?)core.Invoke(null, new object?[] { generator, null, shouldWrite, true, output, false });
+            return (PreparedFieldTypes?)core.Invoke(null, new object?[] { generator, null, shouldWrite, true, output, false, null, false });
         }
 
         private static IEnumerable<TypeProvider> GetWrittenProviderStream(OutputLibrary output, ProviderReferenceMapSession referenceMap, object? generationOwner = null)
@@ -8079,6 +9246,990 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
             });
         }
 
+        [Test]
+        public void NativeCheckedRealFooExplicitPrefixModePublishesCompleteRawObservations()
+        {
+            // Reflection is test-only: the faithful live factory fixture must
+            // compile against the preserved baseline and fail for the missing
+            // component, rather than bypassing the native ownership boundary.
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+            var callbacks = 0;
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                var read = typeof(PreparedFieldTypes).GetMethod("TryReadNativeMetadataCheckedNameInputs", flags);
+                Assert.That(read, Is.Not.Null, "Complete checked inputs need a historical scalar-only facade.");
+                var observed = (PocNativeMetadataInputSession)typeof(PreparedFieldTypes).GetField("_pocLookup", flags)!.GetValue(prepared)!;
+                TestContext.Progress.WriteLine($"CHECKED: rejected={observed.IsRejected}; remaining={observed.Remaining}; layout={observed.LayoutReadCount}; rows={observed.CheckedRowsVisited}; fixed={observed.CheckedFixedByteReadCount}; heap={observed.CheckedHeapByteReadCount}");
+                var beforeReads = callbacks;
+                var totalRows = 0;
+                for (var ordinal = 0; ordinal < 2; ordinal++)
+                {
+                    Assert.That(prepared.TryReadNativeMetadataExternalHeader(ordinal, out var header), Is.True);
+                    Assert.That(prepared.TryReadNativeMetadataExternalLayout(ordinal, out _), Is.True);
+                    object?[] args = [ordinal, null];
+                    Assert.That(read!.Invoke(prepared, args), Is.EqualTo(true));
+                    var result = args[1]!;
+                    int Scalar(string name)
+                    {
+                        var property = result.GetType().GetProperty(name, flags);
+                        Assert.That(property, Is.Not.Null, name);
+                        Assert.That(property!.PropertyType, Is.EqualTo(typeof(int)));
+                        return (int)property.GetValue(result)!;
+                    }
+                    var rows = Scalar("RowsVisited");
+                    var names = Scalar("PossibleNamePrefixes");
+                    var namespaces = Scalar("PossibleNameAndNamespacePrefixes");
+                    Assert.That(rows, Is.EqualTo(header.TypeDef));
+                    Assert.That(names, Is.InRange(0, rows));
+                    Assert.That(namespaces, Is.InRange(0, names));
+                    Assert.That(Scalar("AmbiguousRows"), Is.InRange(0, rows));
+                    if (ordinal == 1) { Assert.That(namespaces, Is.GreaterThan(0)); }
+                    totalRows += rows;
+                }
+                Assert.That(totalRows, Is.EqualTo(3051), "Both owned modules must finish before any counts publish.");
+                Assert.That(callbacks, Is.EqualTo(beforeReads), "Scalar reads must not replay currentness callbacks.");
+                Assert.That(prepared.PocCandidateCount, Is.Zero, "Raw observations are not ordinary candidates or binding authority.");
+            }, nativeMetadataInputs: true, sourceCurrent: () => { callbacks++; return true; },
+                nativeSessionFactory: limit =>
+                {
+                    var factory = typeof(PocNativeMetadataInputSession).GetMethod("TryCreateWithCheckedNameInputs", flags,
+                        binder: null, types: [typeof(byte[]), typeof(byte[]), typeof(int)], modifiers: null);
+                    Assert.That(factory, Is.Not.Null, "Explicit checked-name input mode must exist before the private image frame.");
+                    return (PocNativeMetadataInputSession?)factory!.Invoke(null,
+                        [System.Text.Encoding.ASCII.GetBytes("PipelineMessage"),
+                            System.Text.Encoding.ASCII.GetBytes("System.ClientModel.Primitives"), limit]);
+                }, inspectNativeInputs: (session, unusedCompilation, unusedPrepared) =>
+                {
+                    Assert.That(session, Is.Not.Null);
+                    Assert.That(session!.IsRejected, Is.False);
+                    Assert.That(session.NativeMatchCount, Is.EqualTo(3));
+                    Assert.That(session.HeaderReadCount, Is.EqualTo(2));
+                    Assert.That(session.LayoutReadCount, Is.EqualTo(2));
+                    Assert.That(session.ModuleMoveNextCount, Is.EqualTo(4));
+                    Assert.That(session.MetadataAccessCount, Is.EqualTo(2));
+                });
+        }
+
+        [Test]
+        public void NativeCheckedRealFooReferencesOnlyDiagnosticWorkAndWholeDebit()
+        {
+            int Tariff(string field, int fallback) => (int?)typeof(PocNativeMetadataInputSession)
+                .GetField(field, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)?.GetRawConstantValue() ?? fallback;
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                var session = (PocNativeMetadataInputSession)typeof(PreparedFieldTypes).GetField("_pocLookup",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(prepared)!;
+                Assert.That(session.IsRejected, Is.False);
+                var possibleNames = 0;
+                for (var ordinal = 0; ordinal < 2; ordinal++)
+                {
+                    Assert.That(prepared.TryReadNativeMetadataCheckedNameInputs(ordinal, out var raw), Is.True);
+                    Assert.That(prepared.TryReadNativeMetadataExternalHeader(ordinal, out var header), Is.True);
+                    Assert.That(prepared.TryReadNativeMetadataExternalLayout(ordinal, out var layout), Is.True);
+                    Assert.That(raw.RowsVisited, Is.EqualTo(header.TypeDef));
+                    Assert.Multiple(() =>
+                    {
+                        Assert.That(raw.RowsVisited, Is.EqualTo(ordinal == 0 ? 2760 : 291));
+                        Assert.That(layout.StringReferenceWidth, Is.EqualTo(ordinal == 0 ? 4 : 2));
+                        Assert.That(raw.PossibleNamePrefixes, Is.EqualTo(ordinal == 0 ? 0 : 5));
+                        Assert.That(raw.PossibleNameAndNamespacePrefixes, Is.EqualTo(ordinal == 0 ? 0 : 2));
+                        Assert.That(raw.AmbiguousRows, Is.Zero);
+                    });
+                    possibleNames += raw.PossibleNamePrefixes;
+                    TestContext.Progress.WriteLine($"REFERENCES FOO RECORD {ordinal}: rows={raw.RowsVisited}; width={layout.StringReferenceWidth}; names={raw.PossibleNamePrefixes}; namespaces={raw.PossibleNameAndNamespacePrefixes}; ambiguous={raw.AmbiguousRows}");
+                }
+                Assert.Multiple(() =>
+                {
+                    Assert.That(session.CheckedRowsVisited, Is.EqualTo(3051));
+                    Assert.That(session.CheckedFixedByteReadCount, Is.EqualTo(2760 * 8 + 291 * 4),
+                        "Secondary actual-work diagnostic only: BOTH refs in EVERY complete row, no discarded flags.");
+                    Assert.That(session.CheckedHeapByteReadCount, Is.EqualTo(3428), "Needed heap work must remain unchanged.");
+                    Assert.That(possibleNames, Is.EqualTo(5), "Exactly five conditional namespace entries.");
+                    Assert.That(PocNativeMetadataInputSession.SourceLimit - session.Remaining,
+                        Is.EqualTo(11312 + 2 * PocNativeMetadataInputSession.CheckedCertificateCost +
+                            2760 * Tariff("CheckedCertifiedWideRowCost", PocNativeMetadataInputSession.CheckedCertifiedRowCost) +
+                            291 * PocNativeMetadataInputSession.CheckedCertifiedRowCost +
+                            (3428 - 3051 - possibleNames) * PocNativeMetadataInputSession.CheckedCertifiedHeapByteCost +
+                            possibleNames * Tariff("CheckedCertifiedNamespaceEntryCost", 0)));
+                    Assert.That(session.NativeMatchCount, Is.EqualTo(3));
+                    Assert.That(session.HeaderReadCount, Is.EqualTo(2));
+                    Assert.That(session.LayoutReadCount, Is.EqualTo(2));
+                    Assert.That(session.ModuleMoveNextCount, Is.EqualTo(4));
+                    Assert.That(session.MetadataAccessCount, Is.EqualTo(2));
+                    Assert.That(prepared.PocCandidateCount, Is.Zero);
+                });
+                TestContext.Progress.WriteLine($"REFERENCES FOO WHOLE: rows={session.CheckedRowsVisited}; fixed={session.CheckedFixedByteReadCount}; heap={session.CheckedHeapByteReadCount}; namespaceEntries={possibleNames}; debit={PocNativeMetadataInputSession.SourceLimit - session.Remaining}; remaining={session.Remaining}");
+            }, nativeMetadataInputs: true,
+                nativeSessionFactory: limit => PocNativeMetadataInputSession.TryCreateWithCheckedNameInputs(
+                    System.Text.Encoding.ASCII.GetBytes("PipelineMessage"),
+                    System.Text.Encoding.ASCII.GetBytes("System.ClientModel.Primitives"), limit));
+        }
+
+        [Test]
+        public void NativeCheckedRealFooRetainedPrivateCountsAreNotPartialPublication()
+        {
+            const int shortLimit = 300000; // Genuine optional underfunding control, not a native cap increase.
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+            object? retainedState = null;
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                Assert.That(prepared.TryReadNativeMetadataCheckedNameInputs(0, out var result), Is.False);
+                Assert.That(result, Is.EqualTo(default(PocNativeMetadataCheckedNameInputs)));
+            }, nativeMetadataInputs: true,
+                nativeSessionFactory: limit =>
+                {
+                    var session = PocNativeMetadataInputSession.TryCreateWithCheckedNameInputs(
+                        System.Text.Encoding.ASCII.GetBytes("PipelineMessage"),
+                        System.Text.Encoding.ASCII.GetBytes("System.ClientModel.Primitives"), Math.Min(limit, shortLimit));
+                    // Test-only ordinary private-state inspection, never a
+                    // pointer/window/certificate or production progress API.
+                    retainedState = typeof(PocNativeMetadataInputSession).GetField("_checked", flags)!.GetValue(session);
+                    return session;
+                }, inspectNativeInputs: (session, unusedCompilation, unusedPrepared) =>
+                {
+                    Assert.That(session!.IsRejected, Is.True);
+                    Assert.That(typeof(PocNativeMetadataInputSession).GetField("_checked", flags)!.GetValue(session), Is.Null);
+                    int Count(string field) => (int)retainedState!.GetType().GetField(field, flags)!.GetValue(retainedState)!;
+                    Assert.That(Count("Rows"), Is.EqualTo(291));
+                    Assert.That(Count("FixedBytes"), Is.EqualTo(1164), "291 complete width2 rows, BOTH references, no discarded flags on the certified path.");
+                    Assert.That(Count("HeapBytes"), Is.EqualTo(573));
+                    Assert.That(session.CheckedRowsVisited, Is.Zero);
+                    Assert.That(session.CheckedFixedByteReadCount, Is.Zero);
+                    Assert.That(session.CheckedHeapByteReadCount, Is.Zero);
+                    Assert.That(session.TryReadCheckedNameInputs(1, out var rejected), Is.False);
+                    Assert.That(rejected, Is.EqualTo(default(PocNativeMetadataCheckedNameInputs)));
+                    TestContext.Progress.WriteLine($"FENCE FOO PRIVATE ONLY: rows={Count("Rows")}; fixed={Count("FixedBytes")}; heap={Count("HeapBytes")}; debit={shortLimit - session.Remaining}");
+                });
+        }
+
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        [TestCase(true, true)]
+        public void NativeCheckedRealFooAuditedCapRejectIsOptionalAndPreservesWriter(bool precomputePoc, bool pocFooFirst)
+        {
+            const int shortLimit = 300000; // Pay the same real schedule; deliberately cannot fund the complete domain.
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+            string? baseline = null;
+            WithRealFoo((owner, prepared) => baseline = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write().Content);
+            WithRealFoo((owner, prepared) =>
+            {
+                Assert.That(prepared.TryReadNativeMetadataCheckedNameInputs(0, out var result), Is.False);
+                Assert.That(result, Is.EqualTo(default(PocNativeMetadataCheckedNameInputs)));
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False);
+                Assert.That(prepared.PocCandidateCount, Is.Zero);
+                Assert.That(new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write().Content, Is.EqualTo(baseline));
+            }, nativeMetadataInputs: true, precomputePoc: precomputePoc, pocFooFirst: pocFooFirst,
+                nativeSessionFactory: limit => PocNativeMetadataInputSession.TryCreateWithCheckedNameInputs(
+                    System.Text.Encoding.ASCII.GetBytes("PipelineMessage"),
+                    System.Text.Encoding.ASCII.GetBytes("System.ClientModel.Primitives"), Math.Min(limit, shortLimit)),
+                inspectNativeInputs: (session, unusedCompilation, unusedPrepared) =>
+                {
+                    Assert.That(session!.IsRejected, Is.True);
+                    Assert.That(session.NativeMatchCount, Is.EqualTo(3));
+                    Assert.That(session.HeaderReadCount, Is.EqualTo(2));
+                    Assert.That(session.LayoutReadCount, Is.EqualTo(2));
+                    Assert.That(session.CheckedRowsVisited, Is.Zero);
+                    Assert.That(session.CheckedFixedByteReadCount, Is.Zero);
+                    Assert.That(session.CheckedHeapByteReadCount, Is.Zero);
+                    // Compare the actual selected source schedule under an explicit
+                    // short limit; the unchanged positive still requires the full domain.
+                    // Reflection defaults also run this expectation on the preserved base.
+                    var rowCost = (int?)typeof(PocNativeMetadataInputSession).GetField("CheckedCertifiedRowCost", flags | System.Reflection.BindingFlags.Static)?.GetRawConstantValue()
+                        ?? PocNativeMetadataInputSession.CheckedRowCost;
+                    var heapCost = (int?)typeof(PocNativeMetadataInputSession).GetField("CheckedCertifiedHeapByteCost", flags | System.Reflection.BindingFlags.Static)?.GetRawConstantValue()
+                        ?? PocNativeMetadataInputSession.CheckedHeapByteCost;
+                    var certificateCost = (int?)typeof(PocNativeMetadataInputSession).GetField("CheckedCertificateCost", flags | System.Reflection.BindingFlags.Static)?.GetRawConstantValue() ?? 0;
+                    var namespaceEntryCost = (int?)typeof(PocNativeMetadataInputSession).GetField("CheckedCertifiedNamespaceEntryCost", flags | System.Reflection.BindingFlags.Static)?.GetRawConstantValue() ?? 0;
+                    // Certified references-only rows already pay 291 name-first
+                    // bytes; Client's five possible names enter the namespace.
+                    var separatelyPaidBytes = namespaceEntryCost == 0 ? 573 : 573 - 291 - 5;
+                    Assert.That(shortLimit - session.Remaining,
+                        Is.EqualTo(7168 + 2560 + 384 + 2 * PocNativeMetadataInputSession.CheckedImageCost +
+                            2 * certificateCost + 291 * rowCost + separatelyPaidBytes * heapCost + 5 * namespaceEntryCost));
+                    TestContext.Progress.WriteLine($"CHECKED AUDITED CAP VETO: limit={shortLimit}; debit={shortLimit - session.Remaining}; remaining={session.Remaining}");
+                });
+        }
+
+        private const int NativeFooLayoutArrayCost = PocNativeMetadataInputSession.LayoutArrayHeaderCost +
+            2 * PocNativeMetadataInputSession.LayoutElementCost;
+        private const int NativeFooBeforeLayoutArray = PocNativeMetadataInputSession.BootstrapCost +
+            2 * PocNativeMetadataInputSession.ReceiptCost + 8 + PocNativeMetadataInputSession.SlotArrayHeaderCost +
+            2 * PocNativeMetadataInputSession.SlotCost;
+        private const int NativeFooFirstLayoutHeader = NativeFooFirstHeaderCost + NativeFooLayoutArrayCost;
+        private const int NativeFooFirstLayout = NativeFooFirstLayoutHeader + PocNativeMetadataInputSession.LayoutReadCost;
+        private const int NativeFooLayoutTotalCost = NativeFooTotalCost + NativeFooLayoutArrayCost +
+            2 * PocNativeMetadataInputSession.LayoutReadCost + 8 + 8 * 2;
+
+        [Test]
+        public void NativeLayoutRealFooModuleScalarDeterminesStringReferenceWidth()
+        {
+            WithRealFoo((unusedOwner, unusedPrepared) => { }, nativeMetadataInputs: true, nativeLayout: true,
+                inspectNativeInputs: (session, compilation, prepared) =>
+                {
+                    const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+                    var moduleProperty = typeof(PocNativeMetadataLayout).GetProperty("ModuleRowSize", flags);
+                    var widthProperty = typeof(PocNativeMetadataLayout).GetProperty("StringReferenceWidth", flags);
+                    Assert.That(moduleProperty, Is.Not.Null, "The live layout must publish the prepaid public Module row-size scalar.");
+                    Assert.That(widthProperty, Is.Not.Null, "String-reference width must be computed from Module row size, not heap length.");
+                    for (var ordinal = 0; ordinal < 2; ordinal++)
+                    {
+                        var assembly = (IAssemblySymbol)compilation.GetAssemblyOrModuleSymbol(compilation.ExternalReferences[ordinal])!;
+                        using var metadata = assembly.Modules.Single().GetMetadata()!;
+                        var rawModuleSize = System.Reflection.Metadata.Ecma335.MetadataReaderExtensions.GetTableRowSize(
+                            metadata.GetMetadataReader(), System.Reflection.Metadata.Ecma335.TableIndex.Module);
+                        var expectedWidth = rawModuleSize switch { 10 or 16 => 2, 12 or 18 => 4, _ => 0 };
+                        Assert.That(expectedWidth, Is.Not.Zero);
+                        Assert.That(prepared.TryReadNativeMetadataExternalLayout(ordinal, out var layout), Is.True);
+                        Assert.That(moduleProperty!.GetValue(layout), Is.EqualTo(rawModuleSize));
+                        Assert.That(widthProperty!.GetValue(layout), Is.EqualTo(expectedWidth));
+                        TestContext.Progress.WriteLine($"MODULE {ordinal}: publicRowSize={rawModuleSize}; stringReferenceWidth={expectedWidth}");
+                    }
+                    Assert.That(session!.LayoutReadCount, Is.EqualTo(2), "Six fixed getters per capture, no replay on duplicate match.");
+                    Assert.That(session.LayoutGetterReadCount, Is.EqualTo(12));
+                });
+        }
+
+        [Test]
+        public void NativeLayoutRealFooCapturesOnlyPrepaidScalarExtents()
+        {
+            var calls = 0;
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                var beforeReads = calls;
+                for (var ordinal = 0; ordinal < 2; ordinal++)
+                {
+                    Assert.That(prepared.TryReadNativeMetadataExternalHeader(ordinal, out var header), Is.True);
+                    Assert.That(prepared.TryReadNativeMetadataExternalLayout(ordinal, out var layout), Is.True);
+                    Assert.That(layout.Kind, Is.EqualTo(System.Reflection.Metadata.MetadataKind.Ecma335));
+                    Assert.That(layout.TypeDefRowSize, Is.GreaterThan(0));
+                    Assert.That(layout.TypeDefTableOffset, Is.InRange(0, header.MetadataLength));
+                    Assert.That(header.TypeDef, Is.GreaterThanOrEqualTo(0));
+                    Assert.That((long)header.TypeDef * layout.TypeDefRowSize,
+                        Is.LessThanOrEqualTo((long)header.MetadataLength - layout.TypeDefTableOffset));
+                    Assert.That(layout.StringHeapOffset, Is.InRange(0, header.MetadataLength));
+                    Assert.That(layout.StringHeapSize, Is.GreaterThan(0));
+                    Assert.That((long)layout.StringHeapSize, Is.LessThanOrEqualTo((long)header.MetadataLength - layout.StringHeapOffset));
+                    Assert.That(prepared.TryReadNativeMetadataExternalLayout(ordinal, out var again), Is.True);
+                    Assert.That(again, Is.EqualTo(layout));
+                    TestContext.Progress.WriteLine($"LAYOUT {ordinal}: kind={layout.Kind}; metadata={header.MetadataLength}; rows={header.TypeDef}; rowSize={layout.TypeDefRowSize}; tableOffset={layout.TypeDefTableOffset}; stringOffset={layout.StringHeapOffset}; stringSize={layout.StringHeapSize}");
+                }
+                Assert.That(prepared.TryReadNativeMetadataExternalLayout(-1, out _), Is.False);
+                Assert.That(prepared.TryReadNativeMetadataExternalLayout(2, out _), Is.False);
+                Assert.That(calls, Is.EqualTo(beforeReads), "Historical reads cannot replay source-currentness callbacks.");
+                Assert.That(prepared.SourceFiles.Length, Is.EqualTo(39));
+                Assert.That(prepared.PocCandidateCount, Is.Zero);
+                Assert.That(prepared.PocGenerationEnvelope, Is.Null);
+            }, nativeMetadataInputs: true, nativeLayout: true, sourceCurrent: () => { calls++; return true; },
+                inspectNativeInputs: (session, _, prepared) =>
+                {
+                    Assert.That(session!.NativeMatchCount, Is.EqualTo(3));
+                    Assert.That(session.HeaderReadCount, Is.EqualTo(2));
+                    Assert.That(session.ModuleMoveNextCount, Is.EqualTo(4));
+                    Assert.That(session.MetadataAccessCount, Is.EqualTo(2));
+                    Assert.That(session.LayoutReadCount, Is.EqualTo(2), "Duplicate positive matches must not replay layout getters.");
+                    Assert.That(session.IsRejected, Is.False);
+                    Assert.That(NativeFooTotalCost, Is.EqualTo(5960));
+                    Assert.That(NativeFooLayoutTotalCost, Is.EqualTo(7216));
+                    Assert.That(PocNativeMetadataInputSession.SourceLimit - session.Remaining, Is.EqualTo(NativeFooLayoutTotalCost));
+                    const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                    Assert.That(typeof(PreparedFieldTypes).GetField("_pocCandidateSourceBudget", flags)!.GetValue(prepared), Is.SameAs(session.SourceBudget));
+                    foreach (var name in new[] { "_receipts", "_compilation", "_root", "_owner", "_access" })
+                    {
+                        Assert.That(typeof(PocNativeMetadataInputSession).GetField(name, flags)!.GetValue(session), Is.Null);
+                    }
+                    Assert.That(((Array)typeof(PocNativeMetadataInputSession).GetField("_layouts", flags)!.GetValue(session)!).Length, Is.EqualTo(2));
+                    TestContext.Progress.WriteLine($"LAYOUT DEBIT: {PocNativeMetadataInputSession.SourceLimit - session.Remaining}");
+                });
+        }
+
+        [TestCase(0, 0, 0, false)]
+        [TestCase(PocNativeMetadataInputSession.BootstrapCost - 1, 0, 0, false)]
+        [TestCase(PocNativeMetadataInputSession.BootstrapCost, 0, 0, false)]
+        [TestCase(NativeFooBeforeLayoutArray - 1, 0, 0, false)]
+        [TestCase(NativeFooBeforeLayoutArray + NativeFooLayoutArrayCost - 1, 0, 0, false)]
+        [TestCase(NativeFooBeforeLayoutArray + NativeFooLayoutArrayCost, 0, 0, false)]
+        [TestCase(NativeFooFirstLayoutHeader - 1, 0, 0, false)]
+        [TestCase(NativeFooFirstLayoutHeader, 1, 0, false)]
+        // Retain every original numeric budget and case identity. Five historical
+        // names intentionally keep their old expected arguments; the actual new
+        // expectations below reject before the larger getter debit/publication.
+        [TestCase(4367, 1, 0, false)]
+        [TestCase(4368, 1, 0, false, TestName = "NativeLayoutRealFooFundingIsBeforeArrayGettersAndSeal(4368,1,1,False)")]
+        [TestCase(6935, 2, 1, false, TestName = "NativeLayoutRealFooFundingIsBeforeArrayGettersAndSeal(6935,2,2,False)")]
+        [TestCase(6936, 2, 1, false, TestName = "NativeLayoutRealFooFundingIsBeforeArrayGettersAndSeal(6936,2,2,False)")]
+        [TestCase(6959, 2, 1, false, TestName = "NativeLayoutRealFooFundingIsBeforeArrayGettersAndSeal(6959,2,2,False)")]
+        [TestCase(6960, 2, 1, false, TestName = "NativeLayoutRealFooFundingIsBeforeArrayGettersAndSeal(6960,2,2,True)")]
+        [TestCase(NativeFooFirstLayout - 1, 1, 0, false)]
+        [TestCase(NativeFooFirstLayout, 1, 1, false)]
+        [TestCase(NativeFooLayoutTotalCost - 25, 2, 2, false)]
+        [TestCase(NativeFooLayoutTotalCost - 24, 2, 2, false)]
+        [TestCase(NativeFooLayoutTotalCost - 1, 2, 2, false)]
+        [TestCase(NativeFooLayoutTotalCost, 2, 2, true)]
+        public void NativeLayoutRealFooFundingIsBeforeArrayGettersAndSeal(int limit, int headers, int layouts, bool available)
+        {
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                Assert.That(prepared.SourceFiles.Length, Is.EqualTo(39));
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.EqualTo(available));
+                Assert.That(prepared.TryReadNativeMetadataExternalLayout(0, out _), Is.EqualTo(available));
+                Assert.That(prepared.TryReadNativeMetadataExternalLayout(1, out _), Is.EqualTo(available));
+            }, nativeMetadataInputs: true, nativeLayout: true, nativeSourceLimit: limit, inspectNativeInputs: (session, _, _) =>
+            {
+                Assert.That(session?.HeaderReadCount ?? 0, Is.EqualTo(headers));
+                Assert.That(session?.MetadataAccessCount ?? 0, Is.EqualTo(headers));
+                Assert.That(session?.ModuleMoveNextCount ?? 0, Is.EqualTo(2 * headers));
+                Assert.That(session?.LayoutReadCount ?? 0, Is.EqualTo(layouts));
+                Assert.That(session?.LayoutGetterReadCount ?? 0, Is.EqualTo(6 * layouts));
+                if (session is not null)
+                {
+                    Assert.That(session.IsRejected, Is.EqualTo(!available));
+                    if (available) { Assert.That(session.Remaining, Is.Zero); }
+                    const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                    if (!available) { Assert.That(typeof(PocNativeMetadataInputSession).GetField("_layouts", flags)!.GetValue(session), Is.Null); }
+                }
+            });
+        }
+
+        [TestCase("headers")]
+        [TestCase("none")]
+        [TestCase("ordinary")]
+        public void NativeLayoutRealFooInactiveModesHaveNoLayoutWork(string mode)
+        {
+            WithRealFoo((unusedOwner, prepared) => Assert.That(prepared.TryReadNativeMetadataExternalLayout(0, out _), Is.False),
+                nativeMetadataInputs: mode == "headers", nativeLayout: mode != "headers", precomputePoc: mode == "ordinary",
+                inspectNativeInputs: (session, unusedCompilation, prepared) =>
+                {
+                    if (mode == "headers")
+                    {
+                        Assert.That(session, Is.Not.Null);
+                        Assert.That(session!.LayoutReadCount, Is.Zero);
+                        Assert.That(session.LayoutGetterReadCount, Is.Zero);
+                        Assert.That(PocNativeMetadataInputSession.SourceLimit - session.Remaining, Is.EqualTo(5960));
+                        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                        Assert.That(typeof(PocNativeMetadataInputSession).GetField("_layouts", flags)!.GetValue(session), Is.Null);
+                        Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.True);
+                    }
+                    else { Assert.That(session, Is.Null); }
+                });
+        }
+
+        [TestCase("alias")]
+        [TestCase("external-owner")]
+        [TestCase("unregistered-file")]
+        [TestCase("missing-coverage")]
+        public void NativeLayoutRealFooRequiresExactPrivateProvenanceAndCompleteCoverage(string path)
+        {
+            AssemblyMetadata? externalOwner = null;
+            try
+            {
+                WithRealFoo((unusedOwner, prepared) =>
+                {
+                    Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False);
+                    Assert.That(prepared.TryReadNativeMetadataExternalLayout(0, out _), Is.False);
+                }, nativeMetadataInputs: true, nativeLayout: true, configureNativeCompilation: (session, compilation) =>
+                {
+                    if (path == "missing-coverage")
+                    {
+                        return compilation.AddReferences(PocNativeMetadataInputSession.CreateReferenceFromFile(session, typeof(Poc.PreparedImports.Helper).Assembly.Location));
+                    }
+                    var original = (PortableExecutableReference)compilation.ExternalReferences[0];
+                    PortableExecutableReference unknown;
+                    if (path == "external-owner")
+                    {
+                        externalOwner = AssemblyMetadata.CreateFromFile(typeof(object).Assembly.Location);
+                        unknown = externalOwner.GetReference(filePath: typeof(object).Assembly.Location);
+                    }
+                    else if (path == "alias") { unknown = original.WithAliases(["global"]); }
+                    else { unknown = MetadataReference.CreateFromFile(typeof(object).Assembly.Location); }
+                    return compilation.ReplaceReference(original, unknown);
+                }, inspectNativeInputs: (session, _, _) =>
+                {
+                    Assert.That(session!.IsRejected, Is.True);
+                    Assert.That(session.LayoutReadCount, Is.EqualTo(path == "missing-coverage" ? 2 : 0));
+                    Assert.That(session.MetadataAccessCount, Is.EqualTo(path == "missing-coverage" ? 2 : 0));
+                    const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                    Assert.That(typeof(PocNativeMetadataInputSession).GetField("_layouts", flags)!.GetValue(session), Is.Null);
+                });
+            }
+            finally { externalOwner?.Dispose(); }
+        }
+
+        [Test]
+        public void NativeLayoutRealFooRejectsMultiModuleBeforeAnyLayoutGetter()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "c3-layout-multimodule-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                WithRealFoo((unusedOwner, prepared) => Assert.That(prepared.TryReadNativeMetadataExternalLayout(0, out _), Is.False),
+                    nativeMetadataInputs: true, nativeLayout: true, pocFooFirst: true, configureNativeCompilation: (session, compilation) =>
+                    {
+                        var modulePath = Path.Combine(directory, "C3Aux.netmodule");
+                        var manifestPath = Path.Combine(directory, "C3Manifest.dll");
+                        var moduleCompilation = CSharpCompilation.Create("C3Aux",
+                            [CSharpSyntaxTree.ParseText("public class C3Auxiliary {}")], [compilation.ExternalReferences[0]],
+                            new CSharpCompilationOptions(OutputKind.NetModule, moduleName: "C3Aux.netmodule"));
+                        using (var stream = File.Create(modulePath)) { Assert.That(moduleCompilation.Emit(stream).Success, Is.True); }
+                        var moduleReference = MetadataReference.CreateFromFile(modulePath, new MetadataReferenceProperties(MetadataImageKind.Module));
+                        var manifest = CSharpCompilation.Create("C3Manifest",
+                            [CSharpSyntaxTree.ParseText("namespace C3Headers { public class Marker {} }")],
+                            [compilation.ExternalReferences[0], moduleReference], new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+                        using (var stream = File.Create(manifestPath)) { Assert.That(manifest.Emit(stream).Success, Is.True); }
+                        return compilation.AddReferences(PocNativeMetadataInputSession.CreateReferenceFromFile(session, manifestPath));
+                    }, beforePreparation: owner =>
+                    {
+                        var type = new CSharpType("Marker", "C3Headers", false, false, null, Array.Empty<CSharpType>(), false, false);
+                        owner.Update(fields: owner.Fields.Prepend(new FieldProvider(FieldModifiers.Private, type, "_nativeMultiModule", owner)).ToArray());
+                    }, inspectNativeInputs: (session, _, _) =>
+                    {
+                        Assert.That(session!.IsRejected, Is.True);
+                        Assert.That(session.NativeMatchCount, Is.EqualTo(1));
+                        Assert.That(session.ModuleMoveNextCount, Is.EqualTo(2));
+                        Assert.That(session.MetadataAccessCount, Is.Zero);
+                        Assert.That(session.HeaderReadCount, Is.Zero);
+                        Assert.That(session.LayoutReadCount, Is.Zero);
+                    });
+            }
+            finally { Directory.Delete(directory, recursive: true); }
+        }
+
+        [TestCase("source-roots")]
+        [TestCase("source-policy")]
+        [TestCase("shared-roots")]
+        [TestCase("source-callback")]
+        [TestCase("owner")]
+        [TestCase("dispose")]
+        [TestCase("late-factory")]
+        public void NativeLayoutRealFooObservedRetirementIsStickyWithoutCallbackReplay(string path)
+        {
+            var current = true;
+            var calls = 0;
+            WithRealFoo((owner, prepared) =>
+            {
+                Assert.That(prepared.TryReadNativeMetadataExternalLayout(0, out var copy), Is.True);
+                var roots = (List<TypeProvider>)CodeModelGenerator.Instance.OutputLibrary.TypeProviders;
+                const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                var session = (PocNativeMetadataInputSession)typeof(PreparedFieldTypes).GetField("_pocLookup", flags)!.GetValue(prepared)!;
+                switch (path)
+                {
+                    case "source-roots":
+                    case "shared-roots":
+                        roots.Reverse();
+                        try
+                        {
+                            if (path == "source-roots")
+                            {
+                                prepared.ObserveSourceSnapshot();
+                                Assert.That(typeof(PreparedFieldTypes).GetField("_sourceDisposed", flags)!.GetValue(prepared), Is.EqualTo(true));
+                            }
+                            else
+                            {
+                                Assert.That(typeof(PreparedFieldTypes).GetMethod("IsSnapshotCurrent", flags)!.Invoke(prepared, null), Is.EqualTo(false));
+                                Assert.That(typeof(PreparedFieldTypes).GetField("_sharedSnapshotStale", flags)!.GetValue(prepared), Is.EqualTo(1));
+                            }
+                        }
+                        finally { roots.Reverse(); }
+                        break;
+                    case "source-policy":
+                        var configuration = CodeModelGenerator.Instance.Configuration;
+                        var policy = typeof(Configuration).GetProperty(nameof(Configuration.EnablePreEmissionSimplification), flags)!;
+                        var original = configuration.EnablePreEmissionSimplification;
+                        try { policy.SetValue(configuration, false); prepared.ObserveSourceSnapshot(); }
+                        finally { policy.SetValue(configuration, original); }
+                        Assert.That(typeof(PreparedFieldTypes).GetField("_sourceDisposed", flags)!.GetValue(prepared), Is.EqualTo(true));
+                        break;
+                    case "source-callback":
+                        current = false;
+                        try { prepared.ObserveSnapshot(); }
+                        finally { current = true; }
+                        break;
+                    case "owner": owner.Update(fields: owner.Fields.ToArray()); break;
+                    case "dispose": prepared.Dispose(); break;
+                    case "late-factory":
+                        var remaining = session.Remaining;
+                        Assert.That(PocNativeMetadataInputSession.CreateReferenceFromFile(session, typeof(object).Assembly.Location), Is.Not.Null);
+                        Assert.That(session.Remaining, Is.EqualTo(remaining));
+                        break;
+                }
+                var afterObservation = calls;
+                Assert.That(prepared.TryReadNativeMetadataExternalLayout(0, out var rejectedLayout), Is.False);
+                Assert.That(rejectedLayout, Is.EqualTo(default(PocNativeMetadataLayout)));
+                Assert.That(session.TryReadExternalLayout(0, out var rejectedSessionLayout), Is.False);
+                Assert.That(rejectedSessionLayout, Is.EqualTo(default(PocNativeMetadataLayout)));
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False);
+                Assert.That(prepared.TryReadNativeMetadataExternalLayout(0, out _), Is.False);
+                Assert.That(session.IsRejected, Is.True);
+                Assert.That(typeof(PocNativeMetadataInputSession).GetField("_layouts", flags)!.GetValue(session), Is.Null);
+                Assert.That(calls, Is.EqualTo(afterObservation));
+                Assert.That(copy.TypeDefRowSize, Is.GreaterThan(0));
+                Assert.That(copy.StringHeapSize, Is.GreaterThan(0), "Previously returned scalar history survives retirement.");
+                var balance = session.Remaining;
+                session.Dispose(); session.Dispose();
+                Assert.That(session.Remaining, Is.EqualTo(balance));
+                Assert.That(session.BeginPreparation(), Is.Null);
+            }, nativeMetadataInputs: true, nativeLayout: true,
+                beforePocPreparation: (output, _) => output.TypeProviders = output.TypeProviders.ToList(),
+                sourceCurrent: () => { calls++; return current; });
+        }
+
+        [TestCase("late")]
+        [TestCase("reguard")]
+        [TestCase("wrong-thread")]
+        [TestCase("nested")]
+        public void NativeLayoutRealFooRetainedPredicateCannotBorrowOrResurrectAccess(string attack)
+        {
+            WithRealFoo((unusedOwner, prepared) => Assert.That(prepared.TryReadNativeMetadataExternalLayout(0, out _), Is.False),
+                nativeMetadataInputs: true, nativeLayout: true, configureNativeCompilation: (session, compilation) =>
+                {
+                    var owner = new object();
+                    var root = new object();
+                    var access = session!.BeginPreparation()!;
+                    session.Bind(access, owner, root, compilation);
+                    // Test-only original-match targets from the SAME real Foo
+                    // compilation, not a production query or fabricated reader.
+                    var predicate = session.CreateOriginalMatchPredicate(access, compilation, compilation.GetSpecialType(SpecialType.System_Object))!;
+                    const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                    var layouts = typeof(PocNativeMetadataInputSession).GetField("_layouts", flags)!;
+                    var busy = typeof(PocNativeMetadataInputSession).GetField("_busy", flags)!;
+                    var operation = typeof(PocNativeMetadataInputSession).GetField("_operation", flags)!;
+                    var late = attack is "late" or "reguard";
+                    PocNativeMetadataLayout copy = default;
+                    if (late)
+                    {
+                        Assert.That(predicate(compilation.ExternalReferences[0]), Is.True);
+                        var client = compilation.GetTypeByMetadataName("System.ClientModel.Primitives.PipelineMessage")!;
+                        Assert.That(session.CreateOriginalMatchPredicate(access, compilation, client)!(compilation.ExternalReferences[1]), Is.True);
+                        session.EndPreparation(access, owner, root, compilation);
+                        Assert.That(session.TryReadExternalLayout(0, out copy), Is.True);
+                    }
+                    var retained = layouts.GetValue(session);
+                    var remaining = session.Remaining;
+                    if (attack == "nested")
+                    {
+                        Assert.That(typeof(PocNativeMetadataInputSession).GetMethod("TryUsePreparation", flags)!.Invoke(session, [access]), Is.EqualTo(true));
+                    }
+                    if (attack == "reguard")
+                    {
+                        Assert.That(typeof(PocNativeMetadataInputSession).GetMethod("TryEnter", flags)!.Invoke(session, null), Is.EqualTo(true));
+                    }
+                    try
+                    {
+                        if (attack == "wrong-thread")
+                        {
+                            var foreign = System.Threading.Tasks.Task.Run(() => predicate(compilation.ExternalReferences[0]));
+                            Assert.That(foreign.Wait(TimeSpan.FromSeconds(5)), Is.True);
+                            Assert.That(foreign.Result, Is.True);
+                        }
+                        else { Assert.That(predicate(compilation.ExternalReferences[0]), Is.True, "Optional rejection must preserve the original native Boolean."); }
+                        Assert.That(predicate(((PortableExecutableReference)compilation.ExternalReferences[0]).WithAliases(["private-only"])), Is.False);
+                        Assert.Throws<NullReferenceException>(() => predicate(null!));
+                        Assert.That(session.IsRejected, Is.True);
+                        Assert.That(session.Remaining, Is.EqualTo(remaining));
+                        Assert.That(session.HeaderReadCount, Is.EqualTo(late ? 2 : 0));
+                        Assert.That(session.LayoutReadCount, Is.EqualTo(late ? 2 : 0));
+                        Assert.That(session.MetadataAccessCount, Is.EqualTo(late ? 2 : 0));
+                        Assert.That(busy.GetValue(session), Is.EqualTo(attack == "late" ? 0 : 1));
+                        if (attack != "late") { Assert.That(layouts.GetValue(session), Is.SameAs(retained)); }
+                        if (attack == "nested") { Assert.That(operation.GetValue(session), Is.EqualTo(1)); }
+                        Assert.That(session.TryReadExternalLayout(0, out _), Is.False);
+                        if (late) { Assert.That(copy.TypeDefRowSize, Is.GreaterThan(0)); }
+                    }
+                    finally
+                    {
+                        if (attack == "nested") { operation.SetValue(session, 0); }
+                        if (!late) { session.EndPreparation(access, owner, root, compilation); }
+                        if (attack == "reguard") { typeof(PocNativeMetadataInputSession).GetMethod("Exit", flags)!.Invoke(session, null); }
+                    }
+                    Assert.That(busy.GetValue(session), Is.EqualTo(0));
+                    Assert.That(layouts.GetValue(session), Is.Null);
+                    return compilation;
+                });
+        }
+
+        [Test]
+        public void NativeLayoutRealFooReentrantCurrentnessCannotCollectLayouts()
+        {
+            PocNativeMetadataInputSession? inputs = null;
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                Assert.That(prepared.SourceFiles.Length, Is.EqualTo(39));
+                Assert.That(prepared.TryReadNativeMetadataExternalLayout(0, out _), Is.False);
+            }, nativeMetadataInputs: true, nativeLayout: true,
+                configureNativeCompilation: (session, compilation) => { inputs = session; return compilation; },
+                sourceCurrent: () => { Assert.That(inputs!.BeginPreparation(), Is.Null); return true; },
+                inspectNativeInputs: (session, _, _) =>
+                {
+                    Assert.That(session!.LayoutReadCount, Is.Zero);
+                    Assert.That(session.HeaderReadCount, Is.Zero);
+                    Assert.That(session.MetadataAccessCount, Is.Zero);
+                });
+        }
+
+        [Test]
+        public void NativeLayoutRealFooDoesNotChangeWriterOutputOrMintAuthority()
+        {
+            string? expected = null;
+            WithRealFoo((owner, prepared) => expected = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write().Content);
+            WithRealFoo((owner, prepared) =>
+            {
+                Assert.That(prepared.TryReadNativeMetadataExternalLayout(0, out _), Is.True);
+                Assert.That(prepared.PocCandidateCount, Is.Zero);
+                Assert.That(prepared.PocGenerationEnvelope, Is.Null);
+                Assert.That(new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write().Content, Is.EqualTo(expected));
+            }, nativeMetadataInputs: true, nativeLayout: true);
+        }
+
+        [Test]
+        public void PocNativeMetadataRealFooCapturesOnlyPaidExternalHeaders()
+        {
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                Assert.That(prepared.SourceFiles.Length, Is.EqualTo(39));
+                Assert.That(prepared.PocCandidateCount, Is.Zero);
+                Assert.That(prepared.PocGenerationEnvelope, Is.Null);
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out var core), Is.True);
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(1, out var client), Is.True);
+                Assert.That(core, Is.EqualTo(new PocNativeMetadataExternalHeader(3342452, 2760, 0, 0, 0, 917, 4159, 27157, 41569, 9297, 8218, 2246, 4912)));
+                Assert.That(client, Is.EqualTo(new PocNativeMetadataExternalHeader(200480, 291, 359, 0, 24, 164, 107, 2503, 1864, 1207, 1476, 314, 316)));
+                Assert.That(core.TypeDef + client.TypeDef, Is.EqualTo(3051));
+                Assert.That(core.MetadataLength + client.MetadataLength, Is.EqualTo(3542932));
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(-1, out _), Is.False);
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(2, out _), Is.False);
+            }, nativeMetadataInputs: true, inspectNativeInputs: (session, _, prepared) =>
+            {
+                Assert.That(session!.NativeMatchCount, Is.EqualTo(3));
+                Assert.That(session.HeaderReadCount, Is.EqualTo(2), "Duplicate native success does not replay descriptor getters.");
+                Assert.That(session.ModuleMoveNextCount, Is.EqualTo(4));
+                Assert.That(session.MetadataAccessCount, Is.EqualTo(2));
+                Assert.That(session.IsRejected, Is.False);
+                const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                Assert.That(typeof(PreparedFieldTypes).GetField("_pocCandidateSourceBudget", flags)!.GetValue(prepared), Is.SameAs(session.SourceBudget));
+                foreach (var name in new[] { "_receipts", "_compilation", "_root", "_owner" })
+                {
+                    Assert.That(typeof(PocNativeMetadataInputSession).GetField(name, flags)!.GetValue(session), Is.Null,
+                        "A sealed session must not retain native references indirectly through its prepared owner.");
+                }
+                Assert.That(PocNativeMetadataInputSession.SourceLimit - session.Remaining, Is.EqualTo(NativeFooTotalCost));
+                TestContext.Progress.WriteLine($"C3 EXTERNAL: events={session.NativeMatchCount}; headers={session.HeaderReadCount}; debit={PocNativeMetadataInputSession.SourceLimit - session.Remaining}");
+            });
+        }
+
+        [Test]
+        public void PocNativeMetadataRealFooDisposedForeignOwnerRejectsWithoutResourceCultureCallbacks()
+        {
+            WithRealFoo((unusedOwner, prepared) => Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False),
+                nativeMetadataInputs: true, configureNativeCompilation: (session, compilation) =>
+                {
+                    var metadata = AssemblyMetadata.CreateFromFile(typeof(object).Assembly.Location);
+                    var foreign = metadata.GetReference(filePath: typeof(object).Assembly.Location);
+                    metadata.Dispose();
+                    var foreignCompilation = compilation.ReplaceReference(compilation.ExternalReferences[0], foreign);
+                    var culture = new NativeMetadataResourceCulture();
+                    var previous = System.Globalization.CultureInfo.CurrentUICulture;
+                    try
+                    {
+                        System.Globalization.CultureInfo.CurrentUICulture = culture;
+                        // Installing a custom UI culture validates its Name once;
+                        // exclude that test setup, not any component operation.
+                        culture.ResourceCallbacks = 0;
+                        var owner = new object();
+                        var roots = new object();
+                        var access = session!.BeginPreparation();
+                        Assert.That(access, Is.Not.Null);
+                        session.Bind(access, owner, roots, foreignCompilation);
+                        session.EndPreparation(access, owner, roots, foreignCompilation);
+                        Assert.That(session.IsRejected, Is.True);
+                        Assert.That(session.MetadataAccessCount, Is.Zero);
+                        Assert.That(session.ModuleMoveNextCount, Is.Zero);
+                        Assert.That(culture.ResourceCallbacks, Is.Zero,
+                            "Unknown/disposed ownership is vetoed before descriptor getters or disposal-exception resource lookup.");
+                        using var foreignCopy = (AssemblyMetadata)foreign.GetMetadata();
+                        Assert.Throws<ObjectDisposedException>(() => foreignCopy.GetModules());
+                        Assert.That(culture.ResourceCallbacks, Is.GreaterThan(0), "The probe must detect the excluded native resource path.");
+                    }
+                    finally { System.Globalization.CultureInfo.CurrentUICulture = previous; }
+                    // Keep the SAME real fixture/compiler inputs for its original
+                    // native pass; the isolated optional preflight is terminal.
+                    return compilation;
+                });
+        }
+
+        private sealed class NativeMetadataResourceCulture() : System.Globalization.CultureInfo("en-US")
+        {
+            internal int ResourceCallbacks;
+            public override string Name { get { ResourceCallbacks++; return base.Name; } }
+            public override System.Globalization.CultureInfo Parent { get { ResourceCallbacks++; return base.Parent; } }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void PocNativeMetadataRealFooOriginalCompilerExceptionEscapesUnchanged(bool nativeMode)
+        {
+            var sentinel = new InvalidOperationException("original compiler metadata sentinel");
+            var observed = Assert.Throws<InvalidOperationException>(() => WithRealFoo((_, _) => { },
+                nativeMetadataInputs: nativeMode, configureNativeCompilation: (_, compilation) =>
+                    compilation.AddReferences(new NativeMetadataThrowingReference(sentinel))));
+            Assert.That(observed, Is.SameAs(sentinel));
+        }
+
+        private sealed class NativeMetadataThrowingReference(Exception sentinel) : PortableExecutableReference(MetadataReferenceProperties.Assembly)
+        {
+            protected override DocumentationProvider CreateDocumentationProvider() => DocumentationProvider.Default;
+            protected override Metadata GetMetadataImpl() => throw sentinel;
+            protected override PortableExecutableReference WithPropertiesImpl(MetadataReferenceProperties properties) => this;
+        }
+
+        [Test]
+        public void PocNativeMetadataRealFooPocInventedResolveCannotMintReceipt()
+        {
+            WithRealFoo((_, _) => { }, nativeMetadataInputs: true, configureNativeCompilation: (session, compilation) =>
+            {
+                var target = PreparedFieldTypes.ResolveReferencedTarget(compilation, new CSharpType(typeof(PipelineMessage)),
+                    new Dictionary<(string Namespace, string Name), TypeProvider[]>());
+                Assert.That(target, Is.Not.Null);
+                Assert.That(session!.NativeMatchCount, Is.Zero);
+                Assert.That(session.MetadataAccessCount, Is.Zero);
+                return compilation;
+            }, inspectNativeInputs: (session, _, _) => Assert.That(session!.NativeMatchCount, Is.EqualTo(3)));
+        }
+
+        [Test]
+        public void PocNativeMetadataRealFooLateFactoryRejectsPublicationWithoutSuppressingNativeFactory()
+        {
+            WithRealFoo((_, _) => { }, nativeMetadataInputs: true, inspectNativeInputs: (session, unusedCompilation, prepared) =>
+            {
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.True);
+                var remaining = session!.Remaining;
+                var reference = PocNativeMetadataInputSession.CreateReferenceFromFile(session, typeof(object).Assembly.Location);
+                Assert.That(reference, Is.InstanceOf<PortableExecutableReference>());
+                Assert.That(session.Remaining, Is.EqualTo(remaining));
+                Assert.That(session.IsRejected, Is.True);
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False);
+            });
+        }
+
+        [Test]
+        public void PocNativeMetadataRealFooMultiModuleRejectsBeforeMetadataAccess()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "c3-multimodule-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                WithRealFoo((unusedOwner, prepared) => Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False),
+                    nativeMetadataInputs: true, pocFooFirst: true, configureNativeCompilation: (session, compilation) =>
+                    {
+                        var modulePath = Path.Combine(directory, "C3Aux.netmodule");
+                        var manifestPath = Path.Combine(directory, "C3Manifest.dll");
+                        var moduleCompilation = CSharpCompilation.Create("C3Aux",
+                            [CSharpSyntaxTree.ParseText("public class C3Auxiliary {}")], [compilation.ExternalReferences[0]],
+                            new CSharpCompilationOptions(OutputKind.NetModule, moduleName: "C3Aux.netmodule"));
+                        using (var stream = File.Create(modulePath)) { Assert.That(moduleCompilation.Emit(stream).Success, Is.True); }
+                        var moduleReference = MetadataReference.CreateFromFile(modulePath, new MetadataReferenceProperties(MetadataImageKind.Module));
+                        var manifest = CSharpCompilation.Create("C3Manifest",
+                            [CSharpSyntaxTree.ParseText("namespace C3Headers { public class Marker {} }")],
+                            [compilation.ExternalReferences[0], moduleReference], new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+                        using (var stream = File.Create(manifestPath)) { Assert.That(manifest.Emit(stream).Success, Is.True); }
+                        return compilation.AddReferences(PocNativeMetadataInputSession.CreateReferenceFromFile(session, manifestPath));
+                    }, beforePreparation: owner =>
+                    {
+                        var type = new CSharpType("Marker", "C3Headers", false, false, null, Array.Empty<CSharpType>(), false, false);
+                        owner.Update(fields: owner.Fields.Prepend(new FieldProvider(FieldModifiers.Private, type, "_nativeMultiModule", owner)).ToArray());
+                    }, inspectNativeInputs: (session, _, _) =>
+                    {
+                        Assert.That(session!.IsRejected, Is.True);
+                        Assert.That(session.NativeMatchCount, Is.EqualTo(1));
+                        Assert.That(session.ModuleMoveNextCount, Is.EqualTo(2));
+                        Assert.That(session.MetadataAccessCount, Is.Zero, "The first original match has two modules: no descriptor getter may run.");
+                    });
+            }
+            finally { Directory.Delete(directory, recursive: true); }
+        }
+
+        [Test]
+        public void PocNativeMetadataRealFooModeDoesNotChangeNativeWriterOutput()
+        {
+            string? expected = null;
+            WithRealFoo((owner, prepared) => expected = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write().Content);
+            WithRealFoo((owner, prepared) =>
+            {
+                var actual = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write().Content;
+                Assert.That(actual, Is.EqualTo(expected));
+                Assert.That(prepared.PocCandidateCount, Is.Zero);
+                Assert.That(prepared.PocGenerationEnvelope, Is.Null);
+            }, nativeMetadataInputs: true);
+        }
+
+        [Test]
+        public void PocNativeMetadataRealFooObservedSourceInvalidationIsSticky()
+        {
+            var current = true;
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.True);
+                current = false;
+                prepared.ObserveSnapshot();
+                current = true;
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False);
+            }, nativeMetadataInputs: true, sourceCurrent: () => current);
+        }
+
+        private const int NativeFooBindCost = 8 + PocNativeMetadataInputSession.SlotArrayHeaderCost +
+            2 * PocNativeMetadataInputSession.SlotCost + 2 * (8 + 8 * 2);
+        private const int NativeFooBeforeHeaders = PocNativeMetadataInputSession.BootstrapCost +
+            2 * PocNativeMetadataInputSession.ReceiptCost + NativeFooBindCost;
+        private const int NativeFooFirstHeaderCost = NativeFooBeforeHeaders + PocNativeMetadataInputSession.PredicateCost +
+            8 + 8 * 2 + PocNativeMetadataInputSession.HeaderCost;
+        private const int NativeFooTotalCost = NativeFooBeforeHeaders +
+            3 * (PocNativeMetadataInputSession.PredicateCost + 8 + 8 * 2) +
+            2 * PocNativeMetadataInputSession.HeaderCost + 8 + 8 * 2;
+
+        [TestCase(0, 0, false)]
+        [TestCase(PocNativeMetadataInputSession.BootstrapCost, 0, false)]
+        [TestCase(NativeFooFirstHeaderCost - 1, 0, false)]
+        [TestCase(NativeFooFirstHeaderCost, 1, false)]
+        [TestCase(NativeFooTotalCost - 1, 2, false)]
+        [TestCase(NativeFooTotalCost, 2, true)]
+        public void PocNativeMetadataRealFooFundingEdgesArePreAccess(int limit, int reads, bool available)
+        {
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                Assert.That(prepared.SourceFiles.Length, Is.EqualTo(39));
+                Assert.That(prepared.PocCandidateCount, Is.Zero);
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.EqualTo(available));
+            }, nativeMetadataInputs: true, nativeSourceLimit: limit, inspectNativeInputs: (session, _, _) =>
+            {
+                Assert.That(session?.HeaderReadCount ?? 0, Is.EqualTo(reads));
+                Assert.That(session?.MetadataAccessCount ?? 0, Is.EqualTo(reads));
+                Assert.That(session?.ModuleMoveNextCount ?? 0, Is.EqualTo(2 * reads));
+                if (session is not null) { Assert.That(session.IsRejected, Is.EqualTo(!available)); }
+            });
+        }
+
+        [Test]
+        public void PocNativeMetadataRealFooPublicNonownerDisposalCannotDisposePrivateRoots()
+        {
+            WithRealFoo((unusedOwner, prepared) => Assert.That(prepared.TryReadNativeMetadataExternalHeader(1, out _), Is.True),
+                nativeMetadataInputs: true, configureNativeCompilation: (_, compilation) =>
+                {
+                    foreach (var reference in compilation.ExternalReferences.Cast<PortableExecutableReference>())
+                    {
+                        using var copy = (AssemblyMetadata)reference.GetMetadata();
+                        foreach (var module in copy.GetModules()) { module.Dispose(); }
+                        var assembly = (IAssemblySymbol)compilation.GetAssemblyOrModuleSymbol(reference)!;
+                        using var assemblyCopy = assembly.GetMetadata();
+                        foreach (var module in assembly.Modules) { module.GetMetadata()!.Dispose(); }
+                    }
+                    return compilation;
+                });
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void PocNativeMetadataRealFooUnknownOwnershipRejectsBeforeDescriptors(bool externalOwner)
+        {
+            AssemblyMetadata? owner = null;
+            try
+            {
+                WithRealFoo((unusedOwner, prepared) => Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False),
+                    nativeMetadataInputs: true, configureNativeCompilation: (_, compilation) =>
+                    {
+                        var original = (PortableExecutableReference)compilation.ExternalReferences[0];
+                        PortableExecutableReference unknown;
+                        if (externalOwner)
+                        {
+                            owner = AssemblyMetadata.CreateFromFile(typeof(object).Assembly.Location);
+                            unknown = owner.GetReference(filePath: typeof(object).Assembly.Location);
+                        }
+                        else { unknown = original.WithAliases(["global"]); }
+                        return compilation.ReplaceReference(original, unknown);
+                    }, inspectNativeInputs: (session, _, _) =>
+                    {
+                        Assert.That(session!.IsRejected, Is.True);
+                        Assert.That(session.MetadataAccessCount, Is.Zero);
+                        Assert.That(session.ModuleMoveNextCount, Is.Zero);
+                    });
+            }
+            finally { owner?.Dispose(); }
+        }
+
+        [Test]
+        public void PocNativeMetadataRealFooPartialExternalCoverageCannotPublish()
+        {
+            WithRealFoo((unusedOwner, prepared) => Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False),
+                nativeMetadataInputs: true, configureNativeCompilation: (session, compilation) =>
+                    compilation.AddReferences(PocNativeMetadataInputSession.CreateReferenceFromFile(session, typeof(Poc.PreparedImports.Helper).Assembly.Location)),
+                inspectNativeInputs: (session, _, _) => Assert.That(session!.IsRejected, Is.True));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void PocNativeMetadataRealFooOneShotRootAndCompilationMismatchAreTerminal(bool compilationMismatch)
+        {
+            WithRealFoo((unusedOwner, prepared) => Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False),
+                nativeMetadataInputs: true, configureNativeCompilation: (session, compilation) =>
+                {
+                    var owner = new object();
+                    var root = new object();
+                    var access = session!.BeginPreparation();
+                    Assert.That(access, Is.Not.Null);
+                    session.Bind(access, owner, root, compilation);
+                    session.EndPreparation(access, owner, compilationMismatch ? root : new object(), compilationMismatch ? compilation.Clone() : compilation);
+                    Assert.That(session.IsRejected, Is.True);
+                    Assert.That(session.BeginPreparation(), Is.Null);
+                    return compilation;
+                }, inspectNativeInputs: (session, _, _) => Assert.That(session!.MetadataAccessCount, Is.Zero));
+        }
+
+        [Test]
+        public void PocNativeMetadataRealFooReentrantSourceCallbackOnlyRejectsOptionalCollection()
+        {
+            PocNativeMetadataInputSession? inputs = null;
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                Assert.That(prepared.SourceFiles.Length, Is.EqualTo(39));
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False);
+            }, nativeMetadataInputs: true, configureNativeCompilation: (session, compilation) => { inputs = session; return compilation; },
+                sourceCurrent: () => { Assert.That(inputs!.BeginPreparation(), Is.Null); return true; },
+                inspectNativeInputs: (session, _, _) => Assert.That(session!.MetadataAccessCount, Is.Zero));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void PocNativeMetadataRealFooDetachAndOwnerInvalidationNeverResurrect(bool invalidateOwner)
+        {
+            WithRealFoo((owner, prepared) =>
+            {
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out var copied), Is.True);
+                if (invalidateOwner) { owner.Update(fields: owner.Fields.ToArray()); }
+                else { prepared.Dispose(); }
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False);
+                Assert.That(copied.TypeDef, Is.EqualTo(2760), "By-value history survives, not store publication.");
+            }, nativeMetadataInputs: true, inspectNativeInputs: (session, unusedCompilation, prepared) =>
+            {
+                Assert.That(session!.IsRejected, Is.True);
+                Assert.That(session.BeginPreparation(), Is.Null);
+                var remaining = session.Remaining;
+                session.Dispose(); session.Dispose();
+                Assert.That(session.Remaining, Is.EqualTo(remaining));
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False);
+            });
+        }
+
+        [Test]
+        public void PocNativeMetadataRealFooNoneModeStillHasNoOptionalLedgerOrHeaders()
+        {
+            WithRealFoo((unusedOwner, prepared) =>
+            {
+                const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                Assert.That(typeof(PreparedFieldTypes).GetField("_pocLookup", flags)!.GetValue(prepared), Is.Null);
+                Assert.That(typeof(PreparedFieldTypes).GetField("_pocCandidateSourceBudget", flags)!.GetValue(prepared), Is.Null);
+                Assert.That(prepared.TryReadNativeMetadataExternalHeader(0, out _), Is.False);
+            });
+        }
+
         private static void WithRealFoo(Action<TypeProvider, PreparedFieldTypes> run, bool materializeHeaderBeforePreparation = false,
             LibraryVisitor? additionalVisitor = null, bool prospective = false,
             Action<OutputLibrary, ProviderReferenceMapSession, TypeProvider, PreparedFieldTypes>? inspectGeneration = null,
@@ -8089,7 +10240,10 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
             bool addPocEmptyFactory = false, bool addPocParentDecisionRoots = false, bool addPocReentrantFactory = false,
             bool addPocImportReference = false, string? licenseHeader = null, bool pocFooFirst = false, bool finalizePocHeaders = false,
             bool addPocUnreferencedModel = false, Func<GeneratorContext, ScmCodeModelGenerator>? generatorFactory = null,
-            int pocExtraRoots = 0)
+            int pocExtraRoots = 0, bool nativeMetadataInputs = false, int nativeSourceLimit = PocNativeMetadataInputSession.SourceLimit,
+            Func<PocNativeMetadataInputSession?, CSharpCompilation, CSharpCompilation>? configureNativeCompilation = null,
+            Action<PocNativeMetadataInputSession?, CSharpCompilation, PreparedFieldTypes>? inspectNativeInputs = null,
+            bool nativeLayout = false, Func<int, PocNativeMetadataInputSession?>? nativeSessionFactory = null, bool requestInventory = false)
         {
             var directory = Path.Combine(Path.GetTempPath(), "typespec-prepared-foo-local-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
@@ -8113,10 +10267,16 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
                 CodeModelGenerator.Instance = generator;
                 ((CodeModelGenerator)generator).Configure();
                 if (additionalVisitor is not null) { generator.AddVisitor(additionalVisitor); }
+                using var nativeInputs = nativeMetadataInputs
+                    ? nativeSessionFactory is not null ? nativeSessionFactory(nativeSourceLimit)
+                        : nativeLayout ? PocNativeMetadataInputSession.TryCreateWithLayout(nativeSourceLimit) : PocNativeMetadataInputSession.TryCreate(nativeSourceLimit)
+                    : null;
                 var compilation = CSharpCompilation.Create("KnownClientInputs", references:
                 [
-                    MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
-                    MetadataReference.CreateFromFile(typeof(PipelineMessage).Assembly.Location),
+                    nativeMetadataInputs ? PocNativeMetadataInputSession.CreateReferenceFromFile(nativeInputs, typeof(object).Assembly.Location)
+                        : MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+                    nativeMetadataInputs ? PocNativeMetadataInputSession.CreateReferenceFromFile(nativeInputs, typeof(PipelineMessage).Assembly.Location)
+                        : MetadataReference.CreateFromFile(typeof(PipelineMessage).Assembly.Location),
                 ]);
                 Assert.That(compilation.GetTypeByMetadataName("System.ClientModel.Primitives.PipelineMessage"), Is.Not.Null);
                 if (addFooShadow)
@@ -8127,6 +10287,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
                 {
                     compilation = compilation.AddReferences(MetadataReference.CreateFromFile(typeof(Poc.PreparedImports.Helper).Assembly.Location));
                 }
+                compilation = configureNativeCompilation?.Invoke(nativeInputs, compilation) ?? compilation;
                 generator.SourceInputModel = new SourceInputModel(compilation, null)
                 {
                     // A controlled complete-input snapshot for this fixture, not a production host certificate.
@@ -8211,7 +10372,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
                     foreach (var extra in extras) { extra.EnsureBuilt(); }
                     output.TypeProviders = output.TypeProviders.Concat(extras).ToArray();
                 }
-                using var referenceMap = observeAnalyzerActivity || precomputePoc || finalizePocHeaders
+                using var referenceMap = observeAnalyzerActivity || precomputePoc || finalizePocHeaders || requestInventory
                     ? ProviderReferenceMapAnalyzer.PrepareForGenerationWithRootWitness(output, output.TypeProviders)
                     : ProviderReferenceMapAnalyzer.PrepareForGeneration(output.TypeProviders);
                 if (materializeHeaderBeforePreparation)
@@ -8223,16 +10384,21 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Tests.Providers
                 beforePreparation?.Invoke(owner);
                 beforePocPreparation?.Invoke(output, referenceMap);
                 using var preparedHeaders = finalizePocHeaders ? new PreparedPocHeaderFinalization(generator) : null;
-                using var prepared = finalizePocHeaders
+                using var prepared = nativeMetadataInputs
+                    ? PreparedFieldTypes.CreateForGenerationWithNativeMetadataInputs(generator, output.TypeProviders, referenceMap.ShouldWriteProvider, nativeInputs)
+                    : finalizePocHeaders
                     ? PreparedFieldTypes.CreateForGenerationWithFinalizedPocHeaders(generator, output.TypeProviders, referenceMap.ShouldWriteProvider, preparedHeaders!)
                     : prospective
                     ? CreateUnownedProspectiveSnapshot(generator, output, referenceMap.ShouldWriteProvider)
+                    : requestInventory
+                        ? PreparedFieldTypes.CreateForGenerationWithPocRequestInventory(generator, output.TypeProviders, referenceMap.ShouldWriteProvider)
                     : precomputePoc
                         ? PreparedFieldTypes.CreateForGenerationWithPocPlans(generator, output.TypeProviders, referenceMap.ShouldWriteProvider)
                         : PreparedFieldTypes.CreateForGeneration(generator, output.TypeProviders, referenceMap.ShouldWriteProvider);
                 Assert.That(prepared, Is.Not.Null, "The controlled Foo inputs must reach the standard preparation lifetime.");
                 run(owner, prepared!);
                 inspectGeneration?.Invoke(output, referenceMap, owner, prepared!);
+                inspectNativeInputs?.Invoke(nativeInputs, compilation, prepared!);
             }
             finally
             {

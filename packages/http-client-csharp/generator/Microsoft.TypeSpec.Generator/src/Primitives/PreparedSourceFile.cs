@@ -158,16 +158,17 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
         internal void Invalidate() => System.Threading.Interlocked.Exchange(ref _invalid, 1);
 
-        internal Cursor Start()
+        internal Cursor Start(PreparedPocOwnedRootEffect? effect = null, TypeProviderWriter? writer = null)
         {
             if (_started) { Invalidate(); }
             _started = true;
-            return new Cursor(this);
+            return new Cursor(this, effect, writer);
         }
 
         internal sealed class Cursor
         {
             private readonly PreparedSourceFile _file;
+            private readonly PreparedPocOwnedRootEffect? _ownedEffect;
             private readonly List<SourceOccurrenceId> _consumed = [];
             private readonly HashSet<PreparedSourceOccurrence> _rootsSeen = new(ReferenceEqualityComparer.Instance);
             private ImmutableArray<PreparedSourceOccurrence> _expected = [];
@@ -179,14 +180,23 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             internal PreparedSourceOccurrence? Current => _file.IsInvalid ? null : _current;
             internal ImmutableArray<SourceOccurrenceId> Consumed => _consumed.ToImmutableArray();
             internal bool IsCurrent => _file.IsCurrent();
-            internal Cursor(PreparedSourceFile file) { _file = file; }
+            internal Cursor(PreparedSourceFile file, PreparedPocOwnedRootEffect? effect, TypeProviderWriter? writer)
+            {
+                _file = file; _ownedEffect = effect;
+                effect?.Attach(file, this, writer);
+            }
+
+            internal void ObserveRootProducer(object producer) => _ownedEffect?.ObserveProducer(producer);
+            internal void BeginDeclaration(MethodSignatureBase? signature) => _ownedEffect?.BeginDeclaration(signature);
+            internal void CompleteDeclaration(MethodSignatureBase? signature) => _ownedEffect?.CompleteDeclaration(signature);
 
             internal IDisposable BeginRoot(TypeProvider owner, string role, int index)
             {
                 if (_inRoot || !_file.IsCurrent() || !_file._byOwner.TryGetValue(owner, out var roots) ||
                     !roots.TryGetValue((role, index), out var root) || _nextRoot >= _file._roots.Length ||
                     !ReferenceEquals(root, _file._roots[_nextRoot]) || !_rootsSeen.Add(root))
-                { _file.Invalidate(); return EmptyScope.Instance; }
+                { _ownedEffect?.Reject("native-root-mismatch-or-stale"); _file.Invalidate(); return EmptyScope.Instance; }
+                _ownedEffect?.BeginRoot(this, root);
                 _nextRoot++;
                 _inRoot = true;
                 _next = 0;
@@ -199,6 +209,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 {
                     if (opaqueRoot) { _opaqueDepth--; }
                     if (_next != _expected.Length || !_file.IsCurrent()) { _file.Invalidate(); }
+                    _ownedEffect?.EndRoot(root);
                     _current = null;
                     _inRoot = false;
                 });
@@ -216,11 +227,24 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
             internal IDisposable Enter(object producer)
             {
+                var shared = EnterCore(producer);
+                var native = _ownedEffect?.EnterNative(producer);
+                if (native is null) { return shared; }
+                return new Scope(() =>
+                {
+                    try { shared.Dispose(); }
+                    finally { native.Dispose(); }
+                });
+            }
+
+            private IDisposable EnterCore(object producer)
+            {
                 if (_opaqueDepth > 0) { return EmptyScope.Instance; }
                 if (!_inRoot) { return EmptyScope.Instance; } // non-executable writer scaffolding is not a source root
                 if (!_file.IsCurrent() || _next >= _expected.Length || !ReferenceEquals(_expected[_next].Producer, producer))
-                { _file.Invalidate(); return EmptyScope.Instance; }
+                { _ownedEffect?.Reject("native-child-mismatch-or-stale"); _file.Invalidate(); return EmptyScope.Instance; }
                 var occurrence = _expected[_next++];
+                _ownedEffect?.Enter(occurrence);
                 var previous = _current;
                 _current = occurrence;
                 _consumed.Add(occurrence.Id);
@@ -230,6 +254,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 {
                     if (occurrence.IsOpaque) { _opaqueDepth--; }
                     if (_next != end || !_file.IsCurrent()) { _file.Invalidate(); }
+                    _ownedEffect?.Exit(occurrence);
                     _current = previous;
                 });
             }
@@ -238,6 +263,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             {
                 if (_inRoot || !_file.IsCurrent()) { _file.Invalidate(); }
                 if (_nextRoot != _file._roots.Length || _rootsSeen.Count != _file._roots.Length) { _file.Invalidate(); }
+                _ownedEffect?.Complete(this);
                 return !_file.IsInvalid;
             }
         }

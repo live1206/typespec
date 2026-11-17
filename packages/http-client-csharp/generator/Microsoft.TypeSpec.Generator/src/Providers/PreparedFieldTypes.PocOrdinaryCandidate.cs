@@ -57,6 +57,18 @@ namespace Microsoft.TypeSpec.Generator.Providers
             _pocCandidates.Values.Where(candidate => !_pocInvalidCandidateFiles.Contains(candidate.File))
                 .Select(candidate => candidate.File.FilePath).Distinct(StringComparer.Ordinal).ToArray();
 
+        // Trial-only diagnostic observations, identical in eager and requested runs.
+        internal int Trial2CandidateAttempts, Trial2FirstQueries, Trial2VisitedOccurrences;
+        internal int Trial2InventoryRemaining, Trial2RequestsRemaining, Trial2FinalRemaining;
+        internal int Trial2SourceRemaining => _pocCandidateSourceBudget?.Remaining ?? -1;
+        internal int Trial2ResolverCalls => PocImportLookup?.Trial2ResolverCalls ?? 0;
+        internal int Trial2CanonicalCalls => PocImportLookup?.Trial2CanonicalCalls ?? 0;
+        private INamedTypeSymbol? Trial2FindTarget(string metadataName)
+        {
+            Trial2FirstQueries++;
+            return _sourceInputs!.Compilation.GetTypeByMetadataName(metadataName);
+        }
+
         private readonly Dictionary<SourceOccurrenceId, PreparedPocOrdinaryCandidate> _pocCandidates = new();
         private readonly HashSet<PreparedPocOrdinaryCandidate> _pocOwnedCandidates = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<PreparedSourceFile, SourceConsumptionReceipt> _pocWrittenCandidateFiles = new(ReferenceEqualityComparer.Instance);
@@ -79,7 +91,10 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private bool _pocWriteDecisionInventoryInvalid;
         private ImmutableArray<PocProviderNameSnapshot> _pocProviderNames;
         private ImmutableArray<PocRootSerializationSnapshot> _pocRootSerializations;
-        private PreparedFieldImportLookup? _pocLookup;
+        // Reference-width union: Ordinary retains its exact original object for
+        // private-field compatibility; Native stores its paid factory session.
+        private object? _pocLookup;
+        private PreparedFieldImportLookup? PocImportLookup => _pocLookup as PreparedFieldImportLookup;
         private ProviderReferenceMapSession? _pocReferenceMap;
         private OutputLibrary? _pocOutput;
         private IReadOnlyList<TypeProvider>? _pocRoots;
@@ -511,6 +526,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private PreparedPocOrdinaryCandidate? TryCapturePocOrdinaryCandidate(PreparedSourceFile file, PreparedSourceOccurrence occurrence,
             bool sourceAlreadyChecked, PocWorkBudget? sourcePhase = null, bool pathKnownNotDirect = false)
         {
+            Trial2CandidateAttempts++;
             if (_sourceDisposed) { return null; }
             // Pay the additional candidate's identity probes and full pre-write
             // file-start scan before inspecting any of those inventories.
@@ -518,7 +534,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 (!sourcePhase.TrySpendReferenceLookup(_pocInvalidCandidateFiles.Count) ||
                  !sourcePhase.TrySpendReferenceLookup(_sourceFiles.Count) || !sourcePhase.TrySpendReferenceLookup(_sourceFiles.Count) ||
                  !sourcePhase.TrySpendReferenceLookup(_owners.Count))) { return null; }
-            if (_pocInvalidCandidateFiles.Contains(file) || _sourceInputs is null || _providerStates.Length == 0 || _pocLookup is null ||
+            if (_pocInvalidCandidateFiles.Contains(file) || _sourceInputs is null || _providerStates.Length == 0 || PocImportLookup is null ||
                 _sourceFiles.Values.Any(source => source.HasStarted) ||
                 !_sourceFiles.TryGetValue(file.FileOwner, out var owned) || !ReferenceEquals(owned, file) ||
                 !_owners.TryGetValue(file.FileOwner, out var owner) ||
@@ -536,8 +552,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
             if (type.GetType() != typeof(CSharpType) || !type.IsFrameworkType || type.FrameworkType.GetType() != typeof(object).GetType()) { return null; }
             if (sourcePhase is not null && !SourceCurrentnessChecks.OrdinalLookup(type.Name, owner.PlannedScopeNames.Count, sourcePhase)) { return null; }
             if (owner.PlannedScopeNames.Contains(type.Name) || type.FrameworkType.FullName is not { } metadataName ||
-                _sourceInputs.Compilation.GetTypeByMetadataName(metadataName) is not { } target ||
-                !_pocLookup.TryPreparePocBareNamespaceCandidate(owner.Type.Namespace, type, target, out var candidate, out var forbidden)) { return null; }
+                Trial2FindTarget(metadataName) is not { } target ||
+                !PocImportLookup.TryPreparePocBareNamespaceCandidate(owner.Type.Namespace, type, target, out var candidate, out var forbidden)) { return null; }
             if (sourcePhase is not null && !sourcePhase.TrySpend()) { return null; }
             var currentBudget = sourcePhase is null ? null : new PocWorkBudget(65536, sourcePhase);
             if (!(currentBudget is null ? source.IsCurrent : source.IsCurrentForPoc(currentBudget)) || !ReferenceEquals(declaration.Variable.Type, type) ||
@@ -577,19 +593,60 @@ namespace Microsoft.TypeSpec.Generator.Providers
             }
         }
 
-        private void CapturePocOrdinaryCandidates()
+        private int _pocRequestPending;
+
+        private bool CapturePocOrdinaryInventory()
         {
-            if (_preparedGenerator is not { } generator) { return; }
-            var budget = _pocCandidateSourceBudget = new PocWorkBudget(1048576);
+            if (_preparedGenerator is not { } generator) { return false; }
+            var budget = _pocCandidateSourceBudget ??= new PocWorkBudget(1048576);
             var license = generator.LicenseHeader;
-            if (!PreparedSourceFile.HasCommentOnlyLicenseHeader(license)) { return; }
+            if (!PreparedSourceFile.HasCommentOnlyLicenseHeader(license)) { return false; }
             _pocLicenseHeader = license;
-            if (!CapturePocProviderNames()) { return; }
+            if (!CapturePocProviderNames()) { return false; }
             if (!PocObservedInputsAreCurrentForCapture(budget))
             {
                 if (budget.Exhausted) { _pocCandidateSourceCaptureIncomplete = true; }
-                return;
+                return false;
             }
+            Trial2InventoryRemaining = budget.Remaining;
+            return true;
+        }
+
+        // Single-use experimental request, selected from the existing occurrence
+        // graph. Capture validates actual file/path/role/producer identity before
+        // binding; the complete declaration/competitor inventories remain intact.
+        internal PreparedPocOrdinaryCandidate? TrySealPocOrdinaryRequest(PreparedSourceFile file, PreparedSourceOccurrence occurrence)
+        {
+            if (Interlocked.CompareExchange(ref _pocRequestPending, 0, 1) != 1 ||
+                _pocCandidateSourceBudget is not { } budget || _pocCandidateSourceCaptureIncomplete ||
+                !PocObservedInputsAreCurrentForCapture(budget)) { return null; }
+            var candidate = TryCapturePocOrdinaryCandidate(file, occurrence, sourceAlreadyChecked: true, sourcePhase: budget);
+            if (candidate is null || budget.Exhausted || !StorePocOrdinaryCandidate(candidate, budget)) { return null; }
+            FinalizePocOrdinaryCandidates();
+            Trial2FinalRemaining = Trial2SourceRemaining;
+            if (_pocCandidateSourceCaptureIncomplete || _pocInvalidCandidateFiles.Contains(file)) { return null; }
+            AttachPocProviderStream();
+            return candidate;
+        }
+
+        private bool StorePocOrdinaryCandidate(PreparedPocOrdinaryCandidate candidate, PocWorkBudget budget)
+        {
+            var file = candidate.File;
+            if (!SourceCurrentnessChecks.OccurrenceLookup(candidate.Occurrence.Id, _pocCandidates.Count, budget) ||
+                !budget.TrySpendReferenceLookup(_pocHeaders.Count) || !budget.TrySpendReferenceLookup(_pocHeaders.Count) ||
+                !budget.TrySpendReferenceLookup(_bodyImports.Count) || !budget.TrySpendReferenceLookup(_bodyImports.Count) ||
+                !budget.TrySpend(2)) { _pocCandidateSourceCaptureIncomplete = true; return false; }
+            _pocCandidates.Add(candidate.Occurrence.Id, candidate);
+            if (!_pocHeaders.ContainsKey(file.FileOwner)) { _pocHeaders.Add(file.FileOwner, new PocHeaderObservation(file)); }
+            if (!_bodyImports.ContainsKey(file.FileOwner))
+            { _bodyImports.Add(file.FileOwner, new HashSet<string>(StringComparer.Ordinal)); }
+            return true;
+        }
+
+        private void CapturePocOrdinaryCandidates()
+        {
+            if (!CapturePocOrdinaryInventory()) { return; }
+            var budget = _pocCandidateSourceBudget!;
             if (!budget.TrySpendReferenceLookup(_sourceFiles.Count)) { _pocCandidateSourceCaptureIncomplete = true; return; }
             foreach (var file in _sourceFiles.Values)
             {
@@ -602,20 +659,14 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     int directStage = root.Id.RootRole == "method" && root.Producer is MethodProvider ? 1 : 0;
                     foreach (var visit in EnumeratePocOccurrences(root, budget, directStage))
                     {
+                        Trial2VisitedOccurrences++;
                         var occurrence = visit.Occurrence;
                         if (occurrence.Producer is not DeclarationExpression) { continue; }
                         var candidate = TryCapturePocOrdinaryCandidate(file, occurrence, sourceAlreadyChecked: true,
                             sourcePhase: budget, pathKnownNotDirect: !visit.CouldBeDirect);
                         if (budget.Exhausted) { _pocCandidateSourceCaptureIncomplete = true; return; }
                         if (candidate is null) { continue; }
-                        if (!SourceCurrentnessChecks.OccurrenceLookup(occurrence.Id, _pocCandidates.Count, budget) ||
-                            !budget.TrySpendReferenceLookup(_pocHeaders.Count) || !budget.TrySpendReferenceLookup(_pocHeaders.Count) ||
-                            !budget.TrySpendReferenceLookup(_bodyImports.Count) || !budget.TrySpendReferenceLookup(_bodyImports.Count) ||
-                            !budget.TrySpend(2)) { _pocCandidateSourceCaptureIncomplete = true; return; }
-                        _pocCandidates.Add(occurrence.Id, candidate);
-                        if (!_pocHeaders.ContainsKey(file.FileOwner)) { _pocHeaders.Add(file.FileOwner, new PocHeaderObservation(file)); }
-                        if (!_bodyImports.ContainsKey(file.FileOwner))
-                        { _bodyImports.Add(file.FileOwner, new HashSet<string>(StringComparer.Ordinal)); }
+                        if (!StorePocOrdinaryCandidate(candidate, budget)) { return; }
                     }
                     if (budget.Exhausted) { _pocCandidateSourceCaptureIncomplete = true; return; }
                 }
@@ -624,6 +675,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         private void FinalizePocOrdinaryCandidates()
         {
+            Trial2RequestsRemaining = Trial2SourceRemaining;
             if (_pocCandidateSourceCaptureIncomplete || _pocCandidates.Count == 0) { return; }
             var budget = _pocCandidateSourceBudget!;
             if (!PocObservedInputsAreCurrentForCapture(budget)) { _pocCandidateSourceCaptureIncomplete = true; return; }

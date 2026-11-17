@@ -8,6 +8,15 @@ Tasks01-03 are integrated at baseline 674e6ca. Task04's existing handoff is copi
 here from its planning branch; Tasks05-19 below are planning documents, not claims
 that their implementation, missing facts or validation already exist.
 
+**2026-11-17 development checkpoint:** [Task04 has a reviewed experimental
+baseline and remains incomplete](./pre-emission-task04-status-and-evidence.md).
+Accepted prerequisites and reviewed partial components are distinguished from
+excluded constructor/REST-positive-red work and open accounting/confinement gates.
+Dependencies below are unchanged: Task04 blocks dependent completion and final
+replacement, not independent type-spelling-free Task05 development. No Task04
+permission or completion is inferred from this baseline; combined Task04/05
+spelling and grammar acceptance remains pending.
+
 | Task | Implementation handoff                                                                                | Authoritative contract                                                               |
 | ---- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | 04   | [Ordinary type spellings](./pre-emission-task04-implementation-handoff.md)                            | [Task04](https://github.com/microsoft/typespec/issues/12454#issuecomment-6543541243) |

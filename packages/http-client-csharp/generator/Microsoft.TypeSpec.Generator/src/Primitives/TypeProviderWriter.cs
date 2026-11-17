@@ -52,6 +52,65 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             _provider = provider;
         }
 
+        // Isolated experiment: explicit entry only. Ordinary Write/WriteCore are
+        // byte-for-byte unchanged, and no new inactive writer field is introduced.
+        // The existing WriteType/native declaration formatter executes ONCE. This
+        // duplicates entry plumbing as experimental source, never writer execution.
+        internal CodeFile WriteWithTask04OrdinaryObservation(Task04OrdinaryObservation observation)
+        {
+            ArgumentNullException.ThrowIfNull(observation);
+            return WriteTask04Native(observation, null);
+        }
+
+        internal CodeFile WriteWithTask04OwnedRootEffect(PreparedPocOwnedRootEffect effect)
+        {
+            ArgumentNullException.ThrowIfNull(effect);
+            return WriteTask04Native(null, effect);
+        }
+
+        private CodeFile WriteTask04Native(Task04OrdinaryObservation? observation, PreparedPocOwnedRootEffect? effect)
+        {
+            if (GetType() != typeof(TypeProviderWriter))
+            {
+                throw new InvalidOperationException("Task04 observation requires an unused standard writer.");
+            }
+            lock (_headerSessionSync)
+            {
+                if (Interlocked.CompareExchange(ref _writeMode, 2, 0) != 0)
+                {
+                    throw new InvalidOperationException("Task04 observation requires an unused standard writer.");
+                }
+            }
+            using var writer = new CodeWriter();
+            var ownedEffect = observation is null ? effect : observation.OwnedRootEffect;
+            observation?.Attach(writer, this);
+            if (PreparedFieldTypes is not null && GetType() == typeof(TypeProviderWriter))
+            {
+                writer.EnableQualifiedFallback(PreparedFieldTypes, _provider);
+                writer.AttachSourceFile(PreparedFieldTypes, _provider, this, ownedEffect);
+            }
+            using var pocHeaderScope = PreparedFieldTypes is { } activePreparation && OwnsPreparation(activePreparation, _provider)
+                ? activePreparation.EnterPocHeaderWriter(_provider) : null;
+            PreparedFieldTypes?.ObserveSnapshot();
+            using var containment = writer.SuppressWarnings(GetExperimentalContextSuppressions(), emitDirectives: false);
+            var disabledFileWarnings = _provider.DisabledFileWarnings;
+            if (PreparedFieldTypes is { } preparation && OwnsPreparation(preparation, _provider))
+            { preparation.ObservePocFileWarnings(_provider, disabledFileWarnings); }
+            using (writer.SuppressWarnings(disabledFileWarnings))
+            {
+                using (var ns = writer.SetNamespace(_provider.Type.Namespace))
+                {
+                    PreparedFieldTypes?.ObserveSnapshot();
+                    WriteType(writer);
+                }
+            }
+            var content = writer.ToString();
+            var native = new CodeFile(content, _provider.RelativeFilePath, writer.QualifiedContent, writer.CompleteSourceFile(), writer.NameAlternativesSnapshot);
+            var result = observation?.Complete(native, writer.NativeTypeUse) ?? native;
+            ownedEffect?.ConfirmRawReturn(result);
+            return result;
+        }
+
         public virtual CodeFile Write()
         {
             if (Interlocked.CompareExchange(ref _writeMode, 1, 0) == 2)

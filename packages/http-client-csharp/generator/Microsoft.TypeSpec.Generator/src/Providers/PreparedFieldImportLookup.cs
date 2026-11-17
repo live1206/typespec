@@ -82,6 +82,18 @@ namespace Microsoft.TypeSpec.Generator.Providers
         // shortest ordinary suffix is its bare name. This supplies namespace
         // lookup and ranking only; lexical scope, source observation, imports,
         // emission confinement and the writer's authority remain separate.
+        internal int Trial2ResolverCalls, Trial2CanonicalCalls;
+        private INamedTypeSymbol? Trial2Resolve(CSharpCompilation compilation, CSharpType target)
+        {
+            Trial2ResolverCalls++;
+            return PreparedFieldTypes.ResolveReferencedTarget(compilation, target, _generated);
+        }
+        private INamedTypeSymbol? Trial2Canonical(string metadataName)
+        {
+            Trial2CanonicalCalls++;
+            return _compilation.GetTypeByMetadataName(metadataName);
+        }
+
         internal bool TryPreparePocBareNamespaceCandidate(string ownerNamespace, CSharpType target, INamedTypeSymbol referencedTarget,
             out PocBareNamespaceCandidate candidate, out ImmutableHashSet<string> forbiddenImports)
         {
@@ -97,8 +109,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 PreparedPocNameForms.RenderIdentifier(target.Name) is not { } spelling || !HasMaterializedPocInventory() ||
                 _compilation is not CSharpCompilation csharp || _generated.ContainsKey((target.Namespace, target.Name)) ||
                 _generatedNamespaces.Contains(target.Namespace + "." + target.Name) ||
-                !SymbolEqualityComparer.Default.Equals(referencedTarget, PreparedFieldTypes.ResolveReferencedTarget(csharp, target, _generated)) ||
-                !SymbolEqualityComparer.Default.Equals(referencedTarget, _compilation.GetTypeByMetadataName(metadataName)) || referencedTarget.HasUnsupportedMetadata ||
+                !SymbolEqualityComparer.Default.Equals(referencedTarget, Trial2Resolve(csharp, target)) ||
+                !SymbolEqualityComparer.Default.Equals(referencedTarget, Trial2Canonical(metadataName)) || referencedTarget.HasUnsupportedMetadata ||
                 referencedTarget.TypeKind == TypeKind.Error || referencedTarget.ContainingAssembly is null ||
                 !string.Equals(referencedTarget.ContainingAssembly.Identity.ToString(), runtime.Assembly.FullName, StringComparison.Ordinal) ||
                 !TryPrepareTypeOnlyNamespaceLookup(ownerNamespace, target, referencedTarget, out forbiddenImports)) { return false; }

@@ -138,14 +138,39 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
         private CSharpType? ResolveOwningType(InvokeMethodExpression invocation) => _parameterFrame?.ResolveOwningType(invocation);
 
-        internal bool IsCurrent()
+        internal bool IsCurrent() => IsCurrentCore(invalidate: true);
+        internal bool IsCurrentWithoutInvalidating(PocWorkBudget? budget = null) => IsCurrentCore(invalidate: false, budget);
+        internal bool IsCurrentWithoutInvalidatingWithTextMemo(PocWorkBudget? budget, PocTypeTextMemo? textMemo) => IsCurrentCore(invalidate: false, budget, 0, textMemo);
+
+        private bool IsCurrentCore(bool invalidate, PocWorkBudget? budget = null, int depth = 0, PocTypeTextMemo? textMemo = null)
         {
-            if (System.Threading.Volatile.Read(ref _stale) != 0) { return false; }
-            var current = (_constructorFrame?.IsCurrent != false) && (_parameterFrame?.IsCurrent() != false) && (_targetTypeSnapshot?.IsCurrent() != false) && (_methodReturnSnapshot?.IsCurrent() != false) && _shape.Matches(StructuredSourceShape.Capture(Producer, _disableXmlDocs)) &&
-                (DeclaredCallable?.IsAvailable != true || DeclaredCallable.IsCurrent()) &&
-                (DeclaredArguments?.IsAvailable != true || DeclaredArguments.IsCurrent()) && Children.All(c => c.IsCurrent());
-            if (!current) { System.Threading.Interlocked.Exchange(ref _stale, 1); }
+            if (budget is not null && depth >= 256) { budget.Reject(); return false; }
+            if (System.Threading.Volatile.Read(ref _stale) != 0 || !SourceCurrentnessChecks.Spend(budget)) { return false; }
+            var current = (_constructorFrame is null || (invalidate ? _constructorFrame.IsCurrent : _constructorFrame.IsCurrentWithoutInvalidating(budget))) &&
+                (_parameterFrame is null || (invalidate ? _parameterFrame.IsCurrent() : _parameterFrame.IsCurrentWithoutInvalidatingWithTextMemo(budget, textMemo))) &&
+                SourceCurrentnessChecks.Type(_targetTypeSnapshot, budget) && SourceCurrentnessChecks.Type(_methodReturnSnapshot, budget) &&
+                SourceCurrentnessChecks.Shape(_shape, Producer, _disableXmlDocs, budget, textMemo) &&
+                (DeclaredCallable?.IsAvailable != true || (invalidate ? DeclaredCallable.IsCurrent() : DeclaredCallable.IsCurrentWithoutInvalidating(budget))) &&
+                (DeclaredArguments?.IsAvailable != true || (invalidate ? DeclaredArguments.IsCurrent() : DeclaredArguments.IsCurrentWithoutInvalidating(budget)));
+            if (current)
+            {
+                foreach (var child in Children)
+                {
+                    if (!child.IsCurrentCore(invalidate, budget, depth + 1, textMemo)) { current = false; break; }
+                }
+            }
+            if (!current && invalidate) { System.Threading.Interlocked.Exchange(ref _stale, 1); }
             return current;
+        }
+
+        // POC-only veto observation: do not make a shared occurrence or its
+        // callable/argument proofs sticky while checking an additional boundary.
+        internal bool IsShapeCurrentWithoutInvalidating(PocWorkBudget budget)
+        {
+            if (!budget.TrySpend() || System.Threading.Volatile.Read(ref _stale) != 0 ||
+                !SourceCurrentnessChecks.Shape(_shape, Producer, _disableXmlDocs, budget)) { return false; }
+            foreach (var child in Children) { if (!child.IsShapeCurrentWithoutInvalidating(budget)) { return false; } }
+            return true;
         }
 
         internal IEnumerable<PreparedSourceOccurrence> DescendantsAndSelf()

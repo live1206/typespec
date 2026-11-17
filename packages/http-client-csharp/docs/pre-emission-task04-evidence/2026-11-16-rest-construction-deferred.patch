@@ -1,0 +1,196 @@
+--- a/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator.ClientModel/test/Providers/PreparedLocalTypeClientTests.cs
++++ b/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator.ClientModel/test/Providers/PreparedLocalTypeClientTests.cs
+@@ -12,6 +12,8 @@
+ using Microsoft.CodeAnalysis.CSharp;
+ using Microsoft.CodeAnalysis.CSharp.Syntax;
+ using Microsoft.TypeSpec.Generator.ClientModel.Providers;
++using Microsoft.TypeSpec.Generator.Expressions;
++using Microsoft.TypeSpec.Generator.Statements;
+ using Microsoft.TypeSpec.Generator.Primitives;
+ using Microsoft.TypeSpec.Generator.Providers;
+ using Microsoft.TypeSpec.Generator.SourceInput;
+@@ -158,10 +160,15 @@
+                 if (rest)
+                 {
+                     Assert.That(local, Is.Null, "Required actual REST full body remains unsupported, not a member-positive witness.");
+-                    Assert.That(localFailure, Does.EndWith("unprofiled-native-effect:NewInstanceExpression"));
++                    // Faithful BASE stopped at NewInstanceExpression. The finite
++                    // constructor moves only that frontier; do not broaden the
++                    // single-hypothesis trial to a new LiteralExpression recipe.
++                    Assert.That(localFailure, Is.EqualTo("$/statement[2]/expression/argument[0]/value:unprofiled-native-effect:LiteralExpression"));
+                     Assert.That(effect, Is.Null, "Do not weaken the existing owned-body admission gate to manufacture a REST positive.");
+                     var native = new TypeProviderWriter(target) { PreparedFieldTypes = prepared }.Write();
+                     Assert.That(native.Content, Is.EqualTo(expected!.Content), "Refusal must not suppress or reconstruct native output.");
++                    Assert.That(native.QualifiedContent, Is.EqualTo(expected.QualifiedContent));
++                    Assert.That(native.NativeLegacyAlternatives, Is.EqualTo(expected.NativeLegacyAlternatives));
+                     return;
+                 }
+                 Assert.That(effect, Is.Not.Null);
+@@ -181,6 +188,149 @@
+                 Assert.That(output.NativeLegacyAlternatives, Is.EqualTo(expected.NativeLegacyAlternatives));
+                 Assert.That(effect.NativeFile, Is.SameAs(output));
+             }, requestInventory: true);
++        }
++
++        [Test]
++        public void Task04RestFiniteConstructionActualFullBodyAndPartialHeadPositive()
++        {
++            CodeFile? expected = null;
++            var nativeProofCalls = 0;
++            var proofCalls = 0;
++            WithRealFoo((owner, prepared) =>
++            {
++                expected = new TypeProviderWriter(((ClientProvider)owner).RestClient) { PreparedFieldTypes = prepared }.Write();
++            }, requestInventory: true, sourceCurrent: () => { nativeProofCalls++; return true; });
++            WithRealFoo((owner, prepared) =>
++            {
++                var target = ((ClientProvider)owner).RestClient;
++                var file = prepared.SourceFiles.Single(f => ReferenceEquals(f.FileOwner, target));
++                var root = file.Roots.Single(r => r.Id.RootRole == "method" && r.Id.RootIndex == 0);
++                var method = (MethodProvider)root.Producer;
++                var body = root.Children.Single(c => ReferenceEquals(c.Producer, method.BodyStatements));
++                foreach (var node in body.DescendantsAndSelf())
++                {
++                    if (node.Producer is Microsoft.TypeSpec.Generator.Expressions.NewInstanceExpression n)
++                    {
++                        TestContext.Out.WriteLine($"REST construction type={n.Type?.Name}; ns={n.Type?.Namespace}; runtime={n.Type?.IsFrameworkType}; args={n.Type?.Arguments.Count}; declaring={n.Type?.DeclaringType}; parameters={n.Parameters.Count}; carrier={n.Parameters.GetType()}; init={n.InitExpression?.GetType().Name ?? "null"}; constructorIntent={n.ConstructorIntent is not null}; providerIntent={n.ConstructorProviderIntent is not null}");
++                    }
++                }
++                var local = PreparedPocNativeCallEffect.TryCaptureStatement(method.BodyStatements!, file.DisableXmlDocs, new PocWorkBudget(65536), out var failure);
++                Assert.That(local, Is.Not.Null, "Actual REST full body positive anchor: " + failure);
++                var effect = prepared.PrepareTask04OwnedRootEffect(file, root, body);
++                Assert.That(effect, Is.Not.Null);
++                var head = effect!.PrepareMethodHeadComponent();
++                Assert.That(head, Is.Not.Null);
++                var queries = prepared.Trial2FirstQueries;
++                var output = new TypeProviderWriter(target) { PreparedFieldTypes = prepared }.WriteWithTask04OwnedRootEffect(effect);
++                Assert.That(effect.HasCompleted, Is.True, effect.Failure);
++                Assert.That(head!.HasCompleted, Is.True, effect.Failure);
++                Assert.That(prepared.Trial2FirstQueries, Is.EqualTo(queries));
++                Assert.That(output.Content, Is.EqualTo(expected!.Content));
++                Assert.That(output.QualifiedContent, Is.EqualTo(expected.QualifiedContent));
++                Assert.That(output.Name, Is.EqualTo(expected.Name));
++                Assert.That(output.NativeLegacyAlternatives, Is.EqualTo(expected.NativeLegacyAlternatives));
++                Assert.That(effect.NativeFile, Is.SameAs(output));
++                Assert.That(effect.NativeEntries, Is.EqualTo(effect.ExpectedNativeEntries));
++                Assert.That(effect.NativeExits, Is.EqualTo(effect.ExpectedNativeEntries));
++                Assert.That(effect.BodyEntries, Is.EqualTo(1));
++                Assert.That(effect.BodyExits, Is.EqualTo(1));
++                Assert.That(head.DeclarationStarts, Is.EqualTo(1));
++                Assert.That(head.DeclarationCompletions, Is.EqualTo(1));
++                Assert.That(prepared.PocGenerationEnvelope!.HasUncoveredEmission, Is.True);
++                Assert.That(prepared.SourceFiles.Where(f => !ReferenceEquals(f, file)).All(f => !f.HasStarted), Is.True);
++            }, requestInventory: true, sourceCurrent: () => { proofCalls++; return true; });
++            Assert.That(proofCalls, Is.EqualTo(nativeProofCalls), "No additional native proof callback or replay.");
++        }
++
++        [TestCase(0)]
++        [TestCase(1)]
++        [TestCase(5)]
++        [TestCase(6)]
++        [TestCase(7)]
++        public void Task04RestFiniteConstructionArgumentOccurrencesAndLayout(int count)
++        {
++            var shared = new KeywordExpression("null", null);
++            var arguments = Enumerable.Range(0, count).Select(i => i % 2 == 0 ? shared : new KeywordExpression("true", null)).Cast<ValueExpression>().ToArray();
++            var value = new NewInstanceExpression(new CSharpType(typeof(Uri)), arguments);
++            var effect = PreparedPocNativeCallEffect.TryCapture(value, false, new PocWorkBudget(65536), out var failure);
++            Assert.That(effect, Is.Not.Null, failure);
++            Assert.That(effect!.TryCreateNativeSteps(new PocWorkBudget(65536), out var steps), Is.True);
++            Assert.That(steps.Length, Is.EqualTo(count + 1));
++            Assert.That(steps[0].Producer, Is.SameAs(value));
++            Assert.That(steps[0].End, Is.EqualTo(count + 1));
++            for (var i = 0; i < count; i++)
++            {
++                Assert.That(steps[i + 1].Producer, Is.SameAs(arguments[i]));
++                Assert.That(steps[i + 1].End, Is.EqualTo(i + 2));
++            }
++            using var writer = new CodeWriter();
++            value.Write(writer);
++            var output = writer.ToString(false);
++            Assert.That(output, Does.Contain("new global::System.Uri("));
++            var compact = output.Replace("\r", "").Replace("\n", "").Replace(" ", "");
++            Assert.That(compact, Is.EqualTo("newglobal::System.Uri(" + string.Join(",", arguments.Cast<KeywordExpression>().Select(a => a.Keyword)) + ")"));
++            Assert.That(output.Count(c => c == ','), Is.EqualTo(Math.Max(0, count - 1)));
++            Assert.That(output.Contains('\n'), Is.EqualTo(count >= 6));
++            Assert.That(effect.IsCurrent(new PocWorkBudget(65536)), Is.True);
++        }
++
++        [TestCase("null-type")]
++        [TestCase("unsafe-name")]
++        [TestCase("unsafe-namespace")]
++        [TestCase("generic")]
++        [TestCase("array")]
++        [TestCase("custom-runtime")]
++        [TestCase("initializer-empty")]
++        [TestCase("initializer-value")]
++        [TestCase("unknown-arguments")]
++        [TestCase("unsafe-child")]
++        [TestCase("tiny-funds")]
++        public void Task04RestFiniteConstructionUnsupportedInputsRefuse(string kind)
++        {
++            CSharpType? type = new CSharpType(typeof(Uri));
++            var unknown = new UnsupportedContextArguments();
++            IReadOnlyList<ValueExpression> args = Array.Empty<ValueExpression>();
++            ObjectInitializerExpression? init = null;
++            if (kind == "null-type") { type = null; }
++            if (kind == "unsafe-name") { type!.Update(name: "Uri\n#error CONSTRUCTION"); }
++            if (kind == "unsafe-namespace") { type!.Update(@namespace: "System\n#error CONSTRUCTION"); }
++            if (kind == "generic") { type = new CSharpType(typeof(List<int>)); }
++            if (kind == "array") { type = new CSharpType(typeof(int[])); }
++            if (kind == "custom-runtime") { type = new CSharpType(new ContextRuntimeTypeProbe(typeof(Uri))); }
++            if (kind.StartsWith("initializer", StringComparison.Ordinal))
++            {
++                var values = new Dictionary<ValueExpression, ValueExpression>();
++                if (kind == "initializer-value") { values.Add(new KeywordExpression("true", null), new KeywordExpression("null", null)); }
++                init = new ObjectInitializerExpression(values, true);
++            }
++            if (kind == "unknown-arguments") { args = unknown; }
++            if (kind == "unsafe-child") { args = new ValueExpression[] { new KeywordExpression("unsafe\n#error CHILD", null) }; }
++            var value = new NewInstanceExpression(type, args, init);
++            var budget = new PocWorkBudget(kind == "tiny-funds" ? 1 : 65536);
++            var effect = PreparedPocNativeCallEffect.TryCapture(value, false, budget, out _);
++            Assert.That(effect, Is.Null, kind);
++            Assert.That(unknown.CountReads + unknown.Reads + unknown.EnumerationReads, Is.Zero, "Do not inspect opaque carriers.");
++        }
++
++        [TestCase("type")]
++        [TestCase("child")]
++        [TestCase("arguments")]
++        public void Task04RestFiniteConstructionMutationRestoreRemainsWithdrawn(string kind)
++        {
++            var type = new CSharpType(typeof(Uri));
++            var child = new KeywordExpression("null", null);
++            ValueExpression[] args = { child, new KeywordExpression("true", null) };
++            var value = new NewInstanceExpression(type, args);
++            var effect = PreparedPocNativeCallEffect.TryCapture(value, false, new PocWorkBudget(65536), out var failure);
++            Assert.That(effect, Is.Not.Null, failure);
++            if (kind == "type") { type.Update(name: "Other"); }
++            if (kind == "child") { child.Update(keyword: "false", expression: null); }
++            if (kind == "arguments") { (args[0], args[1]) = (args[1], args[0]); }
++            Assert.That(effect!.IsCurrent(new PocWorkBudget(65536)), Is.False);
++            if (kind == "type") { type.Update(name: "Uri"); }
++            if (kind == "child") { child.Update(keyword: "null", expression: null); }
++            if (kind == "arguments") { (args[0], args[1]) = (args[1], args[0]); }
++            Assert.That(effect.IsCurrent(new PocWorkBudget(65536)), Is.False, "Observed withdrawal is terminal.");
+         }
+ 
+         [Test]
+--- a/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Primitives/PreparedPocNativeCallEffect.cs
++++ b/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Primitives/PreparedPocNativeCallEffect.cs
+@@ -96,6 +96,15 @@
+                     // parts, in-part quote/backslash escapes, numeric holes and
+                     // exact carrier count. Every hole is still composed below.
+                     FormattableStringExpression => role == Role.Value,
++                    // Finite construction profile: an explicit non-generic type,
++                    // known live argument carrier, and NO initializer. With no
++                    // initializer native always writes the arguments; count < 6
++                    // changes layout only. Shape snapshots the emitting type,
++                    // carrier and every argument occurrence in native order.
++                    // Constructor intent is not spelling/binding authority.
++                    NewInstanceExpression construction when role is Role.Value or Role.StatementValue =>
++                        construction.InitExpression is null && SafeType(construction.Type, budget) &&
++                        ContractCollections.TryCopyForPoc(construction.Parameters, budget, out _),
+                     TypeReferenceExpression type => role == Role.Value && !type.IsStaticPlaceholder && SafeType(type.Type, budget),
+                     _ => false
+                 };

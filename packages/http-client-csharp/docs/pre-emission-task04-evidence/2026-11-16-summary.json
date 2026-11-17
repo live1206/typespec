@@ -1,0 +1,357 @@
+{
+  "schemaVersion": 1,
+  "recordedOn": "2026-11-16",
+  "status": "Task04 paused/incomplete; accepted prerequisites retained; no shortening activation",
+  "branch": "feature/pre-emission-task04",
+  "publishedBaseline": "3461c966122c8658d562463c41d48897442ddc5b",
+  "baselineNote": "Accepted metadata prerequisites are additional local working-tree changes. Experimental patch before hashes identify that accepted baseline; not necessarily applicable to published HEAD alone.",
+  "acceptedEvidence": [
+    {
+      "component": "Prewriter candidate/target handoff",
+      "accepted": "Exact actual-Foo File/Occurrence/MetadataTarget retained before writing and associated with native-use capture.",
+      "notEstablished": "Live emission authority or bound for producing compiler work."
+    },
+    {
+      "component": "Passive capture and mechanical frame prerequisites",
+      "accepted": "One native formatter traversal, owned numeric receipts, native fallback primitives.",
+      "notEstablished": "Semantic permission or enabled ordinary Task04 choice."
+    },
+    {
+      "component": "Checked metadata input",
+      "accepted": "Owner-bound header/layout/checked-byte access and cooperative retirement; raw scan bounds.",
+      "rawScan": {
+        "typeDefRows": 3051,
+        "referenceBytes": 23244,
+        "heapBytes": 3428,
+        "credits": 964976,
+        "sourceCap": 1048576
+      },
+      "notEstablished": "Raw metadata is not compiler binding/accessibility authority or a whole-Roslyn/Task04 cost certificate."
+    }
+  ],
+  "rejectedRoutes": [
+    {
+      "route": "Restrictive V4 original-field-query reuse",
+      "result": "NOT_VIABLE_FOR_ACTUAL_FOO",
+      "evidenceKind": "Read-only source/admission/binding feasibility analysis; not an implemented V4 or native-positive run.",
+      "reasons": [
+        "Mixed CoreLib/ClientModel history contradicts selected-module/same-receiver/291-row profile.",
+        "Original field-query history supplies no PipelineMessage local occurrence-owned binding."
+      ],
+      "universalTask04Impossibility": false
+    },
+    {
+      "route": "Candidate currentness plus traversal as authority",
+      "result": "UNSAFE_SHORTCUT_REPRODUCED",
+      "evidence": {
+        "callbackWrites": 1,
+        "parseValid": true,
+        "observationCandidateCurrentAtReturnAsserted": true,
+        "loggedSourceReceiptCurrent": true,
+        "loggedPostwriteCandidateCurrent": true,
+        "loggedReceiptFactsSeparatelyAsserted": false,
+        "nativeBinding": "System.ClientModel.Primitives.PipelineMessage",
+        "counterfactualBareBinding": "Client.Structure.Service.Foo.PipelineMessage",
+        "testOnlySemanticCounterfactual": true
+      }
+    },
+    {
+      "route": "Literal occurrence-candidate to generic-frame bridge",
+      "result": "BLOCKED_LITERAL_IMPLEMENTATION_SPIKE_NO_TASK04_SHORTENING",
+      "evidence": {
+        "stableRemaining": 39535,
+        "earlierRemaining": 39591,
+        "requiredAcceptedReservation": 99780,
+        "stableShortfall": 60245,
+        "primaryCharacters": 8274,
+        "qualifiedCharacters": 8307,
+        "legacyAlternatives": 1,
+        "accountExhausted": false,
+        "noCapIncreaseOrTariffReduction": true,
+        "originalNativeCodeFileReturned": true,
+        "necessaryCPUOverrunClaimed": false,
+        "universalOccurrenceFirstImpossibilityClaimed": false
+      }
+    },
+    {
+      "route": "Occurrence-first in general",
+      "result": "NOT_DISPROVED_PAUSED_WITHOUT_CLOSED_IMPLEMENTATION",
+      "unclosed": [
+        "Live source/import/opaque-emission confinement authority",
+        "Cold compiler work and complete added work/storage/lifetime certificate"
+      ]
+    }
+  ],
+  "spike": {
+    "startedUtc": "2026-11-16T07:23:41Z",
+    "closedUtc": "2026-11-16T08:02:02.100741+00:00",
+    "elapsedSeconds": 2301.1007409095764,
+    "completedWithinOneHour": true,
+    "validation": {
+      "client": {
+        "passed": 9,
+        "failed": 4,
+        "underlyingExit": 1,
+        "seconds": 58.835453271865845,
+        "failures": [
+          "RealFooLocalTypeChoiceIsPreparedBeforeAnyOutputWriterStarts",
+          "RealFooTask04OpaqueTailChangesBareBindingWithoutChangingCandidate",
+          "RealFooTask04PrewriterTargetReachesOneNativeUseWithoutGrantingAuthority",
+          "RealFooUsingDeclarationWritesPreparedPipelineMessageType"
+        ]
+      },
+      "core": {
+        "passed": 96,
+        "failed": 0,
+        "underlyingExit": 0,
+        "seconds": 9.739550352096558
+      },
+      "sourceUnchangedDuringBothRuns": true,
+      "originalWriterAndTestFileTextUnchangedAfterRemovingOnlyAdditions": true,
+      "entireExperimentSourceStillMatchesReviewedManifest": true,
+      "productionExpanded575225Run": false,
+      "productionSourceCurrentnessGateRun": false,
+      "reasonProductionGatesNotRun": "Blocked isolated observer-only experiment; no integration/activation or production readiness claim."
+    },
+    "independentReview": {
+      "taskId": "d5ca1c626abc2e139d9fd4c2f1024e3d9",
+      "answerSha256": "1701574e200eaf177e03b67fcaacea05ee62ba776183aefa3ff280b24f6b03f9",
+      "fullAnswerBytes": 7103,
+      "turns": 6,
+      "toolCalls": 20,
+      "verdict": "BLOCKED literal experiment; no additional blocking defect within declared observation-only scope",
+      "minorEvidenceFinding": "Two opaque-test receipt facts logged but not separately asserted; final report corrected; frozen tests preserved.",
+      "notProductionReviewGate": true
+    },
+    "sourceFiles": [
+      {
+        "path": "packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Primitives/Task04OrdinaryObservation.cs",
+        "baselineSha256": null,
+        "spikeSha256": "3cb124e786a7d0f81bd875324ac2817ddc52c832b355a40a2c0feca6b5a8da3e",
+        "baselineLines": 0,
+        "spikeLines": 102
+      },
+      {
+        "path": "packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Providers/PreparedFieldTypes.Task04OrdinaryObservation.cs",
+        "baselineSha256": null,
+        "spikeSha256": "bb40a855c29e4b34bbb2aff7135e9c86e47702e638827c70e351e96cea194032",
+        "baselineLines": 0,
+        "spikeLines": 42
+      },
+      {
+        "path": "packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Primitives/TypeProviderWriter.cs",
+        "baselineSha256": "81151eebf341d71a5b01ae034f07bb2fa5871691e88daeace77c31870952aedb",
+        "spikeSha256": "e4da61c4bea30cfebba185b688ccad5af2e1a11dc5c59201bba5afe751be96b8",
+        "baselineLines": 352,
+        "spikeLines": 397
+      },
+      {
+        "path": "packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator.ClientModel/test/Providers/PreparedLocalTypeClientTests.cs",
+        "baselineSha256": "b457f7f9010d0ed1616e96b2e81e8275289d45ff6d75e9ce2b360acfe21578d2",
+        "spikeSha256": "4fa8d25abfdb39c6260d815e0db9baeb18bcdf35bfeef80b18f9731de2e2ea53",
+        "baselineLines": 9328,
+        "spikeLines": 9496
+      }
+    ],
+    "patch": "2026-11-16-occurrence-spike.patch",
+    "patchSha256": "969ca45763b1ab8f342b6139b8ac659b059887942fbc8bb56cf2aa8398588a7a",
+    "review": "2026-11-16-occurrence-spike-review.md",
+    "proofClosure": {
+      "sourceCeilingsVerified": false,
+      "completeCostStorageLedger": false,
+      "coldCompilerWorkBound": false,
+      "emissionConfinementAuthority": false,
+      "implementationReady": false
+    },
+    "nativePositiveTask04": false,
+    "enabledShorteningSelections": 0
+  },
+  "preservation": {
+    "canonicalSourceCount": 4401,
+    "canonicalAndPreparationUnchangedBySpike": true,
+    "originalWriterAndTestsUnchangedAfterRemovingOnlyExperimentalAdditions": true,
+    "originalFooExpectationsNotWeakened": true,
+    "spikeSourceCount": 4403
+  },
+  "originalDiagnosticReceipts": {
+    "resultMarkdownSha256": "c8c3596cbab150d490fc6918bfcd4e9b0f0bcf6f07931f1004e60050af4eafe2",
+    "stableVerificationSha256": "be0da12d24b147979ac3ccfd214cec8e2fd9c9c5557f09ae65ed8f5ad780cbda",
+    "files": [
+      {
+        "file": "baseline/result.json",
+        "sha256": "ff314fd99eef66634e0fe15e80d7dd4426c43688faf39a5c9a8cb3a2502697cf",
+        "bytes": 1347
+      },
+      {
+        "file": "baseline/checks.trx",
+        "sha256": "23eb8c76b5fab0f4a861a2247b01ab94745b30f93036e08ff9cd05e1831f11c6",
+        "bytes": 50438
+      },
+      {
+        "file": "baseline/before.json",
+        "sha256": "421d62eb0e483bf99004b22bd74cf5203c5f8b32b42da677391dc83bd88f3b13",
+        "bytes": 983564
+      },
+      {
+        "file": "baseline/after.json",
+        "sha256": "421d62eb0e483bf99004b22bd74cf5203c5f8b32b42da677391dc83bd88f3b13",
+        "bytes": 983564
+      },
+      {
+        "file": "baseline/checks.log",
+        "sha256": "b4b38c1f616009fd39f35b20ded00bccf57de3a72f050002bbd61e1dc66d6dc1",
+        "bytes": 46168
+      },
+      {
+        "file": "opaque-baseline-final/result.json",
+        "sha256": "2b0e303e24703e04c1d1ec25d9a3bad7f31e85469bb29ea25f39f3b792948cea",
+        "bytes": 562
+      },
+      {
+        "file": "opaque-baseline-final/checks.trx",
+        "sha256": "0f145191fdc8216da24a530e63e42e7f4631288d04010afc4d855c4ffc6ae18f",
+        "bytes": 5075
+      },
+      {
+        "file": "opaque-baseline-final/before.json",
+        "sha256": "5647ed20ce71e9d042cb2c3411f9bd3af1377ed959d3281c82db55e9fe2b2176",
+        "bytes": 983564
+      },
+      {
+        "file": "opaque-baseline-final/after.json",
+        "sha256": "5647ed20ce71e9d042cb2c3411f9bd3af1377ed959d3281c82db55e9fe2b2176",
+        "bytes": 983564
+      },
+      {
+        "file": "opaque-baseline-final/checks.log",
+        "sha256": "cd80687eeef5aabd1cda961895b76d4c61313d08b104c202443392499047f64c",
+        "bytes": 3983
+      },
+      {
+        "file": "bridge-focused/result.json",
+        "sha256": "4eacdec4c91f8fe8170e3b5b4c168c834be4b30bacf2d5666e39c44b093876c8",
+        "bytes": 2411
+      },
+      {
+        "file": "bridge-focused/checks.trx",
+        "sha256": "88ec6e41ed1b2f8b92e066fc922b546212ca4439c083020653111beb05485f98",
+        "bytes": 48093
+      },
+      {
+        "file": "bridge-focused/before.json",
+        "sha256": "e40586145a927400e1a6505d33c1651ea8f9a7bb947405652235a60089a4a451",
+        "bytes": 983950
+      },
+      {
+        "file": "bridge-focused/after.json",
+        "sha256": "e40586145a927400e1a6505d33c1651ea8f9a7bb947405652235a60089a4a451",
+        "bytes": 983950
+      },
+      {
+        "file": "bridge-focused/checks.log",
+        "sha256": "34b9c0ef809a5c2b0d885abff2f30a1aa107554a2b44f9a2a7d803e62a6a2bed",
+        "bytes": 31968
+      },
+      {
+        "file": "bridge-reservation-diagnostic/result.json",
+        "sha256": "c9d065c0416e9f52e2604d3e783d532cc22386841930b434a11c6d06d5cd66e9",
+        "bytes": 1155
+      },
+      {
+        "file": "bridge-reservation-diagnostic/checks.trx",
+        "sha256": "b8095d5efcd334c47cb9ee6d63b909ac9193e466574c1c96ff75b315c4f76bd0",
+        "bytes": 23488
+      },
+      {
+        "file": "bridge-reservation-diagnostic/before.json",
+        "sha256": "b076fba1247d2bbcf837e5eab03fc22eecca018b98864994f500b8aa856f87d7",
+        "bytes": 983950
+      },
+      {
+        "file": "bridge-reservation-diagnostic/after.json",
+        "sha256": "b076fba1247d2bbcf837e5eab03fc22eecca018b98864994f500b8aa856f87d7",
+        "bytes": 983950
+      },
+      {
+        "file": "bridge-reservation-diagnostic/checks.log",
+        "sha256": "dc2639ba59357aa46578d93a1405c5638fce72c884c07595cd0a83df26682d79",
+        "bytes": 17746
+      },
+      {
+        "file": "stable-client/result.json",
+        "sha256": "0a270ecad4f460e2cebfcc6f2ab53911bcf10c0bbbc24f0c884d3dcb22f419cd",
+        "bytes": 2777
+      },
+      {
+        "file": "stable-client/checks.trx",
+        "sha256": "b6d5e76e34b62f78ea93512b5813a2baf75c17c5140599b9d6e606de2f608896",
+        "bytes": 56749
+      },
+      {
+        "file": "stable-client/before.json",
+        "sha256": "f9e4784dc31eebd247097c17aeb75b05be74b16d60bf1eb23b84f4f1ea01b0aa",
+        "bytes": 983950
+      },
+      {
+        "file": "stable-client/after.json",
+        "sha256": "f9e4784dc31eebd247097c17aeb75b05be74b16d60bf1eb23b84f4f1ea01b0aa",
+        "bytes": 983950
+      },
+      {
+        "file": "stable-client/checks.log",
+        "sha256": "45c2e567cc7efc93b51d378d85a29dc15493e458955d15c7a55a277867a3dc5d",
+        "bytes": 37001
+      },
+      {
+        "file": "stable-core/result.json",
+        "sha256": "8114e1f578feadeb1ae3ee4a899e19590175806e77488442632d83e6465fc360",
+        "bytes": 14027
+      },
+      {
+        "file": "stable-core/checks.trx",
+        "sha256": "0a79db9215ef0646313fc41cccacd2e9758c5d45c87084599cd5a684a763d0f5",
+        "bytes": 147560
+      },
+      {
+        "file": "stable-core/before.json",
+        "sha256": "f9e4784dc31eebd247097c17aeb75b05be74b16d60bf1eb23b84f4f1ea01b0aa",
+        "bytes": 983950
+      },
+      {
+        "file": "stable-core/after.json",
+        "sha256": "f9e4784dc31eebd247097c17aeb75b05be74b16d60bf1eb23b84f4f1ea01b0aa",
+        "bytes": 983950
+      },
+      {
+        "file": "stable-core/checks.log",
+        "sha256": "1cef694a6e8a4039c0767b9ba14a895df5082ebf8155b899dab277a87ca98ca1",
+        "bytes": 9864
+      }
+    ]
+  },
+  "laterTasks": {
+    "dependencyDeclarationsUnchanged": true,
+    "directTask04Dependents": [
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      17,
+      18
+    ],
+    "transitiveTask04Dependents": [
+      12,
+      13,
+      14,
+      15,
+      16
+    ],
+    "finalReplacementTask": 19,
+    "mayStart": "Task05 type-spelling-independent structured binary grouping with native child spellings unchanged.",
+    "stillBlocked": "Task04-dependent composition, accepted positive coverage and full later-task/Task19 completion.",
+    "notAuthorized": "New binder/confinement project or fabricated Task04 permission inside Task05."
+  }
+}

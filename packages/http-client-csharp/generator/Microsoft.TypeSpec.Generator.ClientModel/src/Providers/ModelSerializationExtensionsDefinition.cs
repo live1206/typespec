@@ -58,6 +58,12 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
         public ModelSerializationExtensionsDefinition()
         {
+            PocHeaderFinalizationBridge.Install(typeof(ModelSerializationExtensionsDefinition),
+                new(typeof(TypeProvider), typeof(TypeProvider), typeof(ModelSerializationExtensionsDefinition), static (value, loaded) =>
+                    value is ModelSerializationExtensionsDefinition provider &&
+                    (provider._hasFileBinaryContentJsonModel == true ||
+                        provider._hasFileBinaryContentJsonModel.HasValue && provider._hasFileBinaryContentXmlModel.HasValue ||
+                        ScmCodeModelGenerator.IsCurrentInstance && PocHeaderFinalizationBridge.KnownEmpty(loaded?.Models))));
             WireOptionsField = new FieldProvider(
                 modifiers: FieldModifiers.Internal | FieldModifiers.Static | FieldModifiers.ReadOnly,
                 type: typeof(ModelReaderWriterOptions),
@@ -458,15 +464,14 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
         private MethodProvider BuildThrowNonNullablePropertyIsNullMethodProvider()
         {
+            AttributeStatement attribute;
             var signature = new MethodSignature(
                 Name: _throwNonNullablePropertyIsNullMethodName,
                 Modifiers: _methodModifiers,
                 Parameters: [_propertyParameter],
                 ReturnType: null,
-                Attributes:
-                [
-                    new AttributeStatement(typeof(ConditionalAttribute), Literal("DEBUG"))
-                ],
+                Attributes: ConstructedCollectionBridge.Record<AttributeStatement>(
+                    [attribute = new AttributeStatement(typeof(ConditionalAttribute), Literal("DEBUG"))], attribute),
                 Description: null, ReturnDescription: null);
             var property = _propertyParameter.As<JsonProperty>();
             var body = Throw(New.JsonException(new FormattableStringExpression(

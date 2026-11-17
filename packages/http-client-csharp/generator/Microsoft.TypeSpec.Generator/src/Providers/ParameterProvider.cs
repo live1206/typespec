@@ -295,6 +295,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         private VariableExpression? _asVariable;
         internal VariableExpression? CachedVariableExpression => _asVariable;
+        internal string ExpectedEmittedVariableName => GetEmittedVariableName(this);
 
         // Canonical lazy materialization has zero revisions and the same expected
         // spelling; observe its cached carrier without creating it during capture.

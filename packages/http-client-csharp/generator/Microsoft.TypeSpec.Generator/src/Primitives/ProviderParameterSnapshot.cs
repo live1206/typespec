@@ -50,10 +50,12 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return true;
         }
 
-        internal bool IsCurrent() => _parameter.DeclarationRevision == _revision && ReferenceEquals(_parameter.Type, _type.Identity) &&
-            _type.IsCurrent() && ReferenceEquals(_parameter.DefaultValue, _defaultValue) &&
+        internal bool IsCurrent(PocWorkBudget? budget = null) => SourceCurrentnessChecks.Spend(budget) &&
+            _parameter.DeclarationRevision == _revision && ReferenceEquals(_parameter.Type, _type.Identity) &&
+            SourceCurrentnessChecks.Type(_type, budget) && ReferenceEquals(_parameter.DefaultValue, _defaultValue) &&
             (_defaultValue is not KeywordExpression keyword || keyword.DeclarationRevision == _defaultKeywordRevision) &&
             (_defaultValue is not ScopedApi wrapper || wrapper.DeclarationRevision == _defaultWrapperRevision) &&
-            ContractCollections.SameReferences(_parameter.Attributes, _attributes) && _attributeSnapshots.All(a => a.IsCurrent());
+            SourceCurrentnessChecks.References(_parameter.Attributes, _attributes, budget) &&
+            _attributeSnapshots.All(a => budget is null ? a.IsCurrent() : a.IsCurrentForPoc(budget));
     }
 }

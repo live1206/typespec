@@ -1,0 +1,124 @@
+{
+  "date": "2026-11-17",
+  "status": "APPROVED_REVIEWED_EXPERIMENTAL_DEVELOPMENT_BASELINE",
+  "branch": "feature/pre-emission-task04",
+  "priorPublishedCheckpoint": "3461c966122c8658d562463c41d48897442ddc5b",
+  "authorization": "ExplicitexperimentaldevelopmentbaselineOption2; newerisolatedpartialcomponentsmaymoveontobranchwithoutclaimingproductionacceptanceorclosedcost/storage/lifetimes",
+  "sourceInputCount": 4407,
+  "sourceManifestSha256": "8ebc5b712446bfc845273508c3962dd3f9371b851345b332eeef30bffc48a51e",
+  "includes": [
+    "acceptedcheckedmetadataprerequisites",
+    "request-drivenownedrequestinventory",
+    "finitelocalnativeeffects",
+    "ownedrootnativeconsumption",
+    "declarationreferencechange-restorehistoryfix",
+    "Corehelperreflectiondefaultargumentrepair",
+    "partialmethod-headinput/nativeboundaryassociation",
+    "Clientprospectivefixturehelperdefaultargumentparityrepair"
+  ],
+  "excludes": [
+    "latestconstructorincrementand20newcases",
+    "still-redrequiredRESTfullbodypositive(notdeleted;deferredpatch)",
+    "LiteralExpressionprofile",
+    "shorteningactivation/Task03promotion/HasUncoveredfalse",
+    "SDKregeneration/Task05changes"
+  ],
+  "preservedFooAcceptanceFailures": [
+    "RealFooLocalTypeChoiceIsPreparedBeforeAnyOutputWriterStarts",
+    "RealFooUsingDeclarationWritesPreparedPipelineMessageType"
+  ],
+  "requiredFreshValidation": {
+    "sourceCurrentness": {
+      "status": "FINAL_TARGETED_EXPLICIT_SOURCE_AND_BINARY_FREEZE_PASS",
+      "sourceInputs": 4407,
+      "binaryFiles": 2255,
+      "allSourceAndBinaryHashesUnchanged": true,
+      "qualification": "broadselectorspassedbeforeminimalnullguardrepairs; explicitindependentlyacceptedcall/branchcarry-forward, notfreshfinalsourceexecutions"
+    },
+    "expandedCore575Client225": {
+      "status": "PASS_PRE_MINIMAL_FIX_RESULTS_CARRIED_FORWARD_AFTER_INDEPENDENT_REVIEW",
+      "core": 575,
+      "client": 225,
+      "coreTrxSeconds": 223.597649,
+      "clientTrxSeconds": 1504.860878,
+      "clientProcessExitObserved": false,
+      "qualification": "225-clientTRXcompletePassed/noabort/timeout; supervisorreceiptunavailable, noobservedprocess-exitcodeclaim"
+    },
+    "affectedCore1127Client61OnlyFoo2Red": {
+      "status": "CORE1127_PRE_MINIMAL_FIX_RESULT_CARRIED_FORWARD_AFTER_INDEPENDENT_REVIEW",
+      "corePassed": 1127,
+      "clientPassed": 59,
+      "clientFailed": 2,
+      "failures": [
+        "RealFooUsingDeclarationWritesPreparedPipelineMessageType",
+        "RealFooLocalTypeChoiceIsPreparedBeforeAnyOutputWriterStarts"
+      ]
+    },
+    "sixProspectiveClientControls": {
+      "passed": 6,
+      "failed": 0,
+      "seconds": 28.24385380744934,
+      "originalAssertionsUnchanged": true
+    },
+    "combinedStableReview": {
+      "model": "github-copilot/gpt-6.1-terra",
+      "fullReview": "COMPLETED_TWO_FINDINGS_REPRODUCED_REPAIRED_AND_CLOSED",
+      "answerSha256": "e0cb2d6bb4c137e6898984ec814a1fbbc169e7796b82bde9585df6b216bf77f6",
+      "findingFixes": "runtimeNREsdeclineproof/typednamedfieldallowancepreservesbaseline",
+      "followup": "NO_NEW_CODE_FINDINGS_FIXES_CLOSED_AND_REUSE_ACCEPTED",
+      "followupAnswerSha256": "a793400f215e71df58c8501097972099d8198a4e6ee7d46538d60b3a1e185935",
+      "followupAnswerBytes": 2925
+    },
+    "postFindingMetadataRawAndNativeControls": {
+      "passed": 404,
+      "failed": 0,
+      "seconds": 10.30418848991394,
+      "coverage": "entiretwoMetadata testclasses+3newmalformednativeparitycontrols+entireRawIdentifier"
+    },
+    "postFindingClientAndProspectiveControls": {
+      "passed": 65,
+      "failed": 2,
+      "total": 67,
+      "seconds": 213.5754270553589,
+      "failures": [
+        "RealFooLocalTypeChoiceIsPreparedBeforeAnyOutputWriterStarts",
+        "RealFooUsingDeclarationWritesPreparedPipelineMessageType"
+      ],
+      "sourceAndBinariesUnchanged": true
+    },
+    "postFindingCoreWithOwnFreeze": {
+      "passed": 404,
+      "failed": 0,
+      "seconds": 6.58349609375,
+      "sourceCount": 4407,
+      "binaryFiles": 2255,
+      "sourceAndBinariesUnchanged": true
+    }
+  },
+  "open": [
+    "actualconsumedtype/declaration/documentationvaluesandlexicalcontext",
+    "fullmember/file/header/import/export/influencing39world",
+    "coldcompilerandwholeaddedwork/storage/defaultdispatch/retention/cleanup/lifetime/inputancestrycertificate",
+    "productionacceptance/activation/integrationgates"
+  ],
+  "deferredConstructorEvidence": {
+    "patch": "2026-11-16-rest-construction-deferred.patch",
+    "patchSha256": "13b0d4996077fc0c5ac4f61ce725883ca554f731d23fb47d30c3141a1d624e9b",
+    "review": "2026-11-16-rest-construction-review.md",
+    "reviewSha256": "96b954dcf69bbfaf6858ed2f716642a2675d663ddb19f42ee4775b4a4a6ca69e",
+    "verdict": "constructor-aloneRESThypothesisfalsified;partialprofileonly;requiredpositivepreservedREDatlaterLiteralfrontier",
+    "freshHistoricalCore": 1127,
+    "freshHistoricalClient": {
+      "passed": 78,
+      "failed": 3,
+      "note": "Foo2plusrequiredRESTpositive;NOTacceptedbaselinegate"
+    }
+  },
+  "sourceAdjustmentAfterExactImport": "Clienthelperdefaultargsrepair; TWO optionalCapture nullguards afterfaithfulbeforefailures; strictnamed7INTfieldallowancemaintaining76baselineandrefslotguards; portable3-caseCoreintegrationregressions",
+  "modelTrial": "Userrequestedgithub-copilot/gpt-6.1-terrainplaceofsolfornextmodel-drivenwork; combinedreviewwilluseexplicitpinnedTerra",
+  "reviewQualifications": [
+    "metadataassertionpreservescountandnamed-slotprotectionsnotcomplete76-fieldidentityprooforstoragecert",
+    "malformedtestscoverdirectcapture/nativewriteparitynoteveryownedrootfallbackschedule",
+    "originalFoo2acceptancetestsremainenabledRED; productionactivationnotapproved"
+  ]
+}

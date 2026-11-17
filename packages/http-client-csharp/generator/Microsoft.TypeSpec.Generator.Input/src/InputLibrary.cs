@@ -25,6 +25,7 @@ namespace Microsoft.TypeSpec.Generator.Input
         }
 
         private InputNamespace? _inputNamespace;
+        internal InputNamespace? CachedInputNamespace => _inputNamespace;
         public virtual InputNamespace InputNamespace => _inputNamespace ??= Load();
 
         internal InputNamespace Load()

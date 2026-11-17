@@ -37,6 +37,10 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
         internal ClientSettingsProvider(InputClient inputClient, ClientProvider clientProvider)
         {
             _clientProvider = clientProvider;
+            PocHeaderFinalizationBridge.Install(typeof(ClientSettingsProvider), new(typeof(TypeProvider), typeof(ClientSettingsProvider), typeof(TypeProvider),
+                static (value, _) => value is ClientSettingsProvider provider && provider._clientProvider is not null,
+                static value => ((ClientSettingsProvider)value)._clientProvider)
+                { AdditionalDescriptionType = IConfigurationSectionType });
 
             var inputEndpointParam = inputClient.Parameters
                 .FirstOrDefault(p => p is InputEndpointParameter ep && ep.IsEndpoint) as InputEndpointParameter;
@@ -86,7 +90,9 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
 
         protected override IReadOnlyList<MethodBodyStatement> BuildAttributes()
         {
-            return [new AttributeStatement(typeof(ExperimentalAttribute), Literal(ClientSettingsDiagnosticId))];
+            MethodBodyStatement attribute;
+            return ConstructedCollectionBridge.Record<MethodBodyStatement>(
+                [attribute = new AttributeStatement(typeof(ExperimentalAttribute), Literal(ClientSettingsDiagnosticId))], attribute);
         }
 
         protected override PropertyProvider[] BuildProperties()

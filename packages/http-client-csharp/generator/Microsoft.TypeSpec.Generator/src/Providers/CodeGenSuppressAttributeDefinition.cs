@@ -26,9 +26,10 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         protected override IReadOnlyList<AttributeStatement> BuildAttributes()
         {
-            return
-            [
-                    new AttributeStatement(typeof(AttributeUsageAttribute),
+            AttributeStatement attribute;
+            return ConstructedCollectionWitness.Record<AttributeStatement>(
+                [
+                    attribute = new AttributeStatement(typeof(AttributeUsageAttribute),
                 [new BinaryOperatorExpression(
                     "|",
                 new BinaryOperatorExpression(
@@ -37,7 +38,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     FrameworkEnumValue(AttributeTargets.Enum)),
                 FrameworkEnumValue(AttributeTargets.Struct))],
                 [new KeyValuePair<string, ValueExpression>("AllowMultiple", True)]),
-            ];
+            ], attribute);
         }
 
         protected internal override PropertyProvider[] BuildProperties() =>

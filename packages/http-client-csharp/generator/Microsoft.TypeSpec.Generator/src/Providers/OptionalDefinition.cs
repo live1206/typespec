@@ -35,6 +35,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         protected internal override MethodProvider[] BuildMethods()
         {
+            WhereExpression constraint;
             return
             [
                 BuildIsListDefined(),
@@ -43,7 +44,9 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 IsStructDefined(),
                 IsObjectDefined(),
                 IsStringDefined(),
-                BuildIsDefinedWithPresence(new ParameterProvider("value", $"The value.", _t.WithNullable(true)), [_t], [Where.Struct(_t)]),
+                BuildIsDefinedWithPresence(new ParameterProvider("value", $"The value.", _t.WithNullable(true)),
+                    ConstructedCollectionWitness.Record<CSharpType>([_t], _t),
+                    ConstructedCollectionWitness.Record<WhereExpression>([constraint = Where.Struct(_t)], constraint)),
                 BuildIsDefinedWithPresence(new ParameterProvider("value", $"The value.", typeof(object))),
             ];
         }
@@ -114,7 +117,9 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private MethodProvider IsStructDefined()
         {
             var valueParam = new ParameterProvider("value", $"The value.", _t.WithNullable(true));
-            var signature = GetIsDefinedSignature(valueParam, [_t], [Where.Struct(_t)]);
+            WhereExpression constraint;
+            var signature = GetIsDefinedSignature(valueParam, ConstructedCollectionWitness.Record<CSharpType>([_t], _t),
+                ConstructedCollectionWitness.Record<WhereExpression>([constraint = Where.Struct(_t)], constraint));
             return new MethodProvider(signature, new MethodBodyStatement[]
             {
                 Return(new MemberExpression(valueParam, "HasValue"))

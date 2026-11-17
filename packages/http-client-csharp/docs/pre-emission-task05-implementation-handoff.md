@@ -3,6 +3,28 @@
 Contract: [Task05](https://github.com/microsoft/typespec/issues/12454#issuecomment-6543541641).
 Dependencies: Tasks03 and 04. Apply the [shared guide](./pre-emission-implementation-guide.md).
 
+## Independent progress while Task04 remains incomplete
+
+The [Task04 development checkpoint](./pre-emission-task04-status-and-evidence.md)
+consolidates accepted prerequisites and reviewed partial experimental components,
+but has no enabled ordinary Task04 name choice or complete member/file authority.
+This dependency is not removed or satisfied by a diagnostic candidate, a native
+body receipt or a partial method-head association. Task05's own authorized work
+and validation remain separate from this Task04 baseline consolidation.
+
+Start only the first structured binary-grouping checkpoint below, selecting
+accepted cases whose grammar is independent of Task04 spelling changes and
+leaving native child spellings unchanged. Establish Task05's own exact parent
+role, source-observation, precedence and one-write/fallback facts, including the
+no-recorded-type-reference case. Do not invent a Task04 permission, infer one
+from capture/currentness, rebind after writing, or build Task04's missing
+binder/confinement framework inside Task05.
+
+Combined type-spelling/grouping positives and full Task05 composition/completion
+remain pending until their real prerequisites exist. Preserve every accepted
+positive and retention anchor; an independent grouping slice is progress, not
+completion of the declared Tasks03/04 dependency or the whole Task05 inventory.
+
 ## Scope
 
 Prepare grouping, precedence and separator choices for the exact accepted M2

@@ -2,18 +2,36 @@
 
 Tracking [issue #12454](https://github.com/microsoft/typespec/issues/12454), specifically
 [Task04](https://github.com/microsoft/typespec/issues/12454#issuecomment-6543541243),
-Implementation work is assigned to `feature/pre-emission-task04` in the fork;
-this handoff is maintained on the parent `feature/pre-emission-field-types` branch.
+Implementation work and the current development checkpoint are on
+`feature/pre-emission-task04` in the fork. The planning handoff originated on
+`feature/pre-emission-field-types`; that parent is not the newer Task04 source baseline.
 Also apply the [shared implementation guide](./pre-emission-implementation-guide.md)
 and [task handoff index](./pre-emission-task-handoffs.md).
 
+> **2026-11-17: explicitly approved, reviewed experimental development baseline.**
+> The [status/evidence record](./pre-emission-task04-status-and-evidence.md)
+> distinguishes accepted prerequisites, reviewed partial components and unfinished
+> delivery. The current source snapshot includes request-driven planning,
+> local/owned native effects, the scalar revision/helper repairs and partial
+> method-head association; it excludes the later constructor/REST-positive-red
+> increment. The complete review's two findings were reproduced and repaired;
+> targeted validation and independent follow-up closed them with the evidence's
+> precise broader-results carry-forward. No shortening or production acceptance is
+> implied; complete ordinary-path cost/storage/lifetime and actual-consumed
+> declaration/member/file/export authority remain open. Original positives are
+> unchanged. Task05's independent type-spelling-free work retains its own scope;
+> combined composition and completion still require the missing Task04 capabilities.
+
 ## Authority, baseline and objective
 
-Task03 is merged. Start from `feature/pre-emission-field-types` at
-[`674e6ca`](https://github.com/live1206/typespec/commit/674e6ca75851acab5e4289e4034878664b102264),
-which contains Tasks01-03. Its production source matches the reviewed Task03
-checkpoint `ac0fc0746`. Do not restart Task03 or use upstream `main` as though it
-already contains this preparation core.
+Task03 is merged. Continue Task04 from the reviewed experimental checkpoint on
+`feature/pre-emission-task04`, with its documented open gates and unchanged Foo
+acceptance expectations. The historical parent
+[`674e6ca`](https://github.com/live1206/typespec/commit/674e6ca75851acab5e4289e4034878664b102264)
+on `feature/pre-emission-field-types` contains Tasks01-03 and matches the reviewed
+Task03 production checkpoint `ac0fc0746`; it does not contain this newer Task04
+baseline. Do not restart Task03 or use upstream `main` as though it contains the
+preparation core.
 
 **Deliver useful ordinary type-slot reductions through one shared preparation
 mechanism. Do not complete an increasingly general proof system first.**
@@ -53,6 +71,36 @@ ambiguous bare patterns, unprotected casts, and aliases that erase retained
 arguments as required by the original anchors. Do not interpret that boundary as
 excluding every lexical generic owner: original cases require arity-sensitive
 lookup inside generic classes/methods and correct type-parameter ownership.
+
+## Approved bounded header-finalization lifecycle
+
+The user subsequently approved an explicit opt-in header-finalization phase to
+reduce complexity. Audited built-in documentation/file-warning getters and the
+known dictionary constraint may materialize after visitor/reference-map work and
+before source capture/name planning. Final output writers still run once; unknown
+or side-effecting builders/inputs retain the legacy path. No arbitrary getter,
+collection enumeration, writer or callback may be replayed for planning.
+
+This is a deliberate lifecycle change, not transparent name substitution: header
+values are canonical at this boundary, and later input changes do not implicitly
+rebuild already-cached headers. Changes to the finalized canonical objects or
+documentation policy must veto their snapshots. Qualified fallback cannot undo
+changed getter timing. Validate stable-input output/source-callback parity and the
+new mutation contract separately; retain legacy timing regressions on the legacy
+entry point. Header finalization does not itself prove grammar, binding, source
+policy, complete currentness or permission, and does not narrow the original Foo
+or ordinary-role acceptance scope.
+
+The finalized-header checkpoint passes **271 core controls / 17 client controls**,
+including all 39 provider snapshots before writers, one native write per provider,
+syntax/traversal checks, owned compiler-host preparation and stable output/callback
+parity. Writer-free warning capture and cached-description normalization are
+bounded separately; cached raw descriptions reject unsafe tags, excessive repeated
+expansion and empty formats with arguments. Fallback names reject `<` before any
+builder runs. The final two-guard follow-up completed with no concrete findings
+(static review; not a full Task04 review). These results do not enable POC spelling:
+original Foo permissions and the complete generation confinement certificate are
+still pending.
 
 ## Checkpoint 0: finite acceptance and representation map
 
@@ -235,8 +283,9 @@ language-emission framework. Continue other independent authorized work rather
 than stalling the whole task.
 
 Do not cache permissions by type/producer, memoize away mutable or sticky
-observations, force lazy carriers, execute unknown formatting/getters to prove a
-role, replay callbacks, or use legacy output to claim raw acceptance. This plan
+observations, force lazy carriers outside the approved audited header phase,
+execute unknown formatting/getters to prove a role, replay callbacks, or use
+legacy output to claim raw acceptance. This plan
 also does not accept `global::` as the final generated SDK spelling.
 
 Each checkpoint report should state: original reductions now working and their

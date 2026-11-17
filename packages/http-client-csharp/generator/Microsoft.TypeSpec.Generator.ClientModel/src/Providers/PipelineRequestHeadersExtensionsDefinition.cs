@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using Microsoft.TypeSpec.Generator.ClientModel.Snippets;
 using Microsoft.TypeSpec.Generator.Expressions;
+using Microsoft.TypeSpec.Generator.Input;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
 using Microsoft.TypeSpec.Generator.Snippets;
@@ -55,7 +56,7 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
                 Modifiers: modifiers,
                 Parameters: parameters,
                 ReturnType: null,
-                GenericArguments: [_t],
+                GenericArguments: ConstructedCollectionBridge.Record<CSharpType>([_t], _t),
                 Description: null,
                 ReturnDescription: null);
 

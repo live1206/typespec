@@ -263,16 +263,19 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return result;
         }
 
-        internal bool IsCurrent()
+        internal bool IsCurrent() => IsCurrentCore(invalidate: true);
+        internal bool IsCurrentWithoutInvalidating(PocWorkBudget? budget = null) => IsCurrentCore(invalidate: false, budget);
+
+        private bool IsCurrentCore(bool invalidate, PocWorkBudget? budget = null)
         {
-            if (!IsAvailable || System.Threading.Volatile.Read(ref _stale) != 0) { return false; }
-            var current = Contract.IsCurrent() && ContractCollections.SameReferences(_arguments, _snapshot) &&
-                _edges.All(e => e.IsCurrent()) && (_constructedType?.IsCurrent() ?? true) &&
+            if (!SourceCurrentnessChecks.Spend(budget) || !IsAvailable || System.Threading.Volatile.Read(ref _stale) != 0) { return false; }
+            var current = (invalidate ? Contract.IsCurrent() : Contract.IsCurrentWithoutInvalidating(budget)) && SourceCurrentnessChecks.References(_arguments, _snapshot, budget) &&
+                _edges.All(e => e.IsCurrent(budget)) && SourceCurrentnessChecks.Type(_constructedType, budget) &&
                 (_invocation is null || _invocation.DeclarationRevision == _invocationRevision &&
                     ReferenceEquals(_invocation.InstanceReference, _receiver) && _invocation.DelegateParameterIntent?.DeclarationRevision == _delegateRevision &&
                     (_invocation.TypeArguments is null && _typeArguments.IsDefault || !_typeArguments.IsDefault &&
-                        ContractCollections.SameReferences(_invocation.TypeArguments, _typeArguments) && _typeSnapshots.All(t => t.IsCurrent())));
-            if (!current) { System.Threading.Interlocked.Exchange(ref _stale, 1); }
+                        SourceCurrentnessChecks.References(_invocation.TypeArguments, _typeArguments, budget) && _typeSnapshots.All(t => SourceCurrentnessChecks.Type(t, budget))));
+            if (!current && invalidate) { System.Threading.Interlocked.Exchange(ref _stale, 1); }
             return current;
         }
 
@@ -326,17 +329,17 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 _nodes = nodes.ToImmutable();
             }
 
-            internal bool IsCurrent() => _nodes.All(node => node.Node switch
+            internal bool IsCurrent(PocWorkBudget? budget = null) => SourceCurrentnessChecks.Spend(budget) && _nodes.All(node => SourceCurrentnessChecks.Spend(budget) && (node.Node switch
             {
-                PositionalParameterReferenceExpression named => named.ParameterName == node.Name &&
+                PositionalParameterReferenceExpression named => SourceCurrentnessChecks.Text(named.ParameterName, node.Name, budget) &&
                     ReferenceEquals(named.ParameterValue, node.Child) && ReferenceEquals(named.ReferencedParameter, node.Formal) &&
                     named.ReferencedParameter?.DeclarationRevision == node.FormalRevision,
                 ArgumentExpression argument => argument.DeclarationRevision == node.Revision && ReferenceEquals(argument.Expression, node.Child),
                 ScopedApi wrapper => wrapper.DeclarationRevision == node.Revision && ReferenceEquals(wrapper.Original, node.Child),
-                KeywordExpression keyword => keyword.DeclarationRevision == node.Revision && keyword.Keyword == node.Name &&
+                KeywordExpression keyword => keyword.DeclarationRevision == node.Revision && SourceCurrentnessChecks.Text(keyword.Keyword, node.Name, budget) &&
                     ReferenceEquals(keyword.Expression, node.Child),
                 _ => false
-            });
+            }));
         }
     }
 }

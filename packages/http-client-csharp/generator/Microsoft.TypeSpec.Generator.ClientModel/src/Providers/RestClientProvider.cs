@@ -46,6 +46,8 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Providers
         public RestClientProvider(InputClient inputClient, ClientProvider clientProvider)
         {
             _inputClient = inputClient;
+            PocHeaderFinalizationBridge.Install(typeof(RestClientProvider), new(typeof(TypeProvider), typeof(TypeProvider), typeof(RestClientProvider),
+                static (value, _) => value is RestClientProvider provider && provider._inputClient is not null && provider._inputClient.Experimental is null));
             ClientProvider = clientProvider;
             RegisterPartialDeclarationOwner(clientProvider);
             _pipelineMessage20xClassifiers = BuildPipelineMessage20xClassifiers();

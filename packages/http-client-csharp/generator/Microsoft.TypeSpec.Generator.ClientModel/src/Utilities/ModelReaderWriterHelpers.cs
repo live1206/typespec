@@ -6,6 +6,7 @@ using System.ClientModel.Primitives;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.TypeSpec.Generator.ClientModel.Providers;
+using Microsoft.TypeSpec.Generator.Input;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
 
@@ -20,7 +21,17 @@ namespace Microsoft.TypeSpec.Generator.ClientModel.Utilities
                 return false;
             }
 
-            return type.GetInterfaces().Any(IsModelReaderWriterInterface);
+            var interfaces = type.GetInterfaces();
+            var result = interfaces.Any(IsModelReaderWriterInterface);
+            // This bridge is installed by the core generator and uses the
+            // same opt-in predicate without exposing core internals here.
+            if (ConstructedCollectionBridge.Enabled<CSharpType>())
+            {
+                // Observe the native result; do not perform another reflection
+                // probe or enumerate it again for pre-write planning.
+                PocContextInterfaceObservations.Record(type, interfaces.Length, result);
+            }
+            return result;
         }
 
         public static bool ImplementsModelReaderWriter(TypeProvider typeProvider)

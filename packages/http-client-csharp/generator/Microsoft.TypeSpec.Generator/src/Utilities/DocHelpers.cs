@@ -154,15 +154,37 @@ namespace Microsoft.TypeSpec.Generator.Utilities
             }
 
             // Handle ***bold italic*** (must be done before ** and *)
-            text = BoldItalicRegex.Replace(text, "<b><i>$1</i></b>");
+            text = ReplaceEmphasis(text, BoldItalicRegex, 3, "<b><i>", "</i></b>");
 
             // Handle **bold**
-            text = BoldRegex.Replace(text, "<b>$1</b>");
+            text = ReplaceEmphasis(text, BoldRegex, 2, "<b>", "</b>");
 
             // Handle *italic* (but not already processed bold markers)
-            text = ItalicRegex.Replace(text, "<i>$1</i>");
+            text = ReplaceEmphasis(text, ItalicRegex, 1, "<i>", "</i>");
 
             return text;
+        }
+
+        private static string ReplaceEmphasis(string text, Regex regex, int markerWidth, string openingTag, string closingTag)
+        {
+            StringBuilder? result = null;
+            int previous = 0;
+            // Keep the existing regex match order without Regex.Replace's pooled
+            // segment builder, pool bookkeeping or the associated pool callbacks.
+            foreach (var match in regex.EnumerateMatches(text.AsSpan()))
+            {
+                result ??= new StringBuilder(text.Length);
+                result.Append(text.AsSpan(previous, match.Index - previous));
+                result.Append(openingTag);
+                // Each fixed pattern's sole capture is exactly the matched text
+                // between its literal opening and closing star markers.
+                result.Append(text.AsSpan(match.Index + markerWidth, match.Length - 2 * markerWidth));
+                result.Append(closingTag);
+                previous = match.Index + match.Length;
+            }
+            if (result is null) { return text; }
+            result.Append(text.AsSpan(previous));
+            return result.ToString();
         }
     }
 }

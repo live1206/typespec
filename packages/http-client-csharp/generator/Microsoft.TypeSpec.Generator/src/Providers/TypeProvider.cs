@@ -9,6 +9,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.TypeSpec.Generator.EmitterRpc;
 using Microsoft.TypeSpec.Generator.Expressions;
+using Microsoft.TypeSpec.Generator.Snippets;
 using Microsoft.TypeSpec.Generator.Input;
 using Microsoft.TypeSpec.Generator.Input.Extensions;
 using Microsoft.TypeSpec.Generator.Primitives;
@@ -111,6 +112,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         public TypeProvider? CustomCodeView => _customCodeView.Value;
         public TypeProvider? LastContractView => _lastContractView.Value;
+        internal bool IsLastContractViewMaterialized => _lastContractView.IsValueCreated;
+        internal TypeProvider? CachedLastContractView => _lastContractView.IsValueCreated ? _lastContractView.Value : null;
         public TypeProvider SpecView => _specView.Value;
 
         private IReadOnlyList<PropertyProvider> BuildAllCustomProperties()
@@ -169,6 +172,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         private protected virtual CanonicalTypeProvider BuildCanonicalView() => new CanonicalTypeProvider(this, _inputType);
         public TypeProvider CanonicalView => _canonicalView.Value;
+        internal bool IsCanonicalViewMaterialized => _canonicalView.IsValueCreated;
+        internal TypeProvider? CachedCanonicalView => _canonicalView.IsValueCreated ? _canonicalView.Value : null;
 
         protected string? _deprecated;
 
@@ -195,6 +200,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         public FormattableString Description => _description ??= BuildDescription();
         private FormattableString? _description;
+        internal FormattableString? CachedDescription => _description;
 
         protected virtual FormattableString BuildDescription() => FormattableStringHelpers.Empty;
 
@@ -329,6 +335,50 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 BuildDisabledFileWarnings(),
                 ExperimentalApiHelpers.GetTypeSuppressions(_inputType ?? SerializationProviderOwner?._inputType));
 
+        // Called only after the finalization phase audits the exact builder and
+        // its input dispatch. Do not call the native warning getter: its merge
+        // formats expression keys through CodeWriter even for literal strings.
+        internal bool TryFinalizePocFileWarnings(PocWorkBudget budget,
+            out IReadOnlyList<SuppressionStatement> warnings, out PreparedSuppressionEnvelope? envelope)
+        {
+            warnings = _disabledFileWarnings ?? Array.Empty<SuppressionStatement>();
+            envelope = null;
+            if (_disabledFileWarnings is not null)
+            {
+                envelope = PreparedSuppressionEnvelope.TryCaptureForPoc(warnings, budget);
+                return envelope is not null;
+            }
+            var input = _inputType ?? SerializationProviderOwner?._inputType;
+            // An inherited experimental/deprecated reference can create implicit
+            // suppressions. Do not walk it or execute its native merge early.
+            if (input?.Experimental is not null || input is InputModelType { BaseModel: not null }) { return false; }
+            if (!ContractCollections.TryCopyForPoc(BuildDisabledFileWarnings(), budget, out ImmutableArray<SuppressionStatement> built)) { return false; }
+            var distinct = new List<SuppressionStatement>();
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var suppression in built)
+            {
+                if (suppression is null || suppression.GetType() != typeof(SuppressionStatement)) { return false; }
+                ValueExpression code = suppression.Code;
+                if (code is ScopedApi wrapper)
+                {
+                    if (wrapper.GetType() != typeof(ScopedApi<string>) || !PreparedCallProofs.IsTransparentWrapper(wrapper) ||
+                        wrapper.Original is not LiteralExpression || !budget.TrySpend()) { return false; }
+                    code = wrapper.Original;
+                }
+                if (code is not LiteralExpression { Literal: string text } || !budget.TrySpend(text.Length)) { return false; }
+                // C# string-literal spelling is injective: ordinal raw-string
+                // equality preserves the native display-key dedup/first identity
+                // for this exact family without executing a formatter or writer.
+                if (keys.Add(text)) { distinct.Add(suppression); }
+            }
+            var canonical = distinct.ToArray();
+            envelope = PreparedSuppressionEnvelope.TryCaptureForPoc(canonical, budget);
+            if (envelope is null) { return false; }
+            _disabledFileWarnings = canonical;
+            warnings = canonical;
+            return true;
+        }
+
         private protected virtual bool FilterCustomizedMembers => true;
 
         public CSharpType? BaseType => _baseType ??= BuildBaseType() ?? CustomCodeView?.BaseType;
@@ -339,6 +389,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         protected virtual WhereExpression? BuildWhereClause() => null;
 
         public TypeProvider? DeclaringTypeProvider => _declaringTypeProvider ??= BuildDeclaringTypeProvider();
+        internal TypeProvider? CachedDeclaringTypeProvider => _declaringTypeProvider;
         private TypeProvider? _declaringTypeProvider;
         protected virtual TypeProvider? BuildDeclaringTypeProvider() => null;
 
@@ -393,6 +444,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
         internal XmlDocProvider? CachedXmlDocs => _xmlDocs;
         internal IReadOnlyList<SuppressionStatement>? CachedDisabledFileWarnings => _disabledFileWarnings;
         internal bool HasFileWarningInput => _inputType is not null || SerializationProviderOwner?._inputType is not null;
+        internal InputType? HeaderInputType => _inputType;
+        internal bool HasNonExperimentalHeaderInputs => _inputType?.Experimental is null && SerializationProviderOwner?._inputType?.Experimental is null;
         internal IReadOnlyList<CSharpType>? CachedImplements => _implements;
         internal string? PinnedRelativeFilePath => _relativeFilePath;
         internal bool IsCustomCodeViewMaterialized => _customCodeView.IsValueCreated;
@@ -513,14 +566,77 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         // Snapshot before visitor updates, used to distinguish generated attributes from visitor changes.
         private HashSet<MethodBodyStatement>? _originalAttributes;
+        // Nonforcing, typed access for the bounded rebuild recipe. This exposes
+        // no private collection layout and never invokes equality or hashing.
+        internal HashSet<MethodBodyStatement>? CachedOriginalAttributes => _originalAttributes;
         private AttributeStatement? _generatedDeprecationAttribute;
+        private IReadOnlyList<MethodBodyStatement>? _pocNativeRebuiltAttributes;
+        private IReadOnlyList<MethodBodyStatement>? _pocNativeOwnedAttributeProjection;
+        // Only the locally constructed collection expression below may use this
+        // readback. Its public interface has an owned compiler-created backing
+        // carrier, not an arbitrary user-provided IReadOnlyList implementation.
+        internal bool TryCopyCurrentPocAttributeProjection(IReadOnlyList<MethodBodyStatement> carrier, PocWorkBudget budget,
+            out ImmutableArray<MethodBodyStatement> items)
+        {
+            items = [];
+            if (!HasCurrentPocNativeAttributeCache || !ReferenceEquals(carrier, _pocNativeOwnedAttributeProjection) || !budget.TrySpend()) { return false; }
+            var count = carrier.Count;
+            if (!budget.TrySpend(count)) { return false; }
+            var builder = ImmutableArray.CreateBuilder<MethodBodyStatement>(count);
+            for (var i = 0; i < count; i++) { builder.Add(carrier[i]); }
+            if (carrier.Count != count) { return false; }
+            items = builder.MoveToImmutable();
+            return true;
+        }
+        private WeakReference<CodeModelGenerator>? _pocNativeAttributeGenerator;
+        internal object? PocNativeAttributeCacheOrigin => _pocNativeAttributeGenerator;
+        private object? _pocPostMapAttributeOperation;
+        private object? _pocPostMapNativeOrigin;
+        internal object? PocPostMapAttributeOperation =>
+            IsPocNativeAttributeOriginCurrent(_pocPostMapNativeOrigin) ? _pocPostMapAttributeOperation : null;
+        internal bool TryMarkPocPostMapAttributes(object operation, object? previousNativeOrigin)
+        {
+            if (!HasCurrentPocNativeAttributeCache || _pocNativeAttributeGenerator is null ||
+                ReferenceEquals(previousNativeOrigin, _pocNativeAttributeGenerator)) { return false; }
+            _pocPostMapAttributeOperation = operation;
+            _pocPostMapNativeOrigin = _pocNativeAttributeGenerator;
+            return true;
+        }
+        internal bool IsPocNativeAttributeOriginCurrent(object? origin) => origin is not null && ReferenceEquals(origin, _pocNativeAttributeGenerator) &&
+            _pocNativeAttributeGenerator is { } witness && witness.TryGetTarget(out var generator) && ReferenceEquals(generator, CodeModelGenerator.Instance);
+        internal bool HasCurrentPocNativeAttributeCache
+        {
+            get => ReferenceEquals(_attributes, _pocNativeRebuiltAttributes) && _pocNativeAttributeGenerator is { } witness &&
+                witness.TryGetTarget(out var generator) && ReferenceEquals(generator, CodeModelGenerator.Instance);
+        }
+        // Called only by an owned writer whose approved header phase pinned this
+        // built-in cache. Explicit cache clearing still follows native fallback.
+        internal IReadOnlyList<MethodBodyStatement> GetCanonicalAttributesForPocWrite() => _attributes ?? GetAttributesForWrite();
+
+        private void ClearPocNativeAttributeOrigin()
+        {
+            _pocNativeRebuiltAttributes = null;
+            _pocNativeOwnedAttributeProjection = null;
+            _pocNativeAttributeGenerator = null;
+            _pocPostMapAttributeOperation = null;
+            _pocPostMapNativeOrigin = null;
+        }
+
+        private IReadOnlyList<MethodBodyStatement> GetOrBuildCachedAttributes()
+        {
+            if (_attributes is not null) { return _attributes; }
+            // A cold public/reference-map getter is not the final-state native
+            // rebuild. Never let its new cache inherit an older rebuild token.
+            ClearPocNativeAttributeOrigin();
+            return _attributes = BuildAttributes();
+        }
 
         public IReadOnlyList<AttributeStatement> Attributes
         {
             get
             {
-                _attributes ??= BuildAttributes();
-                return [.. _attributes
+                _ = GetOrBuildCachedAttributes();
+                return [.. _attributes!
                     .Select(a => a switch
                     {
                         SuppressionStatement suppression => suppression.AsStatement<AttributeStatement>() ??
@@ -539,32 +655,61 @@ namespace Microsoft.TypeSpec.Generator.Providers
         /// </summary>
         protected internal virtual bool ShouldAnalyzeAttributesInReferenceMap => true;
 
-        internal IReadOnlyList<MethodBodyStatement> GetAttributesForWrite()
+        internal IReadOnlyList<MethodBodyStatement> GetAttributesForWrite() => GetAttributesForWriteCore(recordConstructionWitness: true);
+
+        // Only the audited post-map canonical operation may omit this sidecar.
+        // Its consumer reads the exact current owner-bound projection instead.
+        internal IReadOnlyList<MethodBodyStatement> GetAttributesForPocCanonicalization() =>
+            GetAttributesForWriteCore(recordConstructionWitness: false);
+
+        private IReadOnlyList<MethodBodyStatement> GetAttributesForWriteCore(bool recordConstructionWitness)
         {
             if (ShouldAnalyzeAttributesInReferenceMap)
             {
-                return _attributes ??= BuildAttributes();
+                return GetOrBuildCachedAttributes();
             }
 
-            return RebuildAttributes();
+            return RebuildAttributes(recordConstructionWitness);
         }
 
         // Rebuilds the generated attributes (including any back-compatibility additions) from the finalized
         // generation state and re-attaches the attributes a visitor contributed on top of the previously
         // generated set. Providers whose attributes depend on final generation decisions may have cached a
         // value during reference-map analysis, so the generated portion is always recomputed here.
-        private IReadOnlyList<MethodBodyStatement> RebuildAttributes()
+        private IReadOnlyList<MethodBodyStatement> RebuildAttributes() => RebuildAttributes(recordConstructionWitness: true);
+
+        private IReadOnlyList<MethodBodyStatement> RebuildAttributes(bool recordConstructionWitness)
         {
             var visitorAdditions = _attributes is null || _originalAttributes is null
                 ? []
                 : _attributes.Where(a => !_originalAttributes.Contains(a)).ToList();
 
-            var result = BuildAttributesForBackCompatibility([.. BuildAttributes(), .. visitorAdditions]);
+            var generated = BuildAttributes();
+            IReadOnlyList<MethodBodyStatement> combined = [.. generated, .. visitorAdditions];
+            if (recordConstructionWitness && CodeModelGenerator.ObserveConstructedArguments)
+            {
+                var budget = new PocWorkBudget(4096);
+                if (ContractCollections.TryCopyForPoc(generated, budget, out var generatedItems) &&
+                    ContractCollections.TryCopyForPoc(visitorAdditions, budget, out var addedItems))
+                { ConstructedCollectionWitness.RecordOwned(combined, (MethodBodyStatement[])[.. generatedItems, .. addedItems]); }
+            }
+            var result = BuildAttributesForBackCompatibility(combined);
 
             // Exclude the visitor additions from the snapshot so they stay identifiable when the generated set is rebuilt.
             var visitorSet = new HashSet<MethodBodyStatement>(visitorAdditions);
             _originalAttributes = [.. result.Where(a => !visitorSet.Contains(a))];
-            return _attributes = result;
+            _attributes = result;
+            if (CodeModelGenerator.ObserveConstructedArguments)
+            {
+                _pocNativeRebuiltAttributes = result;
+                _pocNativeOwnedAttributeProjection = ReferenceEquals(result, combined) ? combined : null;
+                _pocNativeAttributeGenerator = new(CodeModelGenerator.Instance);
+            }
+            else
+            {
+                ClearPocNativeAttributeOrigin();
+            }
+            return result;
         }
 
         /// <summary>

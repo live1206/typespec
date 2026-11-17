@@ -1,0 +1,387 @@
+diff --git a/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Primitives/Task04OrdinaryObservation.cs b/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Primitives/Task04OrdinaryObservation.cs
+new file mode 100644
+--- /dev/null
++++ b/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Primitives/Task04OrdinaryObservation.cs
+@@ -0,0 +1,102 @@
++// Copyright (c) Microsoft Corporation. All rights reserved.
++// Licensed under the MIT License.
++
++using System;
++using System.Collections.Immutable;
++using Microsoft.TypeSpec.Generator.Expressions;
++using Microsoft.TypeSpec.Generator.Providers;
++
++namespace Microsoft.TypeSpec.Generator.Primitives
++{
++    // ISOLATED EXPERIMENT ONLY. A prewriter proposal/native-use bridge, NOT a
++    // semantic choice, permission, confinement proof, or complete cost ledger.
++    // Default Write never selects this entry point. Known capture/frame primitive
++    // reservations use the EXISTING generation account. New wrapper observations,
++    // allocations, activations and candidate-producing cold compiler work remain
++    // explicit unclosed proof obligations; no guessed flat tariff certifies them.
++    internal sealed class Task04OrdinaryObservation
++    {
++        private readonly PreparedFieldTypes _preparation;
++        private readonly PocWorkBudget _account;
++        private readonly int _retainedCharacters;
++        private bool _attached;
++        private bool _completed;
++
++        internal Task04OrdinaryObservation(PreparedFieldTypes preparation,
++            PreparedFieldTypes.PreparedPocOrdinaryCandidate candidate, PocWorkBudget account)
++        {
++            _preparation = preparation;
++            Candidate = candidate;
++            _account = account;
++            _retainedCharacters = 2 * candidate.QualifiedSpelling.Length + candidate.SimpleSpelling.Length;
++        }
++
++        internal PreparedFieldTypes.PreparedPocOrdinaryCandidate Candidate { get; }
++        internal PocNativeTypeCaptureUse? NativeUse { get; private set; }
++        internal CodeFile? NativeFile { get; private set; }
++        internal bool CandidateCurrentAtReturn { get; private set; }
++        internal bool HasUncoveredEmission { get; private set; }
++        internal bool MechanicalFrameCreated { get; private set; }
++        internal bool MechanicalSelectionRetainedNative { get; private set; }
++        internal string Outcome { get; private set; } = "prepared-observation-only";
++
++        internal void Attach(CodeWriter writer, TypeProviderWriter physicalWriter)
++        {
++            if (_attached || _completed || !physicalWriter.OwnsPreparation(_preparation, Candidate.File.FileOwner) ||
++                !_preparation.ObserveTask04OrdinaryCandidate(Candidate) ||
++                Candidate.Occurrence.Producer is not DeclarationExpression declaration)
++            {
++                Outcome = "attachment-refused";
++                return;
++            }
++            _attached = writer.TryEnableNativeTypeCapture(declaration, Candidate.Type, Candidate.Occurrence.Id,
++                _account, _retainedCharacters);
++            Outcome = _attached ? "native-capture-attached" : "capture-reservation-or-state-refused";
++        }
++
++        // Invoked only after ToString, original RelativeFilePath evaluation and
++        // CompleteSourceFile. The original native CodeFile is already independent.
++        internal CodeFile Complete(CodeFile native, PocNativeTypeCaptureUse? use)
++        {
++            if (_completed) { return native; }
++            _completed = true;
++            NativeFile = native;
++            NativeUse = use;
++            if (!_attached || use is null || !ReferenceEquals(use.Occurrence, Candidate.Occurrence.Id) ||
++                !ReferenceEquals(use.Declaration, Candidate.Occurrence.Producer) || !ReferenceEquals(use.Type, Candidate.Type))
++            {
++                Outcome = "native-use-unavailable-or-unowned";
++                return native;
++            }
++            CandidateCurrentAtReturn = _preparation.ObserveTask04OrdinaryCandidate(Candidate);
++            HasUncoveredEmission = _preparation.PocGenerationEnvelope?.HasUncoveredEmission != false;
++            var alternative = new PocFrameAlternative(this, 0, 0, use.PrimaryStart, use.PrimaryLength,
++                use.QualifiedStart, use.QualifiedLength, Candidate.SimpleSpelling, Completed: true);
++            if (!PocNativeFrame.TryCreate(native, this, ImmutableArray.Create(alternative), ImmutableArray.Create(true), _account, out var frame))
++            {
++                Outcome = "mechanical-frame-reservation-refused";
++                return native;
++            }
++            using (frame)
++            {
++                MechanicalFrameCreated = true;
++                // No semantic authority factory exists in the accepted inputs.
++                // Exercise only the DISABLED vector: this is not a forced coverage
++                // flag, a positive control, or an enabled fallback reconstruction.
++                if (!frame!.TryRetainBase(native, field: true, body: true, _account, out var basis) ||
++                    !frame.TryCreateSelection(ImmutableArray.Create(false), _account, out var selection) ||
++                    !frame.TryReserve(_account, out var reservation))
++                {
++                    Outcome = "mechanical-attempt-reservation-refused";
++                    return native;
++                }
++                var result = frame.RenderMechanicalSelection(basis!, selection!, PocFramePhase.Final, reservation);
++                MechanicalSelectionRetainedNative = ReferenceEquals(result, native);
++                Outcome = "captured-target-and-native-use-but-emission-authority-unavailable";
++                // This observer may never promote its proposal or enabled vector.
++                // Return the independently formatted native object in all cases.
++                return native;
++            }
++        }
++    }
++}
+diff --git a/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Providers/PreparedFieldTypes.Task04OrdinaryObservation.cs b/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Providers/PreparedFieldTypes.Task04OrdinaryObservation.cs
+new file mode 100644
+--- /dev/null
++++ b/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Providers/PreparedFieldTypes.Task04OrdinaryObservation.cs
+@@ -0,0 +1,42 @@
++// Copyright (c) Microsoft Corporation. All rights reserved.
++// Licensed under the MIT License.
++
++using Microsoft.TypeSpec.Generator.Primitives;
++
++namespace Microsoft.TypeSpec.Generator.Providers
++{
++    internal sealed partial class PreparedFieldTypes
++    {
++        // Experimental proposal only. This is intentionally NOT an implementation
++        // of IPreparedTypeOfNameInspection or a Task03/Task04 permission factory.
++        internal Task04OrdinaryObservation? PrepareTask04OrdinaryObservation(
++            PreparedPocOrdinaryCandidate candidate)
++        {
++            if (_pocCandidateSourceBudget is not { } account || candidate.File.HasStarted ||
++                candidate.QualifiedSpelling.Length > (int.MaxValue - candidate.SimpleSpelling.Length) / 2 ||
++                !ObserveTask04OrdinaryCandidate(candidate))
++            {
++                return null;
++            }
++            return new Task04OrdinaryObservation(this, candidate, account);
++        }
++
++        // Unlike the diagnostic convenience getter, all three extra observation
++        // passes use the SAME finite generation account. No independent budget
++        // constructor/reset, compiler binding query or host proof callback here.
++        // This removes R0's fresh subledgers, not the remaining wrapper/source-cost
++        // certificate and existing cold compiler work obligations.
++        internal bool ObserveTask04OrdinaryCandidate(PreparedPocOrdinaryCandidate candidate)
++        {
++            var budget = _pocCandidateSourceBudget;
++            if (budget is null || _pocCandidateSourceCaptureIncomplete ||
++                !SourceCurrentnessChecks.OccurrenceLookup(candidate.Occurrence.Id, _pocCandidates.Count, budget) ||
++                !_pocCandidates.TryGetValue(candidate.Occurrence.Id, out var captured) || !ReferenceEquals(captured, candidate) ||
++                !budget.TrySpendReferenceLookup(_pocOwnedCandidates.Count))
++            {
++                return false;
++            }
++            return PocObservedInputsAreCurrent(budget) && IsPocCandidateObservedCurrent(candidate, budget, budget);
++        }
++    }
++}
+diff --git a/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Primitives/TypeProviderWriter.cs b/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Primitives/TypeProviderWriter.cs
+--- a/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Primitives/TypeProviderWriter.cs
++++ b/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator/src/Primitives/TypeProviderWriter.cs
+@@ -79,6 +79,51 @@
+                 }
+             }
+             return WriteCore(prepare);
++        }
++
++        // Isolated experiment: explicit entry only. Ordinary Write/WriteCore are
++        // byte-for-byte unchanged, and no new inactive writer field is introduced.
++        // The existing WriteType/native declaration formatter executes ONCE. This
++        // duplicates entry plumbing as experimental source, never writer execution.
++        internal CodeFile WriteWithTask04OrdinaryObservation(Task04OrdinaryObservation observation)
++        {
++            ArgumentNullException.ThrowIfNull(observation);
++            if (GetType() != typeof(TypeProviderWriter))
++            {
++                throw new InvalidOperationException("Task04 observation requires an unused standard writer.");
++            }
++            lock (_headerSessionSync)
++            {
++                if (Interlocked.CompareExchange(ref _writeMode, 2, 0) != 0)
++                {
++                    throw new InvalidOperationException("Task04 observation requires an unused standard writer.");
++                }
++            }
++            using var writer = new CodeWriter();
++            observation.Attach(writer, this);
++            if (PreparedFieldTypes is not null && GetType() == typeof(TypeProviderWriter))
++            {
++                writer.EnableQualifiedFallback(PreparedFieldTypes, _provider);
++                writer.AttachSourceFile(PreparedFieldTypes, _provider, this);
++            }
++            using var pocHeaderScope = PreparedFieldTypes is { } activePreparation && OwnsPreparation(activePreparation, _provider)
++                ? activePreparation.EnterPocHeaderWriter(_provider) : null;
++            PreparedFieldTypes?.ObserveSnapshot();
++            using var containment = writer.SuppressWarnings(GetExperimentalContextSuppressions(), emitDirectives: false);
++            var disabledFileWarnings = _provider.DisabledFileWarnings;
++            if (PreparedFieldTypes is { } preparation && OwnsPreparation(preparation, _provider))
++            { preparation.ObservePocFileWarnings(_provider, disabledFileWarnings); }
++            using (writer.SuppressWarnings(disabledFileWarnings))
++            {
++                using (var ns = writer.SetNamespace(_provider.Type.Namespace))
++                {
++                    PreparedFieldTypes?.ObserveSnapshot();
++                    WriteType(writer);
++                }
++            }
++            var content = writer.ToString();
++            var native = new CodeFile(content, _provider.RelativeFilePath, writer.QualifiedContent, writer.CompleteSourceFile(), writer.NameAlternativesSnapshot);
++            return observation.Complete(native, writer.NativeTypeUse);
+         }
+ 
+         private CodeFile WriteCore(Action<TypeProvider, bool, XmlDocProvider?>? prepare)
+diff --git a/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator.ClientModel/test/Providers/PreparedLocalTypeClientTests.cs b/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator.ClientModel/test/Providers/PreparedLocalTypeClientTests.cs
+--- a/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator.ClientModel/test/Providers/PreparedLocalTypeClientTests.cs
++++ b/packages/http-client-csharp/generator/Microsoft.TypeSpec.Generator.ClientModel/test/Providers/PreparedLocalTypeClientTests.cs
+@@ -21,6 +21,174 @@
+     [NonParallelizable]
+     internal class PreparedLocalTypeClientTests
+     {
++        [Test]
++        public void RealFooTask04ObservationRefusesUnfundedMechanicalAttempt()
++        {
++            WithRealFoo((owner, prepared) =>
++            {
++                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
++                var occurrence = source.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
++                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
++                var candidate = prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence)!;
++                var observation = prepared.PrepareTask04OrdinaryObservation(candidate)!;
++                Assert.That(observation, Is.Not.Null);
++                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(observation);
++                var account = (PocWorkBudget)typeof(Task04OrdinaryObservation).GetField("_account", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(observation)!;
++                var required = PocFrameWorkReservations.AttemptCost(output.NativeLegacyAlternatives.Length, 1, 1,
++                    Math.Max(output.Content.Length, output.QualifiedContent?.Length ?? 0));
++                Assert.That(account.Remaining, Is.LessThan(required), "This literal prototype cannot fund the accepted whole-file attempt.");
++                Assert.That(account.Exhausted, Is.False, "A denied reservation does not run or reset an account.");
++                Assert.That(observation.Outcome, Is.EqualTo("mechanical-attempt-reservation-refused"));
++                Assert.That(observation.NativeUse, Is.Not.Null);
++                Assert.That(observation.NativeFile, Is.SameAs(output));
++                Assert.That(output.Content.Substring(observation.NativeUse!.PrimaryStart, observation.NativeUse.PrimaryLength), Is.EqualTo(candidate.QualifiedSpelling));
++                TestContext.Out.WriteLine($"Task04BudgetRefusal remaining={account.Remaining}; required={required}; noRaisedCap=true; nativeObjectRetained=true");
++            }, precomputePoc: true);
++        }
++
++        [Test]
++        public void RealFooTask04ObservationIsByteIdenticalToIndependentNativeFixture()
++        {
++            CodeFile? expected = null;
++            WithRealFoo((owner, prepared) =>
++            {
++                // Independent baseline generation: its native writer runs once.
++                expected = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
++            }, precomputePoc: true);
++            WithRealFoo((owner, prepared) =>
++            {
++                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
++                var occurrence = source.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
++                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
++                var candidate = prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence)!;
++                var observation = prepared.PrepareTask04OrdinaryObservation(candidate)!;
++                Assert.That(observation, Is.Not.Null);
++                // Independent candidate generation: no writer is replayed.
++                var actual = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(observation);
++                Assert.That(actual.Content, Is.EqualTo(expected!.Content));
++                Assert.That(actual.QualifiedContent, Is.EqualTo(expected.QualifiedContent));
++                Assert.That(actual.Name, Is.EqualTo(expected.Name));
++                Assert.That(observation.NativeFile, Is.SameAs(actual));
++                Assert.That(observation.NativeUse, Is.Not.Null);
++            }, precomputePoc: true);
++        }
++
++        [Test]
++        public void RealFooTask04PrewriterTargetReachesOneNativeUseWithoutGrantingAuthority()
++        {
++            WithRealFoo((owner, prepared) =>
++            {
++                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
++                var occurrence = source.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
++                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
++                var candidate = prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence)!;
++                Assert.That(candidate, Is.Not.Null);
++                var target = candidate.MetadataTarget;
++                var observation = prepared.PrepareTask04OrdinaryObservation(candidate);
++                Assert.That(observation, Is.Not.Null);
++                Assert.That(prepared.SourceFiles.All(file => !file.HasStarted), Is.True);
++                Assert.That(observation!.Candidate.MetadataTarget, Is.SameAs(target), "The actual first retained target is transferred, not looked up again.");
++                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(observation);
++                Assert.That(observation.NativeUse, Is.Not.Null);
++                Assert.That(observation.NativeUse!.Declaration, Is.SameAs(occurrence.Producer));
++                Assert.That(observation.NativeUse.Type, Is.SameAs(candidate.Type));
++                Assert.That(observation.NativeUse.Occurrence, Is.SameAs(occurrence.Id));
++                Assert.That(observation.NativeFile, Is.SameAs(output), "No fallback reconstruction or replacement CodeFile escapes.");
++                Assert.That(output.Content.Substring(observation.NativeUse.PrimaryStart, observation.NativeUse.PrimaryLength), Is.EqualTo(candidate.QualifiedSpelling));
++                Assert.That(observation.MechanicalFrameCreated, Is.True);
++                var account = (PocWorkBudget)typeof(Task04OrdinaryObservation).GetField("_account", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(observation)!;
++                TestContext.Out.WriteLine($"Task04Reservation outcome={observation.Outcome}; remaining={account.Remaining}; exhausted={account.Exhausted}; chars={output.Content.Length}; qualifiedChars={output.QualifiedContent?.Length}; legacy={output.NativeLegacyAlternatives.Length}; attempt={PocFrameWorkReservations.AttemptCost(output.NativeLegacyAlternatives.Length, 1, 1, Math.Max(output.Content.Length, output.QualifiedContent?.Length ?? 0))}");
++                Assert.That(observation.MechanicalSelectionRetainedNative, Is.True, observation.Outcome);
++                Assert.That(observation.HasUncoveredEmission, Is.True);
++                Assert.That(prepared.GetTask03TypeOfNamePermission(source, occurrence), Is.Null);
++                Assert.That(observation.Outcome, Is.EqualTo("captured-target-and-native-use-but-emission-authority-unavailable"));
++                TestContext.Out.WriteLine($"Task04Bridge candidateCurrentAtReturn={observation.CandidateCurrentAtReturn}; uncovered={observation.HasUncoveredEmission}; frame={observation.MechanicalFrameCreated}; outcome={observation.Outcome}");
++            }, precomputePoc: true);
++        }
++
++        [Test]
++        public void RealFooTask04ObservationCannotBorrowUnattachedPreparation()
++        {
++            WithRealFoo((owner, prepared) =>
++            {
++                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
++                var occurrence = source.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
++                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
++                var candidate = prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence)!;
++                var observation = prepared.PrepareTask04OrdinaryObservation(candidate)!;
++                Assert.That(observation, Is.Not.Null);
++                var output = new TypeProviderWriter(owner).WriteWithTask04OrdinaryObservation(observation);
++                Assert.That(observation.NativeUse, Is.Null);
++                Assert.That(observation.MechanicalFrameCreated, Is.False);
++                Assert.That(observation.NativeFile, Is.SameAs(output));
++                Assert.That(observation.Outcome, Is.EqualTo("native-use-unavailable-or-unowned"));
++                Assert.That(output.Content, Does.Contain(candidate.QualifiedSpelling));
++            }, precomputePoc: true);
++        }
++
++        // Isolated Task04 spike regression: an opaque callback can preserve its
++        // producer identity while emitting a nested type that changes lookup.
++        [Test]
++        public void RealFooTask04OpaqueTailChangesBareBindingWithoutChangingCandidate()
++        {
++            string? selectedName = null;
++            var writes = 0;
++            WithRealFoo((owner, prepared) =>
++            {
++                var source = prepared.SourceFiles.Single(file => ReferenceEquals(file.FileOwner, owner));
++                var occurrence = source.Roots.Single(root => root.Id.RootRole == "method" && root.Id.RootIndex == 0)
++                    .DescendantsAndSelf().Single(node => node.Producer is Microsoft.TypeSpec.Generator.Expressions.DeclarationExpression);
++                var candidate = prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence);
++                Assert.That(candidate, Is.Not.Null, "The real prewriter candidate survives the unchanged opaque producer.");
++                selectedName = candidate!.SimpleSpelling;
++                Assert.That(candidate.SourceObservation.IsCurrent, Is.True);
++                var observation = prepared.PrepareTask04OrdinaryObservation(candidate);
++                Assert.That(observation, Is.Not.Null);
++                var output = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.WriteWithTask04OrdinaryObservation(observation!);
++                Assert.That(observation!.NativeUse, Is.Not.Null);
++                Assert.That(observation.NativeFile, Is.SameAs(output));
++                TestContext.Out.WriteLine($"Task04OpaqueReservation outcome={observation.Outcome}; chars={output.Content.Length}; candidateCurrent={observation.CandidateCurrentAtReturn}; uncovered={observation.HasUncoveredEmission}");
++                Assert.That(observation.CandidateCurrentAtReturn, Is.True, "Current proposal is still not confinement authority.");
++                Assert.That(writes, Is.EqualTo(1), "No writer replay is needed to expose this lookup effect.");
++                var tree = CSharpSyntaxTree.ParseText(output.Content);
++                Assert.That(tree.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), Is.Empty);
++                var root = tree.GetRoot();
++                static LocalDeclarationStatementSyntax Local(SyntaxNode syntax) => syntax.DescendantNodes().OfType<MethodDeclarationSyntax>()
++                    .Single(method => method.Identifier.ValueText == "Three" && method.ParameterList.Parameters.Single().Identifier.ValueText == "options")
++                    .Body!.Statements.OfType<LocalDeclarationStatementSyntax>().Single();
++                var nativeType = Local(root).Declaration.Type;
++                Assert.That(nativeType.ToString(), Is.EqualTo(candidate.QualifiedSpelling));
++                Assert.That(root.DescendantNodes().OfType<ClassDeclarationSyntax>()
++                    .Any(type => type.Identifier.ValueText == selectedName && type.Parent is ClassDeclarationSyntax parent && parent.Identifier.ValueText == "Foo"), Is.True);
++                // Compiler use is TEST-ONLY counterfactual validation. Neither
++                // compilation nor syntax replacement is production authority.
++                var baseline = CodeModelGenerator.Instance.SourceInputModel.PreEmissionSourceInputs!.Compilation;
++                var nativeCompilation = baseline.AddSyntaxTrees(tree);
++                var nativeSymbol = nativeCompilation.GetSemanticModel(tree).GetTypeInfo(nativeType).Type!;
++                Assert.That(nativeSymbol.ToDisplayString(), Is.EqualTo("System.ClientModel.Primitives.PipelineMessage"));
++                var bareRoot = root.ReplaceNode(nativeType, SyntaxFactory.IdentifierName(selectedName));
++                var bareTree = CSharpSyntaxTree.Create((CSharpSyntaxNode)bareRoot);
++                var bareCompilation = baseline.AddSyntaxTrees(bareTree);
++                var bareSymbol = bareCompilation.GetSemanticModel(bareTree).GetTypeInfo(Local(bareTree.GetRoot()).Declaration.Type).Type!;
++                Assert.That(bareSymbol.Name, Is.EqualTo(selectedName));
++                Assert.That(bareSymbol.ContainingType?.Name, Is.EqualTo("Foo"), "Blind bare selection binds the injected nested type, not MetadataTarget.");
++                TestContext.Out.WriteLine($"OpaqueTail writes={writes}; sourceReceipt={output.SourceConsumption?.WasCurrentAtEndOfWrite}; candidateCurrentAfter={prepared.GetPrecomputedPocOrdinaryCandidate(source, occurrence) is not null}; native={nativeSymbol}; bare={bareSymbol}");
++                Assert.That(observation.MechanicalSelectionRetainedNative, Is.True, observation.Outcome);
++            }, precomputePoc: true, beforePreparation: owner =>
++            {
++                var probe = new PocNativeWriterAttachmentProbe(writer =>
++                {
++                    writes++;
++                    writer.WriteRawLine("}");
++                    writer.WriteRawLine("private class " + selectedName + " {}");
++                    writer.WriteRawLine("private void PocBalance() {");
++                });
++                var signature = new MethodSignature("PocOpaqueTail", null, MethodSignatureModifiers.Private, null, null, []);
++                var body = new Microsoft.TypeSpec.Generator.Statements.MethodBodyStatements([probe]);
++                owner.Update(methods: owner.CachedMethods!.Concat(new[] { new MethodProvider(signature, body, owner) }).ToArray());
++            });
++        }
++
+         [Test]
+         public void RealFooUsingDeclarationWritesPreparedPipelineMessageType()
+         {

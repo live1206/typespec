@@ -21,6 +21,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         internal string FilePath { get; }
         internal ImmutableArray<PreparedSourceOccurrence> Roots => _roots;
         internal bool IsInvalid => System.Threading.Volatile.Read(ref _invalid) != 0;
+        internal bool HasStarted => _started;
         internal PreparedSourceObservations? Observations { get; private set; }
         private readonly Compilation _compilation;
         private readonly bool _disableXmlDocs;
@@ -114,26 +115,60 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             Observations = new PreparedSourceObservations(Roots, () => IsCurrent() && _callEnvironmentCurrent?.Invoke() == true);
         }
 
-        internal bool IsCurrent()
+        internal bool IsCurrent() => IsCurrentCore(invalidate: true);
+        internal bool IsCurrentWithoutInvalidating(PocWorkBudget? budget = null) => IsCurrentCore(invalidate: false, budget);
+
+        private bool IsCurrentCore(bool invalidate, PocWorkBudget? budget = null)
         {
-            if (IsInvalid) { return false; }
-            if (_owners.All(o => o.IsCurrent()) && _roots.All(r => r.IsCurrent())) { return true; }
-            Invalidate();
+            if (IsInvalid || !SourceCurrentnessChecks.Spend(budget) || !SourceCurrentnessChecks.Spend(budget, _owners.Count) ||
+                !SourceCurrentnessChecks.Spend(budget, _roots.Length)) { return false; }
+            var current = true;
+            foreach (var owner in _owners)
+            {
+                if (!(budget is null ? owner.IsCurrent() : owner.IsCurrentForPocSharedAvailability(budget))) { current = false; break; }
+            }
+            if (current)
+            {
+                PocTypeTextMemo? textMemo = null;
+                if (budget is not null)
+                {
+                    if (!budget.TrySpend()) { return false; }
+                    textMemo = new PocTypeTextMemo();
+                }
+                foreach (var root in _roots)
+                {
+                    if (!(invalidate ? root.IsCurrent() : root.IsCurrentWithoutInvalidatingWithTextMemo(budget, textMemo))) { current = false; break; }
+                }
+            }
+            if (current) { return true; }
+            if (invalidate) { Invalidate(); }
             return false;
+        }
+
+        // Additional POC-only veto checks must not mark the shared source
+        // graph stale at boundaries where the existing writer did not check it.
+        internal bool IsShapeCurrentWithoutInvalidating(PocWorkBudget? budget = null)
+        {
+            budget ??= new PocWorkBudget(65536);
+            if (IsInvalid || !budget.TrySpend(_owners.Count) || !budget.TrySpend(_roots.Length)) { return false; }
+            foreach (var owner in _owners) { if (!owner.IsCurrentForPoc(budget)) { return false; } }
+            foreach (var root in _roots) { if (!root.IsShapeCurrentWithoutInvalidating(budget)) { return false; } }
+            return true;
         }
 
         internal void Invalidate() => System.Threading.Interlocked.Exchange(ref _invalid, 1);
 
-        internal Cursor Start()
+        internal Cursor Start(PreparedPocOwnedRootEffect? effect = null, TypeProviderWriter? writer = null)
         {
             if (_started) { Invalidate(); }
             _started = true;
-            return new Cursor(this);
+            return new Cursor(this, effect, writer);
         }
 
         internal sealed class Cursor
         {
             private readonly PreparedSourceFile _file;
+            private readonly PreparedPocOwnedRootEffect? _ownedEffect;
             private readonly List<SourceOccurrenceId> _consumed = [];
             private readonly HashSet<PreparedSourceOccurrence> _rootsSeen = new(ReferenceEqualityComparer.Instance);
             private ImmutableArray<PreparedSourceOccurrence> _expected = [];
@@ -145,14 +180,23 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             internal PreparedSourceOccurrence? Current => _file.IsInvalid ? null : _current;
             internal ImmutableArray<SourceOccurrenceId> Consumed => _consumed.ToImmutableArray();
             internal bool IsCurrent => _file.IsCurrent();
-            internal Cursor(PreparedSourceFile file) { _file = file; }
+            internal Cursor(PreparedSourceFile file, PreparedPocOwnedRootEffect? effect, TypeProviderWriter? writer)
+            {
+                _file = file; _ownedEffect = effect;
+                effect?.Attach(file, this, writer);
+            }
+
+            internal void ObserveRootProducer(object producer) => _ownedEffect?.ObserveProducer(producer);
+            internal void BeginDeclaration(MethodSignatureBase? signature) => _ownedEffect?.BeginDeclaration(signature);
+            internal void CompleteDeclaration(MethodSignatureBase? signature) => _ownedEffect?.CompleteDeclaration(signature);
 
             internal IDisposable BeginRoot(TypeProvider owner, string role, int index)
             {
                 if (_inRoot || !_file.IsCurrent() || !_file._byOwner.TryGetValue(owner, out var roots) ||
                     !roots.TryGetValue((role, index), out var root) || _nextRoot >= _file._roots.Length ||
                     !ReferenceEquals(root, _file._roots[_nextRoot]) || !_rootsSeen.Add(root))
-                { _file.Invalidate(); return EmptyScope.Instance; }
+                { _ownedEffect?.Reject("native-root-mismatch-or-stale"); _file.Invalidate(); return EmptyScope.Instance; }
+                _ownedEffect?.BeginRoot(this, root);
                 _nextRoot++;
                 _inRoot = true;
                 _next = 0;
@@ -165,6 +209,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 {
                     if (opaqueRoot) { _opaqueDepth--; }
                     if (_next != _expected.Length || !_file.IsCurrent()) { _file.Invalidate(); }
+                    _ownedEffect?.EndRoot(root);
                     _current = null;
                     _inRoot = false;
                 });
@@ -182,11 +227,24 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
             internal IDisposable Enter(object producer)
             {
+                var shared = EnterCore(producer);
+                var native = _ownedEffect?.EnterNative(producer);
+                if (native is null) { return shared; }
+                return new Scope(() =>
+                {
+                    try { shared.Dispose(); }
+                    finally { native.Dispose(); }
+                });
+            }
+
+            private IDisposable EnterCore(object producer)
+            {
                 if (_opaqueDepth > 0) { return EmptyScope.Instance; }
                 if (!_inRoot) { return EmptyScope.Instance; } // non-executable writer scaffolding is not a source root
                 if (!_file.IsCurrent() || _next >= _expected.Length || !ReferenceEquals(_expected[_next].Producer, producer))
-                { _file.Invalidate(); return EmptyScope.Instance; }
+                { _ownedEffect?.Reject("native-child-mismatch-or-stale"); _file.Invalidate(); return EmptyScope.Instance; }
                 var occurrence = _expected[_next++];
+                _ownedEffect?.Enter(occurrence);
                 var previous = _current;
                 _current = occurrence;
                 _consumed.Add(occurrence.Id);
@@ -196,6 +254,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 {
                     if (occurrence.IsOpaque) { _opaqueDepth--; }
                     if (_next != end || !_file.IsCurrent()) { _file.Invalidate(); }
+                    _ownedEffect?.Exit(occurrence);
                     _current = previous;
                 });
             }
@@ -204,6 +263,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             {
                 if (_inRoot || !_file.IsCurrent()) { _file.Invalidate(); }
                 if (_nextRoot != _file._roots.Length || _rootsSeen.Count != _file._roots.Length) { _file.Invalidate(); }
+                _ownedEffect?.Complete(this);
                 return !_file.IsInvalid;
             }
         }
@@ -261,6 +321,36 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 (!_hasNested || ContractCollections.SameReferences(_owner.CachedNestedTypes, _nested)) &&
                 (!_hasSerializations || ContractCollections.SameReferences(_owner.CachedSerializationProviders, _serializations)) &&
                 (!_hasAttributes || ContractCollections.SameReferences(_owner.CachedWriteAttributes, _attributes)) &&
+                ReferenceEquals(_where, _owner.CachedWhereClause) && _modifiers == _owner.CachedDeclarationModifiers && _path == _owner.CachedRelativeFilePath;
+
+            // Related-name scopes use the shared availability contract, not
+            // the stronger complete-file profile below. Fund its exact legacy
+            // recheck first; never mark the shared graph stale here.
+            internal bool IsCurrentForPocSharedAvailability(PocWorkBudget budget)
+            {
+                if (!budget.TrySpend() || _typeSnapshot is null || !_typeSnapshot.TryReserveSharedCurrentness(budget) ||
+                    (_hasFields && !ContractCollections.ReserveSharedReferencesForPoc(_owner.CachedFields, _fields.Length, budget)) ||
+                    (_hasProperties && !ContractCollections.ReserveSharedReferencesForPoc(_owner.CachedProperties, _properties.Length, budget)) ||
+                    (_hasMethods && !ContractCollections.ReserveSharedReferencesForPoc(_owner.CachedMethods, _methods.Length, budget)) ||
+                    (_hasConstructors && !ContractCollections.ReserveSharedReferencesForPoc(_owner.CachedConstructors, _constructors.Length, budget)) ||
+                    (_hasNested && !ContractCollections.ReserveSharedReferencesForPoc(_owner.CachedNestedTypes, _nested.Length, budget)) ||
+                    (_hasSerializations && !ContractCollections.ReserveSharedReferencesForPoc(_owner.CachedSerializationProviders, _serializations.Length, budget)) ||
+                    (_hasAttributes && !ContractCollections.ReserveSharedReferencesForPoc(_owner.CachedWriteAttributes, _attributes.Length, budget)) ||
+                    !budget.TrySpendStringComparison(_path, _owner.CachedRelativeFilePath)) { return false; }
+                return IsCurrent();
+            }
+
+            internal bool IsCurrentForPoc(PocWorkBudget budget) => budget.TrySpend() &&
+                _hasFields && _hasProperties && _hasMethods && _hasConstructors && _hasNested && _hasSerializations && _hasAttributes &&
+                _owner.DeclarationRevision == _revision &&
+                ReferenceEquals(_owner.CachedType, _type) && _type?.IdentityVersion == _typeRevision && _typeSnapshot?.IsCurrentForPoc(budget) == true &&
+                (!_hasFields || ContractCollections.SameReferencesForPoc(_owner.CachedFields, _fields, budget)) &&
+                (!_hasProperties || ContractCollections.SameReferencesForPoc(_owner.CachedProperties, _properties, budget)) &&
+                (!_hasMethods || ContractCollections.SameReferencesForPoc(_owner.CachedMethods, _methods, budget)) &&
+                (!_hasConstructors || ContractCollections.SameReferencesForPoc(_owner.CachedConstructors, _constructors, budget)) &&
+                (!_hasNested || ContractCollections.SameReferencesForPoc(_owner.CachedNestedTypes, _nested, budget)) &&
+                (!_hasSerializations || ContractCollections.SameReferencesForPoc(_owner.CachedSerializationProviders, _serializations, budget)) &&
+                (!_hasAttributes || ContractCollections.SameReferencesForPoc(_owner.CachedWriteAttributes, _attributes, budget)) &&
                 ReferenceEquals(_where, _owner.CachedWhereClause) && _modifiers == _owner.CachedDeclarationModifiers && _path == _owner.CachedRelativeFilePath;
         }
     }

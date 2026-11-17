@@ -101,6 +101,8 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Assert.That(receipt.Consumed.Distinct().Count(), Is.EqualTo(receipt.Consumed.Length));
             Assert.That(receipt.Consumed.Contains(leaf.Id), Is.True);
             var permission = prepared.GetTypeOfNamePermission(file, leaf);
+            Assert.That(prepared.GetTask03TypeOfNamePermission(file, leaf), Is.SameAs(permission),
+                "Task03 inspection must expose the same concrete permission used by the standard writer.");
             if (captured)
             {
                 Assert.That(permission, Is.Null, "Omitted CAE captures the original operand spelling.");

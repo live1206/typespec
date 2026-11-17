@@ -3,11 +3,13 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.TypeSpec.Generator.Input;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.SourceInput;
 
@@ -30,9 +32,20 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private SourceInputModel? _sourceModel;
         private string? _sourceOutputDirectory;
         private string? _outputRoot;
+        private bool _captureProspectiveLifetime;
+        private bool _prospectiveAwaitingDecision;
+        private OutputLibrary? _prospectiveOutput;
+        private CodeModelGenerator? _prospectiveGenerator;
+        private CodeModelGenerator? _preparedGenerator;
+        private long _prospectiveRootRevision;
+        private List<TypeProvider>.Enumerator? _prospectiveListVersion;
+        private int _prospectiveRootStale;
+        private int _prospectiveGeneratorStale;
+        private int _prospectiveRootMembersStale;
+        private int _prospectiveOwnerSnapshotsStale;
         private int _valid;
 
-        private sealed record OwnerState(CSharpType Type, TypeProvider[] Parts, string[] SourceScopeNames)
+        private sealed record OwnerState(CSharpType Type, TypeProvider[] Parts, string[] SourceScopeNames, HashSet<string> PlannedScopeNames)
         {
             internal Dictionary<FieldProvider, Candidate> Fields { get; } = new(ReferenceEqualityComparer.Instance);
             internal HashSet<string>? ForbiddenImports { get; set; }
@@ -67,7 +80,179 @@ namespace Microsoft.TypeSpec.Generator.Providers
         internal static PreparedFieldTypes? CreateForGeneration(
             CodeModelGenerator generator,
             IEnumerable<TypeProvider> providers,
+            Func<TypeProvider, bool> shouldWrite) => CreateForGenerationCore(generator, providers, shouldWrite, false, null);
+
+        // This isolated pre-write entry point captures POC candidates in the
+        // existing lifetime. It is not yet a writer permission or production
+        // group-planning activation.
+        internal static PreparedFieldTypes? CreateForGenerationWithPocPlans(
+            CodeModelGenerator generator,
+            IEnumerable<TypeProvider> providers,
+            Func<TypeProvider, bool> shouldWrite) => CreateForGenerationCore(generator, providers, shouldWrite, false, null, true);
+
+        // Trial2: retain the complete ordinary inventory without eagerly making
+        // optional proposals. A source-owned request must be sealed before writing.
+        // Neither this entry nor its result grants a writer/name permission.
+        internal static PreparedFieldTypes? CreateForGenerationWithPocRequestInventory(
+            CodeModelGenerator generator, IEnumerable<TypeProvider> providers, Func<TypeProvider, bool> shouldWrite) =>
+            CreateForGenerationCore(generator, providers, shouldWrite, false, null, true, requestDriven: true);
+
+        // Explicitly approved header lifecycle, distinct from legacy diagnostic
+        // POC capture. Unknown/side-effecting headers are never forced here.
+        internal static PreparedFieldTypes? CreateForGenerationWithFinalizedPocHeaders(
+            CodeModelGenerator generator, IEnumerable<TypeProvider> providers, Func<TypeProvider, bool> shouldWrite,
+            PreparedPocHeaderFinalization headers)
+        {
+            ArgumentNullException.ThrowIfNull(headers);
+            return headers.IsActiveFor(generator)
+                ? CreateForGenerationCore(generator, providers, shouldWrite, false, null, true, headers)
+                : null;
+        }
+
+        // Descriptor-only opt-in. The session was bootstrapped before the caller's
+        // original file factories; it never runs the ordinary candidate producer.
+        internal static PreparedFieldTypes? CreateForGenerationWithNativeMetadataInputs(
+            CodeModelGenerator generator, IEnumerable<TypeProvider> providers, Func<TypeProvider, bool> shouldWrite,
+            PocNativeMetadataInputSession? inputs)
+        {
+            var access = inputs?.BeginPreparation();
+            PreparedFieldTypes? result = null;
+            var completed = false;
+            CompleteSourceInputSnapshot? sourceInputs = null;
+            try
+            {
+                if (!IsPolicyEnabled(generator)) { return null; }
+                var sourceModel = generator.SourceInputModel;
+                sourceInputs = sourceModel.PreEmissionSourceInputs;
+                var outputDirectory = generator.Configuration.OutputDirectory;
+                if (sourceInputs is null || sourceModel.Customization is null || !sourceInputs.IsCurrentFor(outputDirectory)) { return null; }
+                result = CreateCore(providers, sourceInputs.Compilation, shouldWrite, outputDirectory, sourceInputs, sourceModel,
+                    nativeInputs: inputs, nativeAccess: access, mode: PocPreparationMode.NativeMetadataInputs);
+                result._preparedGenerator = generator;
+                if ((System.Threading.Volatile.Read(ref result._valid) == 0 && !result.HasSourceFiles) ||
+                    !sourceInputs.IsCurrentFor(outputDirectory))
+                {
+                    result.Dispose();
+                    return null;
+                }
+                completed = true;
+                return result;
+            }
+            finally
+            {
+                // No catch/filter: original compiler/factory/host exceptions escape
+                // unchanged. A missing result cannot publish optional observations.
+                if (access is not null)
+                {
+                    if (!completed) { inputs!.Dispose(); }
+                    inputs!.EndPreparation(access, completed && result is not null && System.Threading.Volatile.Read(ref result._valid) != 0 ? result : null,
+                        providers, sourceInputs?.Compilation);
+                }
+            }
+        }
+
+        internal bool TryReadNativeMetadataExternalHeader(int ordinal, out PocNativeMetadataExternalHeader header)
+        {
+            header = default;
+            if (_pocLookup is not PocNativeMetadataInputSession inputs) { return false; }
+            // Inspect only sticky observations, never replay a currentness callback.
+            // Check both sides of the scalar copy to close publication vs retirement.
+            if (NativeMetadataPublicationIsRetired()) { inputs.Dispose(); return false; }
+            if (!inputs.TryReadExternalHeader(ordinal, out header)) { return false; }
+            if (!NativeMetadataPublicationIsRetired()) { return true; }
+            inputs.Dispose();
+            header = default;
+            return false;
+        }
+
+        internal bool TryReadNativeMetadataExternalLayout(int ordinal, out PocNativeMetadataLayout layout)
+        {
+            layout = default;
+            if (_pocLookup is not PocNativeMetadataInputSession inputs) { return false; }
+            // Exactly the header's observed-retirement gate; no callback replay.
+            if (NativeMetadataPublicationIsRetired()) { inputs.Dispose(); return false; }
+            if (!inputs.TryReadExternalLayout(ordinal, out layout)) { return false; }
+            if (!NativeMetadataPublicationIsRetired()) { return true; }
+            inputs.Dispose();
+            layout = default;
+            return false;
+        }
+
+        internal bool TryReadNativeMetadataCheckedNameInputs(int ordinal, out PocNativeMetadataCheckedNameInputs result)
+        {
+            result = default;
+            if (_pocLookup is not PocNativeMetadataInputSession inputs) { return false; }
+            if (NativeMetadataPublicationIsRetired()) { inputs.Dispose(); return false; }
+            if (!inputs.TryReadCheckedNameInputs(ordinal, out result)) { return false; }
+            if (!NativeMetadataPublicationIsRetired()) { return true; }
+            inputs.Dispose();
+            result = default;
+            return false;
+        }
+
+        // Recorded bits only; also checked before each live-image byte load.
+        // _valid starts at zero while CreateCore constructs the prepared owner;
+        // it is not a retirement bit in that live frame. Seal separately requires
+        // the completed _valid owner. Source/shared retirement bits ARE sticky.
+        internal bool NativeMetadataRecordedInputsAreCurrent => !System.Threading.Volatile.Read(ref _sourceDisposed) &&
+            System.Threading.Volatile.Read(ref _sharedSnapshotStale) == 0;
+
+        private bool NativeMetadataPublicationIsRetired() => System.Threading.Volatile.Read(ref _valid) == 0 ||
+            System.Threading.Volatile.Read(ref _sourceDisposed) || System.Threading.Volatile.Read(ref _sharedSnapshotStale) != 0;
+
+        // Identity only: no exposed union, caller certificate or currentness callback.
+        // Native assignment precedes Bind/exposure and cannot be replaced in that mode.
+        internal bool IsNativeMetadataInputSession(PocNativeMetadataInputSession inputs) => ReferenceEquals(_pocLookup, inputs);
+
+        private void RejectNativeMetadataInputs()
+        {
+            if (_pocLookup is PocNativeMetadataInputSession inputs) { inputs.Dispose(); }
+        }
+
+        private enum PocPreparationMode { None, OrdinaryCandidates, NativeMetadataInputs }
+
+        internal PreparedPocHeaderFinalization? FinalizedPocHeaders { get; private set; }
+
+        // This retains a non-authorizing lifetime only. An overridden/unknown
+        // output getter requires the active CSharpGen-owned reference-map phase;
+        // the inherited base auto-getter can be audited without host callbacks.
+        internal static PreparedFieldTypes? CreateProspectiveForGeneration(
+            CodeModelGenerator generator,
+            OutputLibrary output,
             Func<TypeProvider, bool> shouldWrite)
+        {
+            var owned = shouldWrite.Target is ProviderReferenceMapSession referenceMap &&
+                shouldWrite.Equals((Func<TypeProvider, bool>)referenceMap.ShouldWriteProvider) &&
+                output.TryCaptureMaterializedTypeProviders(out var roots, out _) &&
+                referenceMap.IsOwnedGenerationPhaseCurrent(generator, output, roots!);
+            if (!owned && !HasKnownDirectBaseOutput(generator, output)) { return null; }
+            return CreateForGenerationCore(generator, null, shouldWrite, true, output);
+        }
+
+        private static bool HasKnownDirectBaseOutput(CodeModelGenerator generator, OutputLibrary output)
+        {
+            if (!IsCurrentGenerator(generator)) { return false; }
+            // Include covariant or hidden properties in the audit before
+            // selecting the single known inherited base auto-getter.
+            var accessors = generator.GetType().GetProperties().Where(property => property.Name == nameof(CodeModelGenerator.OutputLibrary) &&
+                property.GetIndexParameters().Length == 0).ToArray();
+            return accessors.Length == 1 && accessors[0].PropertyType == typeof(OutputLibrary) &&
+                accessors[0].GetMethod?.DeclaringType == typeof(CodeModelGenerator) && ReferenceEquals(generator.OutputLibrary, output);
+        }
+
+        private static bool IsCurrentGenerator(CodeModelGenerator generator)
+        {
+            try { return ReferenceEquals(CodeModelGenerator.Instance, generator); }
+            catch (InvalidOperationException) { return false; }
+        }
+
+        private static PreparedFieldTypes? CreateForGenerationCore(
+            CodeModelGenerator generator,
+            IEnumerable<TypeProvider>? providers,
+            Func<TypeProvider, bool> shouldWrite,
+            bool captureProspectiveLifetime,
+            OutputLibrary? prospectiveOutput,
+            bool capturePocPlans = false, PreparedPocHeaderFinalization? finalizedHeaders = null, bool requestDriven = false)
         {
             if (!IsPolicyEnabled(generator))
             {
@@ -85,15 +270,96 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 return null;
             }
 
-            var result = CreateCore(providers, sourceInputs.Compilation, shouldWrite, outputDirectory, sourceInputs, sourceModel);
+            IReadOnlyList<TypeProvider>? prospectiveRoots = null;
+            long prospectiveRootRevision = 0;
+            List<TypeProvider>.Enumerator? prospectiveListVersion = null;
+            if (captureProspectiveLifetime)
+            {
+                if (prospectiveOutput is null || !prospectiveOutput.TryCaptureMaterializedTypeProviders(out prospectiveRoots, out prospectiveRootRevision)) { return null; }
+                if (prospectiveRoots!.GetType() == typeof(List<TypeProvider>))
+                {
+                    prospectiveListVersion = ((List<TypeProvider>)prospectiveRoots).GetEnumerator();
+                }
+                providers = prospectiveRoots;
+            }
+            if (providers is null) { return null; }
+            ProviderReferenceMapSession? pocReferenceMap = null;
+            OutputLibrary? pocOutput = null;
+            IReadOnlyList<TypeProvider>? pocRoots = null;
+            ImmutableHashSet<string>? pocRemovalCandidates = null;
+            var pocBoundaryBudget = capturePocPlans ? new PocWorkBudget(8192) : null;
+            if (capturePocPlans && shouldWrite.Target is ProviderReferenceMapSession referenceMap &&
+                shouldWrite.Equals((Func<TypeProvider, bool>)referenceMap.ShouldWriteProvider) &&
+                referenceMap.TryGetObservedReferenceMapRoot(out var observedOutput, out var observedRoots) &&
+                ReferenceEquals(providers, observedRoots) && referenceMap.TryCaptureObservedRemovalCandidates(pocBoundaryBudget!, out pocRemovalCandidates))
+            {
+                pocReferenceMap = referenceMap;
+                pocOutput = observedOutput;
+                pocRoots = observedRoots;
+            }
+
+            PreparedPocPostMapAttributeBoundary? postMapAttributeBoundary = null;
+            if (finalizedHeaders is not null && pocReferenceMap is not null && pocOutput is not null &&
+                pocRoots is not null && pocRemovalCandidates is not null)
+            {
+                postMapAttributeBoundary = PreparedPocPostMapAttributeBoundary.TryCapture(
+                    generator,
+                    pocOutput,
+                    pocRoots,
+                    pocReferenceMap,
+                    pocRemovalCandidates,
+                    pocBoundaryBudget!);
+            }
+
+            var result = CreateCore(providers, sourceInputs.Compilation, shouldWrite, outputDirectory, sourceInputs, sourceModel,
+                captureProspectiveLifetime, capturePocPlans, finalizedHeaders, generator.CachedInputLibrary?.CachedInputNamespace,
+                postMapAttributeBoundary);
             result._sourceInputs = sourceInputs;
             result._sourceModel = sourceModel;
             result._sourceOutputDirectory = outputDirectory;
-            if ((System.Threading.Volatile.Read(ref result._valid) == 0 && !result.HasSourceFiles) || !sourceInputs.IsCurrentFor(outputDirectory))
+            result._preparedGenerator = generator;
+            result._pocReferenceMap = pocReferenceMap;
+            result._pocOutput = pocOutput;
+            result._pocRoots = pocRoots;
+            result._pocRemovalCandidates = pocRemovalCandidates;
+            result._pocHasDirectSourceGetter = pocReferenceMap is not null && HasKnownDirectSourceInputGetter(generator);
+            result._prospectiveOutput = prospectiveOutput;
+            result._prospectiveGenerator = captureProspectiveLifetime ? generator : null;
+            result._prospectiveRootRevision = prospectiveRootRevision;
+            result._prospectiveListVersion = prospectiveListVersion;
+            if (capturePocPlans)
+            {
+                if (requestDriven) { result._pocRequestPending = result.CapturePocOrdinaryInventory() ? 1 : 0; }
+                else { result.CapturePocOrdinaryCandidates(); }
+            }
+            if ((System.Threading.Volatile.Read(ref result._valid) == 0 && (captureProspectiveLifetime || !result.HasSourceFiles)) ||
+                !sourceInputs.IsCurrentFor(outputDirectory))
             {
                 result.Dispose();
                 return null;
             }
+            if (capturePocPlans && !requestDriven)
+            {
+                result.FinalizePocOrdinaryCandidates();
+                result.Trial2FinalRemaining = result.Trial2SourceRemaining;
+                result.AttachPocProviderStream();
+            }
+            // Source currentness can run host code. Check the prospective facts
+            // after its final callback rather than trusting an earlier result.
+            var prospectiveReferenceCurrent = !captureProspectiveLifetime ||
+                prospectiveOutput!.IsMaterializedTypeProviderSnapshotCurrent(prospectiveRoots!, prospectiveRootRevision);
+            var prospectiveGeneratorCurrent = !captureProspectiveLifetime || IsCurrentGenerator(generator);
+            var prospectiveMembersCurrent = prospectiveListVersion is not { } listVersion || IsProspectiveListVersionCurrent(listVersion);
+            if (!prospectiveReferenceCurrent) { System.Threading.Interlocked.Exchange(ref result._prospectiveRootStale, 1); }
+            if (!prospectiveGeneratorCurrent) { System.Threading.Interlocked.Exchange(ref result._prospectiveGeneratorStale, 1); }
+            if (!prospectiveMembersCurrent) { System.Threading.Interlocked.Exchange(ref result._prospectiveRootMembersStale, 1); }
+            if (result._prospectiveAwaitingDecision && (!prospectiveReferenceCurrent || !prospectiveGeneratorCurrent || !prospectiveMembersCurrent))
+            {
+                result.Dispose();
+                return null;
+            }
+            // A prospective-only failure cannot erase an independent field/body
+            // decision that the ordinary preparation path would have retained.
             return result;
         }
 
@@ -109,18 +375,32 @@ namespace Microsoft.TypeSpec.Generator.Providers
             => CreateCore(providers, customization, shouldWrite, outputDirectory, null, null);
 
         private static PreparedFieldTypes CreateCore(IEnumerable<TypeProvider> providers, Compilation? customization,
-            Func<TypeProvider, bool> shouldWrite, string? outputDirectory, CompleteSourceInputSnapshot? sourceInputs, SourceInputModel? sourceModel)
+            Func<TypeProvider, bool> shouldWrite, string? outputDirectory, CompleteSourceInputSnapshot? sourceInputs, SourceInputModel? sourceModel,
+            bool captureProspectiveLifetime = false, bool capturePocPlans = false, PreparedPocHeaderFinalization? finalizedHeaders = null,
+            InputNamespace? loadedInput = null, PreparedPocPostMapAttributeBoundary? postMapAttributeBoundary = null,
+            PocNativeMetadataInputSession? nativeInputs = null, PocNativeMetadataInputSession.PreparationAccess? nativeAccess = null,
+            PocPreparationMode mode = PocPreparationMode.None)
         {
+            if (mode == PocPreparationMode.NativeMetadataInputs) { capturePocPlans = false; }
+            else if (capturePocPlans) { mode = PocPreparationMode.OrdinaryCandidates; }
             var result = new PreparedFieldTypes
             {
                 _sourceInputs = sourceInputs,
                 _sourceModel = sourceModel,
-                _sourceOutputDirectory = sourceInputs is null ? null : outputDirectory
+                _sourceOutputDirectory = sourceInputs is null ? null : outputDirectory,
+                _captureProspectiveLifetime = captureProspectiveLifetime
             };
             if (providers is not IReadOnlyList<TypeProvider> roots || !ContractCollections.TryCopy(roots, out var capturedRoots) ||
                 customization is not CSharpCompilation compilation || HasUnsupportedSource(compilation))
             {
                 return result;
+            }
+
+            if (mode == PocPreparationMode.NativeMetadataInputs && nativeInputs is not null)
+            {
+                result._pocLookup = nativeInputs;
+                result._pocCandidateSourceBudget = nativeInputs.SourceBudget;
+                nativeInputs.Bind(nativeAccess, result, providers, compilation);
             }
 
             var all = new List<TypeProvider>();
@@ -129,9 +409,19 @@ namespace Microsoft.TypeSpec.Generator.Providers
             var rootSnapshot = capturedRoots.ToArray();
             foreach (var provider in rootSnapshot)
             {
-                var written = ShouldWriteRoot(provider, shouldWrite);
+                var written = capturePocPlans ? ShouldWriteRoot(provider, shouldWrite, result) : ShouldWriteRoot(provider, shouldWrite);
                 var serializations = written ? provider.SerializationProviders.ToArray() : [];
-                var serializationWritten = serializations.Select(shouldWrite).ToArray();
+                bool[] serializationWritten;
+                if (capturePocPlans)
+                {
+                    serializationWritten = new bool[serializations.Length];
+                    for (var index = 0; index < serializations.Length; index++)
+                    {
+                        serializationWritten[index] = shouldWrite(serializations[index]);
+                        result.CapturePocWriteDecisionProvider(serializations[index]);
+                    }
+                }
+                else { serializationWritten = serializations.Select(shouldWrite).ToArray(); }
                 rootStates.Add(new RootState(provider, written, serializations, serializationWritten));
                 if (!written)
                 {
@@ -190,6 +480,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 }
             }
             var importLookup = new PreparedFieldImportLookup(compilation, byName, namespacePrefixes);
+            if (capturePocPlans) { result._pocLookup = importLookup; }
             var safeTargets = new Dictionary<CSharpType, bool>(ReferenceEqualityComparer.Instance);
             var referencedTargets = new Dictionary<CSharpType, INamedTypeSymbol?>(ReferenceEqualityComparer.Instance);
             var sourceScopes = new Dictionary<(string Namespace, string Name), (bool Supported, bool Exists, string[] Names)>();
@@ -228,7 +519,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     }
                 }
 
-                var ownerState = new OwnerState(ownerType, ownerParts, sourceScope.Names);
+                var ownerState = new OwnerState(ownerType, ownerParts, sourceScope.Names, scopeNames);
                 foreach (var field in owner.Fields)
                 {
                     var type = field.Type;
@@ -271,7 +562,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                         if (!referencedTargets.TryGetValue(type, out var referencedTarget))
                         {
                             referencedTarget = namespacePrefixes.Contains(type.Namespace + "." + type.Name)
-                                ? null : ResolveReferencedTarget(compilation, type, byName);
+                                ? null : ResolveReferencedTargetCore(compilation, type, byName, false, false, nativeInputs, nativeAccess);
                             referencedTargets.Add(type, referencedTarget);
                         }
                         if (referencedTarget is null)
@@ -299,22 +590,41 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 }
             }
 
+            if (finalizedHeaders is { } headers)
+            {
+                foreach (var root in rootStates)
+                {
+                    if (!root.Written) { continue; }
+                    headers.Materialize(root.Provider, loadedInput, postMapAttributeBoundary);
+                    for (var index = 0; index < root.Serializations.Length; index++)
+                    { if (root.SerializationWritten[index]) { headers.Materialize(root.Serializations[index], loadedInput, postMapAttributeBoundary); } }
+                }
+                result.FinalizedPocHeaders = headers;
+            }
+
             result.CaptureSourceFiles(topLevel, compilation, roots, all, byName, namespacePrefixes,
                 rootStates.All(root => root.Written && root.SerializationWritten.All(written => written)));
 
             result.CaptureBodyNames();
             if (result._owners.Count == 0 && !result.HasBodyNameCandidates)
             {
-                return result;
+                if (!captureProspectiveLifetime || !result.HasSourceFiles) { return result; }
+                // Retain the lifetime without changing the existing no-decision
+                // observation path. A future admitted group must explicitly
+                // activate its own choices; the lifetime alone grants none.
+                result._prospectiveAwaitingDecision = true;
             }
 
             result._roots = roots;
             result._outputRoot = outputRoot;
             result._rootSnapshot = rootSnapshot;
             result._rootStates = rootStates.ToArray();
-            result._providerStates = all.Select(provider => new ProviderState(provider, provider.Type,
-                provider.Type.Name, provider.Type.Namespace, provider.Type.Arguments.Count,
-                provider.DeclaringTypeProvider, provider.Type.DeclaringType, provider.NestedTypes.ToArray(), provider.RelativeFilePath)).ToArray();
+            if (!result._prospectiveAwaitingDecision)
+            {
+                result._providerStates = all.Select(provider => new ProviderState(provider, provider.Type,
+                    provider.Type.Name, provider.Type.Namespace, provider.Type.Arguments.Count,
+                    provider.DeclaringTypeProvider, provider.Type.DeclaringType, provider.NestedTypes.ToArray(), provider.RelativeFilePath)).ToArray();
+            }
             result._shouldWrite = shouldWrite;
 
             // The snapshot is valid only while all participating providers remain
@@ -332,7 +642,11 @@ namespace Microsoft.TypeSpec.Generator.Providers
             return result;
         }
 
-        internal void Invalidate() => System.Threading.Interlocked.Exchange(ref _valid, 0);
+        internal void Invalidate()
+        {
+            System.Threading.Interlocked.Exchange(ref _valid, 0);
+            RejectNativeMetadataInputs();
+        }
 
         // The symbol work is completed during preparation. Writing only validates
         // that later namespace registration does not violate the captured scope.
@@ -348,6 +662,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         public void Dispose()
         {
+            PocGenerationEnvelope?.Reject();
+            RejectNativeMetadataInputs();
             System.Threading.Interlocked.Exchange(ref _sharedSnapshotStale, 1);
             Invalidate();
             InvalidateSourceFiles();
@@ -361,6 +677,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         internal bool CanCommit()
         {
             ObserveSourceSnapshot();
+            if (_prospectiveAwaitingDecision) { return false; }
             if (!ValidateSnapshot())
             {
                 return false;
@@ -386,6 +703,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
         internal void ObserveSnapshot()
         {
             ObserveSourceSnapshot();
+            if (_prospectiveAwaitingDecision) { return; }
             if (ValidateSnapshot())
             {
                 ValidateCandidateScopes();
@@ -467,8 +785,13 @@ namespace Microsoft.TypeSpec.Generator.Providers
         // The metadata namespace view already exists before the writer runs.
         // Resolve only the bounded top-level same-namespace case; never construct
         // generated syntax or speculate on a generated expression to make this decision.
-        private static INamedTypeSymbol? ResolveReferencedTarget(CSharpCompilation compilation, CSharpType type,
+        internal static INamedTypeSymbol? ResolveReferencedTarget(CSharpCompilation compilation, CSharpType type,
             IReadOnlyDictionary<(string Namespace, string Name), TypeProvider[]> generated, bool forStaticCall = false, bool forLoadedSourceCall = false)
+            => ResolveReferencedTargetCore(compilation, type, generated, forStaticCall, forLoadedSourceCall, null, null);
+
+        private static INamedTypeSymbol? ResolveReferencedTargetCore(CSharpCompilation compilation, CSharpType type,
+            IReadOnlyDictionary<(string Namespace, string Name), TypeProvider[]> generated, bool forStaticCall, bool forLoadedSourceCall,
+            PocNativeMetadataInputSession? nativeInputs, PocNativeMetadataInputSession.PreparationAccess? nativeAccess)
         {
             var current = compilation.GlobalNamespace;
             var prefix = string.Empty;
@@ -503,6 +826,13 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     target.BaseType?.SpecialType == SpecialType.System_Object && target.DeclaringSyntaxReferences.Length != 0 &&
                     SymbolEqualityComparer.Default.Equals(target.ContainingAssembly, compilation.Assembly) &&
                     target.DeclaringSyntaxReferences.All(r => compilation.ContainsSyntaxTree(r.SyntaxTree)) ? target : null;
+            }
+
+            // Only the genuine original field call supplies this observer. Body,
+            // lookup and POC-invented Resolve calls use the unchanged null route.
+            if (nativeInputs?.CreateOriginalMatchPredicate(nativeAccess, compilation, target) is { } predicate)
+            {
+                return compilation.References.Any(predicate) ? target : null;
             }
 
             // Extern-alias-only metadata is not visible to the writer's unaliased
@@ -628,12 +958,36 @@ namespace Microsoft.TypeSpec.Generator.Providers
             return false;
         }
 
-        private bool SourceInputsAreCurrent() => _sourceInputs is null ||
-            _sourceModel is not null && ReferenceEquals(_sourceModel.PreEmissionSourceInputs, _sourceInputs) &&
-            _sourceOutputDirectory is not null && _sourceInputs.IsCurrentFor(_sourceOutputDirectory);
+        private bool SourceInputsAreCurrent()
+        {
+            var current = _sourceInputs is null || _sourceModel is not null && ReferenceEquals(_sourceModel.PreEmissionSourceInputs, _sourceInputs) &&
+                _sourceOutputDirectory is not null && _sourceInputs.IsCurrentFor(_sourceOutputDirectory);
+            // No callback replay: inspect an already-captured active header
+            // immediately after the existing source-proof observation.
+            ObservePocActiveHeaderAfterSourceCallback();
+            if (!current) { RejectNativeMetadataInputs(); }
+            return current;
+        }
 
         private static bool ShouldWriteRoot(TypeProvider provider, Func<TypeProvider, bool> shouldWrite) =>
             shouldWrite(provider) && (provider is not ModelFactoryProvider || provider.Methods.Count != 0);
+
+        private static bool ShouldWriteRoot(TypeProvider provider, Func<TypeProvider, bool> shouldWrite, PreparedFieldTypes poc)
+        {
+            if (provider is not ModelFactoryProvider)
+            {
+                var written = ShouldWriteRoot(provider, shouldWrite);
+                poc.CapturePocWriteDecisionProvider(provider);
+                return written;
+            }
+            // Preserve the existing policy-before-method-count order, but
+            // capture identity before the latter can invoke a lazy builder.
+            var permitted = shouldWrite(provider);
+            poc.CapturePocWriteDecisionProvider(provider);
+            var result = permitted && provider.Methods.Count != 0;
+            poc.CapturePocModelFactoryMethods(provider);
+            return result;
+        }
 
         private static bool SameReferences(IReadOnlyList<TypeProvider> current, IReadOnlyList<TypeProvider> snapshot)
         {

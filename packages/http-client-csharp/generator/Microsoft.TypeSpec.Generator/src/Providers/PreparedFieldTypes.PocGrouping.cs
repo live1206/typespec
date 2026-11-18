@@ -38,15 +38,18 @@ namespace Microsoft.TypeSpec.Generator.Providers
             bool binaryCatalogKnown = _pocBinaryWriteSetComplete && _callLookupScopes.All(scope => scope.HasCapturedNestedTypes);
             foreach (var file in files)
             {
-                var binaryMethods = new HashSet<MethodProvider>(ReferenceEqualityComparer.Instance);
-                var binarySignatures = new HashSet<MethodSignature>(ReferenceEqualityComparer.Instance);
-                var binaryNodes = new HashSet<SourceOccurrenceId>();
+                var nativeMethods = new HashSet<MethodProvider>(ReferenceEqualityComparer.Instance);
+                var nativeSignatures = new HashSet<MethodSignature>(ReferenceEqualityComparer.Instance);
+                var nativeNodes = new HashSet<SourceOccurrenceId>();
                 var choices = new List<PreparedSourceOccurrence>();
                 if (binaryCatalogKnown)
-                { CaptureBinaryParentRoles(file, binaryMethods, binarySignatures, binaryNodes, choices); }
-                var envelope = CapturePocEnvelope(file, binaryMethods, out var finalData);
+                {
+                    CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    CaptureDirectCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                }
+                var envelope = CapturePocEnvelope(file, nativeMethods, out var finalData);
                 var nodes = file.Roots.Where(r => r.Id.RootRole != "type-documentation").SelectMany(r => r.DescendantsAndSelf()).ToArray();
-                if (envelope is null || finalData is null || nodes.Any(n => !PocKnown(n, binarySignatures, binaryNodes)))
+                if (envelope is null || finalData is null || nodes.Any(n => !PocKnown(n, nativeSignatures, nativeNodes)))
                 { continue; }
                 // Compatibility is the OLD whole-file admission, not merely the
                 // shape of one equality inside a newly admitted arithmetic file.
@@ -125,7 +128,41 @@ namespace Microsoft.TypeSpec.Generator.Providers
             }
         }
 
-        private Func<bool>? CapturePocEnvelope(PreparedSourceFile file, HashSet<MethodProvider> binaryMethods, out Func<bool>? finalData)
+        private static void CaptureDirectCasts(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            foreach (var methodRoot in file.Roots)
+            {
+                if (methodRoot.Producer is not MethodProvider method || method.GetType() != typeof(MethodProvider))
+                { continue; }
+                var cast = ((object?)method.BodyStatements ?? method.BodyExpression) switch
+                {
+                    CastExpression expression => expression,
+                    ExpressionStatement statement when statement.GetType() == typeof(ExpressionStatement) &&
+                        statement.Expression is KeywordExpression { Keyword: "return", Expression: CastExpression returned } keyword &&
+                        keyword.GetType() == typeof(KeywordExpression) => returned,
+                    _ => null
+                };
+                if (cast?.Inner is not VariableExpression variable || variable.GetType() != typeof(VariableExpression) ||
+                    !PocCastType(cast.Type) || !PocCastType(method.Signature.ReturnType) || method.Signature.HasUnsupportedBaseContract ||
+                    !PocSignature(method.Signature, true) ||
+                    !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters) || parameters.Length != 1 ||
+                    !parameters[0].HasCachedEmittedDeclarationState || parameters[0].HasUnsupportedParameterModifiers || parameters[0].HasUnsupportedDefaultValue)
+                { continue; }
+                var matches = methodRoot.DescendantsAndSelf().Where(node => ReferenceEquals(node.Producer, cast)).ToArray();
+                if (matches.Length != 1 || matches[0].Children.Length != 1 ||
+                    !ReferenceEquals(matches[0].Children[0].Producer, variable) || !PocCastType(matches[0].ResolveParameterType(variable)))
+                { continue; }
+                methods.Add(method);
+                signatures.Add(method.Signature);
+                nodes.Add(matches[0].Id);
+                choices.Add(matches[0]);
+            }
+        }
+
+        private static bool PocCastType(CSharpType? type) => PocType(type, typeof(int)) && !type!.IsLiteral && !type.HasUnionMetadata;
+
+        private Func<bool>? CapturePocEnvelope(PreparedSourceFile file, HashSet<MethodProvider> nativeMethods, out Func<bool>? finalData)
         {
             finalData = null;
             var owner = file.FileOwner;
@@ -143,7 +180,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 if (root.Producer is MethodProvider method)
                 {
                     if (method.GetType() != typeof(MethodProvider) ||
-                        !PocSignature(method.Signature) && !(binaryMethods.Contains(method) && PocSignature(method.Signature, true)))
+                        !PocSignature(method.Signature) && !(nativeMethods.Contains(method) && PocSignature(method.Signature, true)))
                     { return null; }
                     var suppressions = method.Suppressions;
                     if (!ContractCollections.TryCopy(suppressions, out var ownedSuppressions) ||
@@ -203,18 +240,19 @@ namespace Microsoft.TypeSpec.Generator.Providers
             type.Name == expected.Name && type.Namespace == expected.Namespace &&
             ContractCollections.TryCopy(type.Arguments, out var arguments) && arguments.IsEmpty;
 
-        private bool PocKnown(PreparedSourceOccurrence node, HashSet<MethodSignature> binarySignatures, HashSet<SourceOccurrenceId> binaryNodes)
+        private bool PocKnown(PreparedSourceOccurrence node, HashSet<MethodSignature> nativeSignatures, HashSet<SourceOccurrenceId> nativeNodes)
         {
             if (node.IsOpaque)
             { return false; }
             return node.Producer switch
             {
-                BinaryOperatorExpression binary => binaryNodes.Contains(node.Id) ||
+                BinaryOperatorExpression binary => nativeNodes.Contains(node.Id) ||
                     binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
+                CastExpression => nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) && keyword.Keyword is "return" or "default",
                 VariableExpression variable => variable.GetType() == typeof(VariableExpression),
                 MethodProvider method => method.GetType() == typeof(MethodProvider),
-                MethodSignature signature => PocSignature(signature) || binarySignatures.Contains(signature) && PocSignature(signature, true),
+                MethodSignature signature => PocSignature(signature) || nativeSignatures.Contains(signature) && PocSignature(signature, true),
                 ParameterProvider parameter => parameter.GetType() == typeof(ParameterProvider),
                 PropertyProvider property => _pocSeeds.TryGetValue(property, out var projection) && projection.IsCurrent,
                 ExpressionPropertyBody body => body.GetType() == typeof(ExpressionPropertyBody),
@@ -223,10 +261,10 @@ namespace Microsoft.TypeSpec.Generator.Providers
             };
         }
 
-        internal bool TryUsePocGrouping(PreparedSourceFile file, PreparedSourceOccurrence node, BinaryOperatorExpression binary)
+        internal bool TryUsePocGrouping(PreparedSourceFile file, PreparedSourceOccurrence node, ValueExpression expression)
         {
             if (!_pocGrouping.TryGetValue(node.Id, out var choice) || !ReferenceEquals(choice.File, file) ||
-                !ReferenceEquals(choice.Node, node) || !ReferenceEquals(node.Producer, binary) ||
+                !ReferenceEquals(choice.Node, node) || !ReferenceEquals(node.Producer, expression) ||
                 !(file.UsesNativeWrittenIdentity ? NativePocUseIsCurrent(file, choice.Envelope, choice.FinalData) :
                     ValidateSnapshot() && file.IsCurrent() && choice.Envelope()))
             { return false; }

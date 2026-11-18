@@ -62,6 +62,15 @@ instead of additional live global path/serialization queries. The baseline
 field/body/direct-equality behavior is unchanged. This does not require full Task04 completion;
 composition with Task04 spelling plans remains a separate checkpoint.
 
+[Checkpoint 3](./pre-emission-task05-checkpoint3.md) prepares the native outer pair
+of an exact built-in `int` cast of its actual `int` formal in a direct return or
+arrow slot. Its 62 new cases, all 1,094 prior focused outcomes and fresh broader
+validation pass after the unsupported-metadata correction. Renewed complete
+stable independent review found no remaining findings; this bounded checkpoint
+is accepted. Native
+type spelling, one operand traversal and late qualified fallback are preserved.
+Other cast targets/operands, receivers and Task04 composition remain separate.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

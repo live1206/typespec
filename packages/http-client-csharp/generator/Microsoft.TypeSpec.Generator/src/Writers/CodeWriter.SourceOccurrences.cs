@@ -15,11 +15,11 @@ namespace Microsoft.TypeSpec.Generator
         private PreparedSourceFile? _sourceFile;
 
         internal int PreparedGroupingCount { get; private set; }
-        internal bool TryBeginPocGrouping(BinaryOperatorExpression binary)
+        internal bool TryBeginPocGrouping(ValueExpression expression)
         {
             bool used = _qualifiedBuilder is not null && !_atBeginningOfLine && _sourcePreparation is not null &&
                 _sourceFile is not null && _sourceCursor?.Current is { } node &&
-                _sourcePreparation.TryUsePocGrouping(_sourceFile, node, binary);
+                _sourcePreparation.TryUsePocGrouping(_sourceFile, node, expression);
             if (used) { PreparedGroupingCount++; }
             return used;
         }

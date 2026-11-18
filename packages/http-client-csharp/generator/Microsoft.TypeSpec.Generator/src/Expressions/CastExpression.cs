@@ -14,12 +14,16 @@ namespace Microsoft.TypeSpec.Generator.Expressions
     {
         internal override void WriteCore(CodeWriter writer)
         {
-            // wrap the cast expression with parenthesis, so that it would not cause ambiguity for leading recursive calls
-            // if the parenthesis are not needed, the roslyn reducer will remove it.
-            writer.AppendRaw("(");
+            // Retain receiver/operand barriers unless this exact source occurrence
+            // has a prepared direct-root choice. The native type and child writes
+            // are unchanged; the qualified companion keeps the outer pair.
+            bool omit = writer.TryBeginPocGrouping(this);
+            if (omit) { writer.AppendPocGroupingDelimiter('('); writer.PocAfterGroupingOpening(); }
+            else { writer.AppendRaw("("); }
             writer.Append($"({Type})");
             Inner.Write(writer);
-            writer.AppendRaw(")");
+            if (omit) { writer.AppendPocGroupingDelimiter(')'); }
+            else { writer.AppendRaw(")"); }
         }
     }
 }

@@ -51,6 +51,16 @@ bounded first checkpoint is accepted. See its status for precise scope, evidence
 and limits. Neither the checkpoint nor
 the isolated trial is full task or SDK adoption evidence.
 
+[Checkpoint 2](./pre-emission-task05-checkpoint2.md) implements a bounded set of
+binary operand edges and nested chains using unchanged native child spellings.
+The approved actual-native-written-file/source freshness trial and reproduced
+review corrections, including actual compiler-host output-root binding, pass
+focused regressions and fresh broader validation; complete stable independent
+review remains pending. New plans use current source/formal and actual output evidence
+instead of additional live global path/serialization queries. The baseline
+field/body/direct-equality behavior is unchanged. This does not require full Task04 completion;
+composition with Task04 spelling plans remains a separate checkpoint.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

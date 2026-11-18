@@ -11,6 +11,11 @@ of full implementation or validation. Task05 has a bounded
 final-currentness and suppression-admission corrections passed fresh canonical
 validation and complete stable independent review. This bounded checkpoint is
 accepted; broader Task05 work and SDK adoption remain open.
+The [second checkpoint](./pre-emission-task05-checkpoint2.md) adds finite binary
+child-grouping choices with native child spellings. Its approved native-written
+file/source freshness trial and reproduced review corrections pass focused
+regressions and fresh broader validation; complete stable independent review
+remains pending.
 
 | Task | Implementation handoff                                                                                | Authoritative contract                                                               |
 | ---- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |

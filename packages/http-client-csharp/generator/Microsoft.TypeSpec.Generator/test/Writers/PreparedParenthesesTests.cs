@@ -201,7 +201,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             "namespace Sample { public class Clock { " +
             (seed ? "public global::System.DateTimeOffset Seed => default; " : "") + member + " } }";
 
-        private static ExpressionSyntax MethodExpression(string source)
+        internal static ExpressionSyntax MethodExpression(string source)
         {
             var method = CSharpSyntaxTree.ParseText(source).GetRoot().DescendantNodes()
                 .OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "M");
@@ -227,7 +227,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             return (string)argument.Value.ConstantValue.Value!;
         }
 
-        private static void AssertOperations(string before, string after)
+        internal static void AssertOperations(string before, string after)
         {
             static string Symbol(ISymbol? symbol) => symbol?.OriginalDefinition.GetDocumentationCommentId() ?? "";
             static string Type(ITypeSymbol? type) => type?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ?? "";

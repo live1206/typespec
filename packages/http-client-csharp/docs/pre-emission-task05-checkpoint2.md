@@ -1,9 +1,10 @@
 # Task05 checkpoint 2: binary child grouping
 
-Status: the approved native-written-file/source freshness trial and reproduced
-review corrections pass focused and fresh broader validation. Complete stable
-independent review remains required before acceptance or publication. This builds on the accepted [first checkpoint](./pre-emission-task05-checkpoint.md),
-not on a completed Task04 or a full Task05 implementation.
+Status: this bounded checkpoint is accepted after local focused and broader
+validation and complete stable independent review with no remaining findings.
+Two Windows-only controls were not executed on this host. This builds on the
+accepted [first checkpoint](./pre-emission-task05-checkpoint.md), not on a completed
+Task04 or a full Task05 implementation.
 
 ## Bounded grammar
 
@@ -57,7 +58,10 @@ The standard writer passively records each provider and immutable `CodeFile` aft
 its existing native file-name read. Selection requires the complete actual output
 inventory, distinct safe names with OS-correct containment and current reparse
 checks on those actual names, and the used file's receipt generation, name,
-root count and consumed occurrence identities. File checks use the actual invocation
+root count and consumed occurrence identities. Ambiguous captured file descriptors
+retain new-family forms before registration rather than throwing or replaying
+path getters. Rooted-but-partially-qualified names are not relative file names.
+File checks use the actual invocation
 output directory, including compiler-host isolated output; compiler-input authority
 remains tied to its original directory. Filesystem-root child names are supported,
 while absolute names and the output directory itself are not new-family file names. Extra writes or a genuine native
@@ -103,9 +107,11 @@ runtime results before the intended raw-form assertions failed. One initial
 oracle setup error was corrected without changing its expected semantics; the
 original logs were retained.
 
-The combined focused class set passes 1,089 tests: all previous 1,044 IDs
-(including the original 993 and the 51 new grammar cases) plus 45 materialization,
-native-file evidence and isolation cases. Coverage includes:
+The combined focused class set contains 1,094 cases: all previous 1,044 IDs
+(including the original 993 and the 51 new grammar cases) plus 50 materialization,
+native-file evidence and isolation cases. Local validation passed 1,092 cases;
+two Windows-only rooted-name controls were not executed on this Linux host.
+Every previously executed 1,089 case remains passing. Coverage includes:
 
 - Return and arrow positives for the exact edges, nested left chains and a shared
   producer omitted at one edge but retained at another.
@@ -134,20 +140,30 @@ native-file evidence and isolation cases. Coverage includes:
 - Real compiler-host isolated versus original output roots, late links in either
   tree, filesystem-root child and strict filename controls, physical input-hash
   expiry before selection and final false-result discard after selection.
+- Paired baseline/candidate captured-descriptor collision refusal without an
+  exception, stable four-use shortening, and platform-specific rooted-name guards.
 
 The synthetic host-expiry tests are not physical compiler-input/discard proofs;
 checkpoint 1's physical-proof controls remain in the preserved regression set.
 No performance benchmark or production allocation improvement is claimed.
 
-Fresh validation including the actual-invocation-root correction passed, each
-with observed exit 0: official pinned generator static checks, official unfiltered
-local test-library generation with no generated diffs, full generator-solution
-tests (8,206 passed and 963 default-stubbed Spector skips), and emitter tests
-(422 passed and 2 skipped). All 1,089 focused IDs passed again in the full run.
-The 18 changed C# source checksums match the actual Core and CoreTest portable
-PDBs, and four test-host Core assembly copies match. Local checks do not claim
-live SDK coverage or CI success and do not substitute for complete independent
-review.
+Fresh validation including the rooted-name and captured-descriptor corrections
+passed, each with observed exit 0: official pinned generator static checks,
+official unfiltered local test-library generation with no generated diffs, full
+generator-solution tests (8,209 passed, 963 default-stubbed Spector skips and two
+Windows-only skips), and emitter tests (422 passed and 2 skipped). All 1,092 locally
+executed focused IDs passed again in the full run; the same two Windows-only IDs
+were not executed in either run. The 19 changed C# source checksums match the
+actual Core and CoreTest portable PDBs, and four test-host Core assembly copies
+match. The collision fixture explicitly asserts zero plans and uses for ambiguous
+descriptors and four of each for its stable positive. After that test-only
+strengthening, targeted tests, pinned static checks, the full solution and current
+PDB checks passed again; generator and emitter inputs were unchanged. An extra
+full rerun had first aborted at an unchanged plugin-build test; a fresh-temp retry
+with per-run build-server reuse disabled passed, without establishing the earlier
+hang's root cause. Complete independent review of the stable whole checkpoint
+found no remaining findings. Windows runtime coverage remains unexecuted locally;
+these checks do not claim live SDK coverage or CI success.
 
 First-load comparisons separated actual cold-state changes from extra calls.
 Native caches and a lazy path dependency initialized at the same baseline phase;
@@ -174,5 +190,5 @@ Other operators and parent roles, casts, receiver barriers, sibling
 relational/generic ambiguity, separators and broader source inventory remain
 open. Conditional grouping remains Task12. Real-SDK opportunity, default/public
 rollout, broader Task05 completion and remaining allocation/hashing debt are
-separate work. Complete independent review, not passing test counts alone,
-still gates acceptance of this checkpoint.
+separate work. Validation and complete independent review establish acceptance
+only for this bounded checkpoint, not those broader tasks.

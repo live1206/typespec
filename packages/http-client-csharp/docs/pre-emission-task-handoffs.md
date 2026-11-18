@@ -13,9 +13,11 @@ validation and complete stable independent review. This bounded checkpoint is
 accepted; broader Task05 work and SDK adoption remain open.
 The [second checkpoint](./pre-emission-task05-checkpoint2.md) adds finite binary
 child-grouping choices with native child spellings. Its approved native-written
-file/source freshness trial and reproduced review corrections pass focused
-regressions and fresh broader validation; complete stable independent review
-remains pending.
+file/source freshness trial and reproduced review corrections pass local focused
+regressions and fresh broader validation, with two Windows-only controls not
+executed here. Complete stable independent review found no remaining findings;
+this bounded checkpoint is accepted. Broader Task05 work and SDK adoption remain
+open.
 
 | Task | Implementation handoff                                                                                | Authoritative contract                                                               |
 | ---- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |

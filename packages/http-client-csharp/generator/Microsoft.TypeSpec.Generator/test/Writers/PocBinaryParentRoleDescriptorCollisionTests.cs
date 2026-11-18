@@ -42,12 +42,14 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 CodeModelGenerator.Instance = generator;
                 var selected = new Dictionary<string, CodeFile>();
                 int uses = 0;
+                int plans = -1;
                 Exception? failure = null;
                 var pipeline = new CSharpGen
                 {
                     PocPreparationObserved = prepared =>
                     {
                         Assert.That(prepared, Is.Not.Null);
+                        plans = prepared!.PocGroupingCount;
                         TestContext.WriteLine($"DESCRIPTOR-PREP collide={collide}; refreshed={state.Refreshed}; cachedSecond={second.CachedRelativeFilePath}; liveSecondBacking={second.PathValue}; plans={prepared!.PocGroupingCount}");
                     },
                     PocRawFileObserved = (prepared, _, _) => uses = prepared!.PocGroupingUses,
@@ -61,8 +63,8 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 Assert.That(second.PathValue, Is.EqualTo("Second.cs"), "Actual native output paths remain distinct");
                 Assert.That(failure, Is.Null, "Ambiguous newly captured physical descriptors must retain, not abort generation");
                 Assert.That(selected.Keys, Is.EquivalentTo(new[] { "First.cs", "Second.cs" }));
-                if (!collide)
-                { Assert.That(uses, Is.EqualTo(4)); }
+                Assert.That(plans, Is.EqualTo(collide ? 0 : 4));
+                Assert.That(uses, Is.EqualTo(collide ? 0 : 4));
                 foreach (var file in selected.Values)
                 {
                     Assert.That(file.Content, Does.Contain(collide ? "return ((x + y) == z);" : "return x + y == z;"));

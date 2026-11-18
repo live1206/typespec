@@ -54,9 +54,10 @@ the isolated trial is full task or SDK adoption evidence.
 [Checkpoint 2](./pre-emission-task05-checkpoint2.md) implements a bounded set of
 binary operand edges and nested chains using unchanged native child spellings.
 The approved actual-native-written-file/source freshness trial and reproduced
-review corrections, including actual compiler-host output-root binding, pass
-focused regressions and fresh broader validation; complete stable independent
-review remains pending. New plans use current source/formal and actual output evidence
+review corrections pass local focused regressions and fresh broader validation
+(two Windows-only controls are not executed here). Complete stable independent
+review found no remaining findings; this bounded checkpoint is accepted.
+New plans use current source/formal and actual output evidence
 instead of additional live global path/serialization queries. The baseline
 field/body/direct-equality behavior is unchanged. This does not require full Task04 completion;
 composition with Task04 spelling plans remains a separate checkpoint.

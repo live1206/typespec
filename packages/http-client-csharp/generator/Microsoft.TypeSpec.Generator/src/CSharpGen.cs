@@ -137,7 +137,7 @@ namespace Microsoft.TypeSpec.Generator
                 // This one finalized-provider lifetime owns both field spellings and non-emitting
                 // executable occurrence snapshots. The standard writer consumes them in its one pass.
                 using var preparedFields = PreparedFieldTypes.CreateForGeneration(
-                    CodeModelGenerator.Instance, output.TypeProviders, referenceMapSession.ShouldWriteProvider);
+                    CodeModelGenerator.Instance, output.TypeProviders, referenceMapSession.ShouldWriteProvider, outputPath);
                 PocPreparationObserved?.Invoke(preparedFields);
 
                 // Keep the existing streaming path when preparation is disabled.
@@ -182,23 +182,27 @@ namespace Microsoft.TypeSpec.Generator
                     var fieldsCanCommit = preparedFields is not null && preparedFields.CanCommit() && PreparedFieldTypes.IsPolicyEnabled(generator);
                     var hasBodyNames = stagedFiles.Any(file => file.PreparedBodyNameCount != 0);
                     var hasGrouping = stagedFiles.Any(file => file.PreparedGroupingCount != 0);
+                    var hasLegacyGrouping = stagedFiles.Any(file => file.PreparedGroupingCount != 0 && preparedFields?.IsNativePocFile(file) != true);
+                    var hasNativeGrouping = stagedFiles.Any(file => file.PreparedGroupingCount != 0 && preparedFields?.IsNativePocFile(file) == true);
                     var bodyChoices = stagedFiles.Select(file => (File: file,
                         BodyAllowed: hasBodyNames && preparedFields?.CanCommitBodyNames(file) == true,
                         GroupingAllowed: file.PreparedGroupingCount != 0 && preparedFields?.CanCommitPocGrouping(file) == true)).ToArray();
                     if (PocGroupingDecisionObserved is { } observeDecision)
                     {
-                        foreach (var choice in bodyChoices) { observeDecision(choice.File, choice.GroupingAllowed); }
+                        foreach (var choice in bodyChoices)
+                        { observeDecision(choice.File, choice.GroupingAllowed); }
                     }
-                    if (hasGrouping && fieldsCanCommit)
+                    if (hasLegacyGrouping && fieldsCanCommit)
                     {
                         fieldsCanCommit = preparedFields!.FieldDataIsCurrentWithoutCallbacks() &&
                             preparedFields.CanCommit() && PreparedFieldTypes.IsPolicyEnabled(generator);
                     }
                     // Preserve the established field-only path when no body name
                     // was actually emitted; unused new facts add no veto/callbacks.
-                    var sharedCanCommit = hasBodyNames || hasGrouping
+                    var sharedCanCommit = hasBodyNames || hasLegacyGrouping
                         ? preparedFields is not null && preparedFields.CanCommitSharedSnapshot() && PreparedFieldTypes.IsPolicyEnabled(generator)
                         : fieldsCanCommit;
+                    bool residualReady = true;
                     if (compilerBuild is not null)
                     {
                         var residualWorkspace = await compilerBuild.TryCreateResidualWorkspaceAsync(generator);
@@ -206,13 +210,18 @@ namespace Microsoft.TypeSpec.Generator
                         {
                             generatedCodeWorkspace = residualWorkspace;
                         }
-                        sharedCanCommit &= residualWorkspace is not null;
+                        residualReady = residualWorkspace is not null;
+                        sharedCanCommit &= residualReady;
                     }
-                    if (hasBodyNames || hasGrouping)
+                    // New source callbacks precede the legacy final checks, so
+                    // they cannot create a new unvalidated legacy callback window.
+                    var nativeGroupingCanCommit = hasNativeGrouping && residualReady &&
+                        preparedFields?.CanCommitNativePocGrouping(generator, output, stagedFiles) == true;
+                    if (hasBodyNames || hasLegacyGrouping)
                     {
                         sharedCanCommit &= preparedFields is not null && preparedFields.CanCommitSharedSnapshot() && PreparedFieldTypes.IsPolicyEnabled(generator);
                     }
-                    if (hasGrouping)
+                    if (hasLegacyGrouping)
                     {
                         sharedCanCommit &= preparedFields?.SharedSelectionDataIsCurrentWithoutCallbacks(referenceMapSession, generator, output) == true;
                     }
@@ -220,10 +229,12 @@ namespace Microsoft.TypeSpec.Generator
                     // veto pass and selection. Materialize every selected file
                     // before observation/workspace publication can run anything.
                     var selectedFiles = bodyChoices.Select(choice => choice.File.SelectPreparedForms(
-                        sharedCanCommit && fieldsCanCommit && (!hasGrouping || preparedFields?.FieldDataIsCurrentWithoutCallbacks() == true),
+                        sharedCanCommit && fieldsCanCommit && (!hasGrouping || preparedFields?.FieldDataIsCurrentWithoutCallbacks() == true) &&
+                            (!hasNativeGrouping || preparedFields?.SharedSelectionDataIsCurrentWithoutCallbacks(referenceMapSession, generator, output) == true),
                         sharedCanCommit && (!hasBodyNames || choice.BodyAllowed),
-                        sharedCanCommit && choice.GroupingAllowed &&
-                            preparedFields?.SealPocGroupingWithoutCallbacks(choice.File) == true)).ToArray();
+                        choice.GroupingAllowed && (preparedFields?.IsNativePocFile(choice.File) == true
+                            ? nativeGroupingCanCommit && preparedFields.SealNativePocGroupingWithoutCallbacks(choice.File, generator, output, stagedFiles)
+                            : sharedCanCommit && preparedFields?.SealPocGroupingWithoutCallbacks(choice.File) == true))).ToArray();
                     foreach (var selected in selectedFiles)
                     {
                         PocSelectedFileObserved?.Invoke(selected);

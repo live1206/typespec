@@ -62,12 +62,14 @@ namespace Microsoft.TypeSpec.Generator.Providers
         }
 
         internal static PreparedFieldTypes? CreateForGeneration(CodeModelGenerator generator, TypeProvider[] providers,
-            Func<TypeProvider, bool> shouldWrite) => CreateForGeneration(generator, (IEnumerable<TypeProvider>)providers, shouldWrite);
+            Func<TypeProvider, bool> shouldWrite, string? actualOutputDirectory = null) =>
+            CreateForGeneration(generator, (IEnumerable<TypeProvider>)providers, shouldWrite, actualOutputDirectory);
 
         internal static PreparedFieldTypes? CreateForGeneration(
             CodeModelGenerator generator,
             IEnumerable<TypeProvider> providers,
-            Func<TypeProvider, bool> shouldWrite)
+            Func<TypeProvider, bool> shouldWrite,
+            string? actualOutputDirectory = null)
         {
             if (!IsPolicyEnabled(generator))
             {
@@ -89,6 +91,9 @@ namespace Microsoft.TypeSpec.Generator.Providers
             result._sourceInputs = sourceInputs;
             result._sourceModel = sourceModel;
             result._sourceOutputDirectory = outputDirectory;
+            // Compiler inputs retain their original root; native output can be
+            // redirected to a separate invocation-owned isolated directory.
+            result._nativePocOutputDirectory = actualOutputDirectory ?? outputDirectory;
             if ((System.Threading.Volatile.Read(ref result._valid) == 0 && !result.HasSourceFiles) || !sourceInputs.IsCurrentFor(outputDirectory))
             {
                 result.Dispose();
@@ -304,24 +309,29 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 rootStates.All(root => root.Written && root.SerializationWritten.All(written => written)));
 
             result.CaptureBodyNames();
-            if (pocGrouping) { result.CapturePocGrouping(); }
-            if (result._owners.Count == 0 && !result.HasBodyNameCandidates && result.PocGroupingCount == 0)
+            if (pocGrouping)
+            { result.CapturePocGrouping(); }
+            bool legacySnapshot = result._owners.Count != 0 || result.HasBodyNameCandidates || result.HasLegacyPocPlans;
+            if (!legacySnapshot && !result.HasNativePocPlans)
+            { return result; }
+
+            if (legacySnapshot)
             {
-                return result;
+                result._roots = roots;
+                result._outputRoot = outputRoot;
+                result._rootSnapshot = rootSnapshot;
+                result._rootStates = rootStates.ToArray();
+                result._providerStates = all.Select(provider => new ProviderState(provider, provider.Type,
+                    provider.Type.Name, provider.Type.Namespace, provider.Type.Arguments.Count,
+                    provider.DeclaringTypeProvider, provider.Type.DeclaringType, provider.NestedTypes.ToArray(), provider.RelativeFilePath)).ToArray();
+                result._shouldWrite = shouldWrite;
+
+                // The snapshot is valid only while all participating providers remain
+                // unchanged. A competing session or any supported mutation fails closed.
+                System.Threading.Volatile.Write(ref result._valid, 1);
             }
-
-            result._roots = roots;
-            result._outputRoot = outputRoot;
-            result._rootSnapshot = rootSnapshot;
-            result._rootStates = rootStates.ToArray();
-            result._providerStates = all.Select(provider => new ProviderState(provider, provider.Type,
-                provider.Type.Name, provider.Type.Namespace, provider.Type.Arguments.Count,
-                provider.DeclaringTypeProvider, provider.Type.DeclaringType, provider.NestedTypes.ToArray(), provider.RelativeFilePath)).ToArray();
-            result._shouldWrite = shouldWrite;
-
-            // The snapshot is valid only while all participating providers remain
-            // unchanged. A competing session or any supported mutation fails closed.
-            System.Threading.Volatile.Write(ref result._valid, 1);
+            // Source-only grouping shares the existing attachment/disposal lifetime,
+            // but does not activate the legacy global getter snapshot.
             foreach (var provider in all)
             {
                 if (!provider.TryAttachFieldTypePreparation(result))
@@ -610,7 +620,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
             // Task05 adds callbackful checks after the field decision. Preserve
             // the initial host observation, and close its path-callback window
             // only when grouping was actually used by the native writer.
-            return _pocUsedByFile.Count == 0 || SourceInputsAreCurrent();
+            return !HasLegacyPocUses || SourceInputsAreCurrent();
         }
 
         internal static bool HasUnstablePath(string path)
@@ -633,12 +643,24 @@ namespace Microsoft.TypeSpec.Generator.Providers
             return false;
         }
 
-        private bool SourceInputsAreCurrent() => _sourceInputs is null ||
-            _sourceModel is not null && ReferenceEquals(_sourceModel.PreEmissionSourceInputs, _sourceInputs) &&
-            _sourceOutputDirectory is not null && _sourceInputs.IsCurrentFor(_sourceOutputDirectory) &&
-            // The truthful host check can run user code. Retain the original
-            // identity check and reject identity expiry during that callback.
-            ReferenceEquals(_sourceModel.PreEmissionSourceInputs, _sourceInputs);
+        private bool SourceInputsAreCurrent()
+        {
+            bool current = _sourceInputs is null ||
+                _sourceModel is not null && ReferenceEquals(_sourceModel.PreEmissionSourceInputs, _sourceInputs) &&
+                _sourceOutputDirectory is not null && _sourceInputs.IsCurrentFor(_sourceOutputDirectory) &&
+                // The truthful host check can run user code. Retain both identities.
+                ReferenceEquals(_sourceModel.PreEmissionSourceInputs, _sourceInputs);
+            if (!current)
+            {
+                _nativePocInvalid = true;
+                if (HasNativePocPlans)
+                {
+                    Invalidate();
+                    System.Threading.Interlocked.Exchange(ref _sharedSnapshotStale, 1);
+                }
+            }
+            return current;
+        }
 
         private static bool ShouldWriteRoot(TypeProvider provider, Func<TypeProvider, bool> shouldWrite) =>
             shouldWrite(provider) && (provider is not ModelFactoryProvider || provider.Methods.Count != 0);

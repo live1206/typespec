@@ -75,15 +75,20 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             MethodProvider caller, MethodProvider callee, PreparedOrdinaryArgumentGrouping argumentGrouping) =>
             TryCaptureCore(owner, compilation, false, ordinaryArgumentGroup: (caller, callee, argumentGrouping));
 
+        internal static PreparedGeneratedMethodGroup? TryCaptureForLambdaGrouping(TypeProvider owner, CSharpCompilation compilation,
+            MethodProvider caller, MethodProvider callee, PreparedLambdaCaptureCast profile, INamedTypeSymbol func) =>
+            TryCaptureCore(owner, compilation, false, lambdaGroup: (caller, callee, profile, func));
+
         private static PreparedGeneratedMethodGroup? TryCaptureCore(TypeProvider owner, CSharpCompilation compilation, bool forImports,
             Func<CSharpType, PreparedGeneratedTypeHeader?>? resolveSignatureHeader = null,
-            (MethodProvider Caller, MethodProvider Callee, PreparedOrdinaryArgumentGrouping Profile)? ordinaryArgumentGroup = null)
+            (MethodProvider Caller, MethodProvider Callee, PreparedOrdinaryArgumentGrouping Profile)? ordinaryArgumentGroup = null,
+            (MethodProvider Caller, MethodProvider Callee, PreparedLambdaCaptureCast Profile, INamedTypeSymbol Func)? lambdaGroup = null)
         {
             var generator = CodeModelGenerator.Instance;
             if (!PreparedSourceFile.HasCommentOnlyLicenseHeader(generator.LicenseHeader)) { return null; }
             var typeFactory = AuditedTypeFactory(generator);
             if (typeFactory is null) { return null; }
-            bool nativeWrittenIdentity = ordinaryArgumentGroup.HasValue;
+            bool nativeWrittenIdentity = ordinaryArgumentGroup.HasValue || lambdaGroup.HasValue;
             var header = nativeWrittenIdentity ? PreparedGeneratedTypeHeader.TryCaptureForNativeWrittenGrouping(owner) : PreparedGeneratedTypeHeader.TryCapture(owner);
             if (header is null || owner.PartialDeclarationOwner is not null || !owner.PartialDeclarationParts.IsEmpty ||
                 !ContractCollections.TryCopy(owner.CachedMethods, out var methods) ||
@@ -111,10 +116,18 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                     !ContractCollections.TryCopy(signature.Parameters, out var parameters) ||
                     signature.ReturnType is not null && ScalarType(signature.ReturnType, compilation) is null && genericSignature?.Owns(signature.ReturnType) != true ||
                     parameters.Any(p => p is null || !HasNoLinkedSuppressionInputs(p))) { return null; }
+                bool nativeLambdaCallee = lambdaGroup is { } lambdaCallee && ReferenceEquals(method, lambdaCallee.Callee) &&
+                    PreparedLambdaCaptureCast.MatchesGeneratedCallee(method);
+                bool nativeLambdaCaller = lambdaGroup is { } lambdaCaller && ReferenceEquals(method, lambdaCaller.Caller) &&
+                    ReferenceEquals(method.BodyExpression, lambdaCaller.Profile.Call) && lambdaCaller.Profile.IsListCurrent &&
+                    PreparedLambdaCaptureCast.HasGeneratedSignature(signature);
+                // Do not generalize the scalar or legacy signature family.
+                ITypeSymbol? FormalType(ParameterProvider parameter) => nativeLambdaCallee && ReferenceEquals(parameter, parameters[0])
+                    ? lambdaGroup!.Value.Func : ScalarType(parameter.Type, compilation);
                 var selectable = true;
                 foreach (var parameter in parameters)
                 {
-                    if (ScalarType(parameter.Type, compilation) is not null || genericSignature?.Owns(parameter.Type) == true) { continue; }
+                    if (FormalType(parameter) is not null || genericSignature?.Owns(parameter.Type) == true) { continue; }
                     // A canonical generated reference in a caller's written
                     // signature is not a native scalar callee formal. Keep its
                     // declaration in the inventory, but never silently drop it
@@ -152,14 +165,15 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                     argumentCallee.Profile.MatchesCallee(method);
                 bool nativeArgumentCaller = ordinaryArgumentGroup is { } argumentCaller && ReferenceEquals(method, argumentCaller.Caller) &&
                     ReferenceEquals(method.BodyExpression, argumentCaller.Profile.Call) && argumentCaller.Profile.IsOriginalListCurrent && selectable;
-                var owningAccessOnly = privateOrdinary || nativeArgumentCallee ||
+                var owningAccessOnly = privateOrdinary || nativeArgumentCallee || nativeLambdaCallee ||
                     signature.Modifiers == MethodSignatureModifiers.Private && genericSignature?.HasTypeOfParameterBody == true;
                 if (privateOrdinary && forImports || !owningAccessOnly && ((signature.Modifiers & ~allowed) != 0 || !signature.Modifiers.HasFlag(MethodSignatureModifiers.Public)) ||
                     !Identifier(signature.Name) || !SyntaxFacts.IsValidIdentifier(signature.Name) || SyntaxFacts.GetKeywordKind(signature.Name) != SyntaxKind.None || signature.NonDocumentComment is not null || signature.ExplicitInterface is not null ||
                     signature.HasUnsupportedBaseContract ||
                     signature.GenericParameterConstraints is not null && (!ContractCollections.TryCopy(signature.GenericParameterConstraints, out var constraints) || !constraints.IsEmpty) ||
                     !ContractCollections.TryCopy(signature.Attributes, out var attributes) || !attributes.IsEmpty ||
-                    !nativeArgumentCaller && !nativeArgumentCallee && !SafeMethodBody(method, forImports || !selectable, genericSignature)) { return null; }
+                    !nativeArgumentCaller && !nativeArgumentCallee && !nativeLambdaCallee && !(nativeLambdaCaller && selectable) &&
+                    !SafeMethodBody(method, forImports || !selectable, genericSignature)) { return null; }
                 var returns = ScalarType(signature.ReturnType, compilation);
                 if (returns is null && (signature.ReturnType is null || genericSignature?.Owns(signature.ReturnType) != true)) { return null; }
                 var formalTypes = ImmutableArray.CreateBuilder<ITypeSymbol>();
@@ -170,9 +184,10 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                         !ContractCollections.TryCopy(parameter.Attributes, out var parameterAttributes) ||
                         parameterAttributes.Any(a => !SafeObserverAttribute(a, compilation))) { return null; }
                     if (parameter.EmittedDeclarationState.Name != parameter.Name) { return null; }
-                    if (ScalarType(parameter.Type, compilation) is { } formalType)
+                    if (FormalType(parameter) is { } formalType)
                     {
-                        if (!SafeDefault(parameter.DefaultValue, formalType)) { return null; }
+                        if (!SafeDefault(parameter.DefaultValue, formalType) && !(nativeLambdaCallee && ReferenceEquals(parameter, parameters[1]) &&
+                            parameter.DefaultValue is KeywordExpression { Keyword: "null", Expression: null })) { return null; }
                         formalTypes.Add(formalType);
                     }
                     else if (parameter.DefaultValue is not null || !parameterAttributes.IsEmpty) { return null; }

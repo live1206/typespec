@@ -128,6 +128,15 @@ missing-target failure. Fresh broad validation also passes, and complete
 independent review found no outstanding findings. This bounded checkpoint is
 accepted.
 
+[Checkpoint 12](./pre-emission-task05-checkpoint12.md) prepares a cast's outer
+pair inside the exact native lambda of two bound explicit caller-expression
+cases, one generated method and one loaded constructor. Omitted captures retain.
+All 21 new cases and prior focused outcomes pass after preserving the native
+malformed-formal failure. Fresh broad validation also passes, and complete
+independent review found no verified production findings. This bounded checkpoint
+is accepted and separate from
+Task12 conditional preprocessor correspondence.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

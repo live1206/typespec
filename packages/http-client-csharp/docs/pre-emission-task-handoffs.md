@@ -69,6 +69,13 @@ with the native missing-target failure preserved. Fresh broad validation also
 passes; complete independent review found no outstanding findings. This bounded
 checkpoint is accepted.
 
+The [twelfth checkpoint](./pre-emission-task05-checkpoint12.md) prepares native
+lambda cast pairs only when the exact selected method or constructor has an
+explicit caller-expression override. Focused validation passes after preserving
+the native malformed-formal failure. Fresh broad validation also passes, and
+complete independent review found no verified production findings. This bounded
+checkpoint is accepted.
+
 | Task | Implementation handoff                                                                                | Authoritative contract                                                               |
 | ---- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | 04   | [Ordinary type spellings](./pre-emission-task04-implementation-handoff.md)                            | [Task04](https://github.com/microsoft/typespec/issues/12454#issuecomment-6543541243) |

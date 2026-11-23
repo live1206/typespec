@@ -54,7 +54,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     CaptureUsedLocalInitializers(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     if (files.Length == 1)
                     {
-                        argumentCurrent = CaptureOrdinaryArguments(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                        argumentCurrent = CaptureOrdinaryArguments(file, nativeMethods, nativeSignatures, nativeNodes, choices) ??
+                            CaptureLambdaCast(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                         CaptureMetadataCastReturns(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                         CaptureSourceNumberCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     }
@@ -347,6 +348,107 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     : PreparedUsedLocalInitializer.IsInt(node.ResolveParameterType(variable)));
         }
 
+        private Func<bool>? CaptureLambdaCast(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            if (_sourceRootSnapshot.Length != 1 || _callLookupScopes.Length != 1 || !ReferenceEquals(_sourceRootSnapshot[0], file.FileOwner) ||
+                file.Compilation is not CSharpCompilation compilation || file.FileOwner.CachedType is not { } ownerType) { return null; }
+            var roots = file.Roots.Where(root => root.Producer is MethodProvider).ToArray();
+            if (roots.Length is not (1 or 2)) { return null; }
+            foreach (var root in roots)
+            {
+                var method = (MethodProvider)root.Producer;
+                PreparedSourceOccurrence? calleeRoot = null;
+                MethodProvider? callee = null;
+                IMethodSymbol? constructor = null;
+                INamedTypeSymbol? holder = null;
+                PreparedGeneratedMethodGroup? group = null;
+                PreparedLambdaCaptureCast profile;
+                if (roots.Length == 1)
+                {
+                    if (!PocSignature(method.Signature, objectReturnIntFormals: true) ||
+                        PreparedLambdaCaptureCast.TryGetConstructor(method) is not { } constructorProfile || !constructorProfile.IsListCurrent ||
+                        !NativePocContextDataIsCurrent() || PreparedLambdaCaptureCast.FindHolder(compilation, ownerType) is not { } holderType ||
+                        PreparedLambdaCaptureCast.FindConstructor(holderType, compilation) is not { } sourceConstructor) { continue; }
+                    profile = constructorProfile;
+                    holder = holderType;
+                    constructor = sourceConstructor;
+                }
+                else
+                {
+                    calleeRoot = roots.Single(other => !ReferenceEquals(other, root));
+                    callee = (MethodProvider)calleeRoot.Producer;
+                    if (PreparedLambdaCaptureCast.TryGetGeneratedMethod(method) is not { } methodProfile || !methodProfile.IsListCurrent ||
+                        !PreparedLambdaCaptureCast.MatchesGeneratedCallee(callee) || !NativePocContextDataIsCurrent() ||
+                        !GeneratedNameIsUncontested(compilation, ownerType.Namespace, ownerType.Name) ||
+                        PreparedLambdaCaptureCast.FindGlobalFunc(compilation, ownerType) is not { } func ||
+                        PreparedGeneratedMethodGroup.TryCaptureForLambdaGrouping(file.FileOwner, compilation, method, callee, methodProfile, func) is not { } methodsGroup)
+                    { continue; }
+                    profile = methodProfile;
+                    group = methodsGroup;
+                }
+                if (compilation.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)) { continue; }
+                if (CaptureChosenLambdaCast(root, method, calleeRoot, callee, constructor, holder, group, profile, compilation, ownerType,
+                    file.FileOwner, methods, signatures, nodes, choices) is { } current) { return current; }
+            }
+            return null;
+        }
+
+        private Func<bool>? CaptureChosenLambdaCast(PreparedSourceOccurrence root, MethodProvider method, PreparedSourceOccurrence? calleeRoot,
+            MethodProvider? callee, IMethodSymbol? constructor, INamedTypeSymbol? holder, PreparedGeneratedMethodGroup? group,
+            PreparedLambdaCaptureCast profile, CSharpCompilation compilation, CSharpType ownerType, TypeProvider owner,
+            HashSet<MethodProvider> methods, HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            string callPath = root.Id.EdgePath + "/expression-body";
+            var call = root.Children.SingleOrDefault(child => ReferenceEquals(child.Producer, profile.Call) && child.Id.EdgePath == callPath);
+            if (call is null || call.IsOpaque || call.Children.Length != profile.Arguments.Length ||
+                call.Children.Where((child, index) => child.Id.EdgePath != callPath + $"/argument[{index}]" || child.IsOpaque ||
+                    !ReferenceEquals(child.Producer, profile.Arguments[index])).Any()) { return null; }
+            var castPaths = call.Children[0].DescendantsAndSelf().Where(node => ReferenceEquals(node.Producer, profile.Cast)).ToArray();
+            if (castPaths.Length != 1 || castPaths[0].Id.EdgePath != callPath + "/argument[0]/block-body/expression/value" ||
+                castPaths[0].IsOpaque || castPaths[0].Children.Length != 1) { return null; }
+            var cast = castPaths[0];
+            var operand = cast.Children[0];
+            if (operand.IsOpaque || operand.Id.EdgePath != cast.Id.EdgePath + "/value" ||
+                operand.Producer is not VariableExpression variable || !ReferenceEquals(variable, profile.Cast.Inner) ||
+                !PreparedUsedLocalInitializer.IsInt(operand.ResolveParameterType(variable))) { return null; }
+
+            var intType = compilation.GetSpecialType(SpecialType.System_Int32);
+            if (holder is not null)
+            {
+                var result = compilation.ClassifyConversion(holder, compilation.GetSpecialType(SpecialType.System_Object));
+                if (!result.IsImplicit || !result.IsReference || result.IsUserDefined) { return null; }
+            }
+            INamedTypeSymbol? ResolveType(CSharpType type) => profile.Call is NewInstanceExpression creation && ReferenceEquals(type, creation.Type) ? holder :
+                PreparedUsedLocalInitializer.IsInt(type) && intType.TypeKind != TypeKind.Error ? intType : null;
+            var proof = PreparedCallProofs.Capture(call.Id, profile.Call, compilation, ResolveType, NativePocContextDataIsCurrent,
+                call.IsCurrent, children: call.Children,
+                resolveGeneratedGroup: type => ReferenceEquals(type, ownerType) && ReferenceEquals(type, owner.CachedType) && group?.IsCurrent == true ? group : null,
+                resolveOwningType: invocation => group is not null && ReferenceEquals(invocation, profile.Call) &&
+                    ReferenceEquals(method.BodyExpression, invocation) && ReferenceEquals(method.EnclosingType, owner) ? owner.CachedType : null);
+            if (proof.Selection is not { } selection || (constructor is not null
+                    ? !SymbolEqualityComparer.Default.Equals(selection.Contract.DeclarationSymbol, constructor)
+                    : callee is null || !ReferenceEquals(selection.GeneratedDeclaration?.Method, callee)) ||
+                !PreparedSourceObservations.TryCaptureDirectArgumentEdges(call, selection, out var captures) || !captures.IsEmpty ||
+                profile.Arguments.Length != 2) { return null; }
+
+            methods.Add(method);
+            signatures.Add(method.Signature);
+            nodes.Add(call.Id);
+            nodes.Add(call.Children[0].Id);
+            nodes.Add(cast.Id);
+            foreach (var node in call.Children[1].DescendantsAndSelf()) { nodes.Add(node.Id); }
+            choices.Add(cast);
+            if (calleeRoot is not null && callee is not null)
+            {
+                methods.Add(callee);
+                signatures.Add(callee.Signature);
+                foreach (var node in calleeRoot.Children.Where(child => ReferenceEquals(child.Producer, callee.Signature))
+                    .SelectMany(child => child.DescendantsAndSelf())) { nodes.Add(node.Id); }
+            }
+            return () => profile.IsListCurrent && selection.IsCurrent;
+        }
+
         private void CaptureMetadataCastReturns(PreparedSourceFile file, HashSet<MethodProvider> methods,
             HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
         {
@@ -381,7 +483,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 file.Compilation is not CSharpCompilation compilation || file.FileOwner.CachedType is not { } ownerType) { return; }
             foreach (var root in file.Roots)
             {
-                if (root.Producer is not MethodProvider method || !PocSignature(method.Signature, sourceNumberCast: true) ||
+                if (root.Producer is not MethodProvider method || !PocSignature(method.Signature, objectReturnIntFormals: true) ||
                     PreparedSourceNumberCast.TryGet(method, compilation, ownerType) is not { } profile) { continue; }
                 var path = root.Id.EdgePath + (profile.IsStatement ? "/block-body/expression/value" : "/expression-body");
                 var matches = root.DescendantsAndSelf().Where(node => ReferenceEquals(node.Producer, profile.Cast)).ToArray();
@@ -537,15 +639,16 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private static bool PocNativeSignature(MethodSignature signature) =>
             PocSignature(signature, true) || PocSignature(signature, stringCoalesce: true) ||
             PreparedOrdinaryArgumentGrouping.HasCallerExpressionSignature(signature) || PocSignature(signature, primitiveCastParent: true) ||
-            PocSignature(signature, metadataCastReturn: true) || PocSignature(signature, sourceNumberCast: true);
+            PocSignature(signature, metadataCastReturn: true) || PocSignature(signature, objectReturnIntFormals: true) ||
+            Identifier(signature.Name) && PreparedLambdaCaptureCast.HasGeneratedSignature(signature);
 
         private static bool PocSignature(MethodSignatureBase signature, bool arithmeticReturn = false, bool stringCoalesce = false,
-            bool primitiveCastParent = false, bool metadataCastReturn = false, bool sourceNumberCast = false)
+            bool primitiveCastParent = false, bool metadataCastReturn = false, bool objectReturnIntFormals = false)
         {
             if (signature is not MethodSignature method || method.NonDocumentComment is not null || !Identifier(method.Name) ||
                 !(stringCoalesce ? PreparedStringCoalesce.IsString(method.ReturnType) :
                     primitiveCastParent ? PreparedPrimitiveCastParent.IsLong(method.ReturnType) || PocIntType(method.ReturnType) :
-                    metadataCastReturn || sourceNumberCast ? PreparedMetadataCastReturn.IsObject(method.ReturnType) :
+                    metadataCastReturn || objectReturnIntFormals ? PreparedMetadataCastReturn.IsObject(method.ReturnType) :
                     PocType(method.ReturnType, typeof(bool)) || arithmeticReturn && PocType(method.ReturnType, typeof(int))) ||
                 !ContractCollections.TryCopy(method.Attributes, out var attributes) || !attributes.IsEmpty || method.ExplicitInterface is not null ||
                 method.GenericArguments is not null || method.GenericParameterConstraints is not null ||
@@ -577,7 +680,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 BinaryOperatorExpression binary => nativeNodes.Contains(node.Id) ||
                     binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
                 CastExpression or MethodBodyStatements or IfStatement or LiteralExpression or AssignmentExpression or DeclarationExpression or
-                    InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression =>
+                    InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression or FuncExpression or NewInstanceExpression =>
                     nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) &&
                     (keyword.Keyword is "return" or "default" || keyword.Keyword == "null" && nativeNodes.Contains(node.Id)),

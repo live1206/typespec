@@ -56,6 +56,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     {
                         argumentCurrent = CaptureOrdinaryArguments(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                         CaptureMetadataCastReturns(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                        CaptureSourceNumberCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     }
                 }
                 var envelope = CapturePocEnvelope(file, nativeMethods, out var finalData);
@@ -373,6 +374,29 @@ namespace Microsoft.TypeSpec.Generator.Providers
             }
         }
 
+        private void CaptureSourceNumberCasts(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            if (_sourceRootSnapshot.Length != 1 || _callLookupScopes.Length != 1 || !ReferenceEquals(_sourceRootSnapshot[0], file.FileOwner) ||
+                file.Compilation is not CSharpCompilation compilation || file.FileOwner.CachedType is not { } ownerType) { return; }
+            foreach (var root in file.Roots)
+            {
+                if (root.Producer is not MethodProvider method || !PocSignature(method.Signature, sourceNumberCast: true) ||
+                    PreparedSourceNumberCast.TryGet(method, compilation, ownerType) is not { } profile) { continue; }
+                var path = root.Id.EdgePath + (profile.IsStatement ? "/block-body/expression/value" : "/expression-body");
+                var matches = root.DescendantsAndSelf().Where(node => ReferenceEquals(node.Producer, profile.Cast)).ToArray();
+                if (matches.Length != 1 || matches[0].Id.EdgePath != path || matches[0].IsOpaque || matches[0].Children.Length != 1) { continue; }
+                var child = matches[0].Children[0];
+                if (child.IsOpaque || !child.Children.IsEmpty || child.Id.EdgePath != path + "/value" ||
+                    child.Producer is not VariableExpression variable || !ReferenceEquals(variable, profile.Cast.Inner) ||
+                    !PreparedUsedLocalInitializer.IsInt(child.ResolveParameterType(variable))) { continue; }
+                methods.Add(method);
+                signatures.Add(method.Signature);
+                nodes.Add(matches[0].Id);
+                choices.Add(matches[0]);
+            }
+        }
+
         private static void CaptureDirectCasts(PreparedSourceFile file, HashSet<MethodProvider> methods,
             HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
         {
@@ -513,15 +537,15 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private static bool PocNativeSignature(MethodSignature signature) =>
             PocSignature(signature, true) || PocSignature(signature, stringCoalesce: true) ||
             PreparedOrdinaryArgumentGrouping.HasCallerExpressionSignature(signature) || PocSignature(signature, primitiveCastParent: true) ||
-            PocSignature(signature, metadataCastReturn: true);
+            PocSignature(signature, metadataCastReturn: true) || PocSignature(signature, sourceNumberCast: true);
 
         private static bool PocSignature(MethodSignatureBase signature, bool arithmeticReturn = false, bool stringCoalesce = false,
-            bool primitiveCastParent = false, bool metadataCastReturn = false)
+            bool primitiveCastParent = false, bool metadataCastReturn = false, bool sourceNumberCast = false)
         {
             if (signature is not MethodSignature method || method.NonDocumentComment is not null || !Identifier(method.Name) ||
                 !(stringCoalesce ? PreparedStringCoalesce.IsString(method.ReturnType) :
                     primitiveCastParent ? PreparedPrimitiveCastParent.IsLong(method.ReturnType) || PocIntType(method.ReturnType) :
-                    metadataCastReturn ? PreparedMetadataCastReturn.IsObject(method.ReturnType) :
+                    metadataCastReturn || sourceNumberCast ? PreparedMetadataCastReturn.IsObject(method.ReturnType) :
                     PocType(method.ReturnType, typeof(bool)) || arithmeticReturn && PocType(method.ReturnType, typeof(int))) ||
                 !ContractCollections.TryCopy(method.Attributes, out var attributes) || !attributes.IsEmpty || method.ExplicitInterface is not null ||
                 method.GenericArguments is not null || method.GenericParameterConstraints is not null ||

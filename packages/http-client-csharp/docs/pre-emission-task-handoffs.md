@@ -63,6 +63,12 @@ exact metadata cast return forms. Focused and fresh broad validation pass;
 complete independent review found no verified findings. This bounded checkpoint
 is accepted.
 
+The [eleventh checkpoint](./pre-emission-task05-checkpoint11.md) prepares the
+outer pair of a direct qualified source Number cast. Focused validation passes
+with the native missing-target failure preserved. Fresh broad validation also
+passes; complete independent review found no outstanding findings. This bounded
+checkpoint is accepted.
+
 | Task | Implementation handoff                                                                                | Authoritative contract                                                               |
 | ---- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | 04   | [Ordinary type spellings](./pre-emission-task04-implementation-handoff.md)                            | [Task04](https://github.com/microsoft/typespec/issues/12454#issuecomment-6543541243) |

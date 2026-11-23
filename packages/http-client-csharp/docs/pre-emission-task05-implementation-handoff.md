@@ -121,6 +121,13 @@ new cases, prior focused outcomes and fresh broad validation pass. Complete
 independent review found no verified findings; this bounded checkpoint is
 accepted. Wider metadata and source roles remain open.
 
+[Checkpoint 11](./pre-emission-task05-checkpoint11.md) prepares the outer pair of
+a direct qualified source `Fixtures.Number` cast without changing type spelling.
+All 18 new cases and prior focused outcomes pass after preserving the native
+missing-target failure. Fresh broad validation also passes, and complete
+independent review found no outstanding findings. This bounded checkpoint is
+accepted.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

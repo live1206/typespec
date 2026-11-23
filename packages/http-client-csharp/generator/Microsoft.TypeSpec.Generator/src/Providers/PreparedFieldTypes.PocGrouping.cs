@@ -48,6 +48,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 {
                     CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureDirectCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    CapturePrimitiveCastParents(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureIfConditions(file, nativeNodes, choices);
                     CaptureStringCoalescing(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureUsedLocalInitializers(file, nativeMethods, nativeSignatures, nativeNodes, choices);
@@ -275,6 +276,61 @@ namespace Microsoft.TypeSpec.Generator.Providers
             return null;
         }
 
+        private static void CapturePrimitiveCastParents(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            foreach (var methodRoot in file.Roots)
+            {
+                if (methodRoot.Producer is not MethodProvider method ||
+                    PreparedPrimitiveCastParent.TryGet(method, (object?)method.BodyStatements ?? method.BodyExpression!) is not { } profile ||
+                    !PocSignature(method.Signature, primitiveCastParent: true)) { continue; }
+                var root = Child(methodRoot, profile.Assignment is null ? "expression-body" : "block-body", profile.Root);
+                if (root is null) { continue; }
+                PreparedSourceOccurrence? cast;
+                var context = new List<PreparedSourceOccurrence> { root };
+                if (profile.Assignment is { } assignment && profile.Declaration is { } declaration)
+                {
+                    if (root.Children.Length != 2 || Child(root.Children[0], "expression", assignment) is not { } actualAssignment ||
+                        Child(actualAssignment, "target", declaration) is not { } actualDeclaration) { continue; }
+                    cast = Child(actualAssignment, "value", profile.Cast);
+                    context.Add(actualAssignment);
+                    context.Add(actualDeclaration);
+                }
+                else if (profile.Root is BinaryOperatorExpression binary)
+                {
+                    if (root.Children.Length != 2 || Child(root, "right", binary.Right) is not { } other || !IsBound(other, useBool: false))
+                    { continue; }
+                    cast = Child(root, "left", profile.Cast);
+                }
+                else if (profile.Root is TernaryConditionalExpression ternary)
+                {
+                    if (root.Children.Length != 3 || Child(root, "consequent", ternary.Consequent) is not { } consequent ||
+                        Child(root, "alternative", ternary.Alternative) is not { } alternative) { continue; }
+                    cast = Child(root, "condition", profile.Cast);
+                    context.AddRange(consequent.DescendantsAndSelf());
+                    context.AddRange(alternative.DescendantsAndSelf());
+                }
+                else { continue; }
+                if (cast is null || cast.Children.Length != 1 || Child(cast, "value", profile.Cast.Inner) is not { } operand ||
+                    !IsBound(operand, profile.Root is TernaryConditionalExpression)) { continue; }
+
+                methods.Add(method);
+                signatures.Add(method.Signature);
+                foreach (var node in context) { nodes.Add(node.Id); }
+                nodes.Add(cast.Id);
+                choices.Add(cast);
+            }
+
+            static PreparedSourceOccurrence? Child(PreparedSourceOccurrence parent, string role, object producer) =>
+                parent.Children.FirstOrDefault(node => !node.IsOpaque && ReferenceEquals(node.Producer, producer) &&
+                    node.Id.EdgePath == parent.Id.EdgePath + "/" + role);
+
+            static bool IsBound(PreparedSourceOccurrence node, bool useBool) => !node.IsOpaque && node.Children.IsEmpty &&
+                node.Producer is VariableExpression variable && (useBool
+                    ? PreparedPrimitiveCastParent.IsBool(node.ResolveParameterType(variable))
+                    : PreparedUsedLocalInitializer.IsInt(node.ResolveParameterType(variable)));
+        }
+
         private static void CaptureDirectCasts(PreparedSourceFile file, HashSet<MethodProvider> methods,
             HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
         {
@@ -414,12 +470,14 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         private static bool PocNativeSignature(MethodSignature signature) =>
             PocSignature(signature, true) || PocSignature(signature, stringCoalesce: true) ||
-            PreparedOrdinaryArgumentGrouping.HasCallerExpressionSignature(signature);
+            PreparedOrdinaryArgumentGrouping.HasCallerExpressionSignature(signature) || PocSignature(signature, primitiveCastParent: true);
 
-        private static bool PocSignature(MethodSignatureBase signature, bool arithmeticReturn = false, bool stringCoalesce = false)
+        private static bool PocSignature(MethodSignatureBase signature, bool arithmeticReturn = false, bool stringCoalesce = false,
+            bool primitiveCastParent = false)
         {
             if (signature is not MethodSignature method || method.NonDocumentComment is not null || !Identifier(method.Name) ||
                 !(stringCoalesce ? PreparedStringCoalesce.IsString(method.ReturnType) :
+                    primitiveCastParent ? PreparedPrimitiveCastParent.IsLong(method.ReturnType) || PocIntType(method.ReturnType) :
                     PocType(method.ReturnType, typeof(bool)) || arithmeticReturn && PocType(method.ReturnType, typeof(int))) ||
                 !ContractCollections.TryCopy(method.Attributes, out var attributes) || !attributes.IsEmpty || method.ExplicitInterface is not null ||
                 method.GenericArguments is not null || method.GenericParameterConstraints is not null ||
@@ -427,7 +485,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
             { return false; }
             const MethodSignatureModifiers allowed = MethodSignatureModifiers.Public | MethodSignatureModifiers.Private | MethodSignatureModifiers.Static;
             return (method.Modifiers & ~allowed) == 0 && parameters.All(p => p is not null && p.GetType() == typeof(ParameterProvider) &&
-                Identifier(p.Name) && (stringCoalesce ? PreparedStringCoalesce.IsString(p.Type) : PocType(p.Type, typeof(int))) &&
+                Identifier(p.Name) && (stringCoalesce ? PreparedStringCoalesce.IsString(p.Type) :
+                    PocType(p.Type, typeof(int)) || primitiveCastParent && PreparedPrimitiveCastParent.IsBool(p.Type)) &&
                 ContractCollections.TryCopy(p.Attributes, out var parameterAttributes) && parameterAttributes.IsEmpty && p.DefaultValue is null &&
                 !p.IsRef && !p.IsOut && !p.IsIn && !p.IsParams && p.Field is null && p.Property is null && p.InputParameter is null);
         }
@@ -450,7 +509,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 BinaryOperatorExpression binary => nativeNodes.Contains(node.Id) ||
                     binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
                 CastExpression or MethodBodyStatements or IfStatement or LiteralExpression or AssignmentExpression or DeclarationExpression or
-                    InvokeMethodExpression or AttributeStatement or ScopedApi =>
+                    InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression =>
                     nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) && keyword.Keyword is "return" or "default",
                 VariableExpression variable => variable.GetType() == typeof(VariableExpression),

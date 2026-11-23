@@ -64,10 +64,12 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 ? PreparedUsedLocalInitializer.TryGet(method, body, parameters) : null;
             var argumentGrouping = sourceCapture && !binaryParentRoles && coalesce is null && usedLocal is null && ownedBlockInvocation is null
                 ? PreparedOrdinaryArgumentGrouping.TryGet(method, body, parameters) : null;
+            var castParent = sourceCapture && !binaryParentRoles && coalesce is null && usedLocal is null && argumentGrouping is null && ownedBlockInvocation is null
+                ? PreparedPrimitiveCastParent.TryGet(method, body, parameters) : null;
             var region = ImmutableArray.CreateBuilder<(object, StructuredSourceShape)>();
             if (!CaptureRegion(body, region, new HashSet<object>(ReferenceEqualityComparer.Instance), 0,
                 allowThis: PreparedGeneratedMethodGroup.HasOwningRootCallProfile(method),
-                allowDeclarations: ownedBlockInvocation is not null, binaryParentRoles: binaryParentRoles, coalesce: coalesce, usedLocal: usedLocal, argumentGrouping: argumentGrouping)) { return null; }
+                allowDeclarations: ownedBlockInvocation is not null, binaryParentRoles: binaryParentRoles, coalesce: coalesce, usedLocal: usedLocal, argumentGrouping: argumentGrouping, castParent: castParent)) { return null; }
             var capturedRegion = region.ToImmutable();
             // Binary regions are a new source-capture family. Do not introduce
             // parameter-spelling callbacks where the old grammar returned no frame.
@@ -142,18 +144,18 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return current;
         }
 
-        private static bool CaptureRegion(object producer, ImmutableArray<(object, StructuredSourceShape)>.Builder region, HashSet<object> ancestors, int depth, bool returnPosition = false, bool allowThis = false, bool allowDeclarations = false, bool binaryParentRoles = false, PreparedStringCoalesce? coalesce = null, PreparedUsedLocalInitializer? usedLocal = null, PreparedOrdinaryArgumentGrouping? argumentGrouping = null)
+        private static bool CaptureRegion(object producer, ImmutableArray<(object, StructuredSourceShape)>.Builder region, HashSet<object> ancestors, int depth, bool returnPosition = false, bool allowThis = false, bool allowDeclarations = false, bool binaryParentRoles = false, PreparedStringCoalesce? coalesce = null, PreparedUsedLocalInitializer? usedLocal = null, PreparedOrdinaryArgumentGrouping? argumentGrouping = null, PreparedPrimitiveCastParent? castParent = null)
         {
-            if (depth >= 32 || (binaryParentRoles || coalesce.HasValue || usedLocal.HasValue || argumentGrouping.HasValue) &&
+            if (depth >= 32 || (binaryParentRoles || coalesce.HasValue || usedLocal.HasValue || argumentGrouping.HasValue || castParent.HasValue) &&
                 region.Count >= PreparedBinaryParentRoles.MaximumOccurrences || !ancestors.Add(producer) ||
-                argumentGrouping?.ContainsAddition(producer) != true && usedLocal?.Contains(producer) != true &&
+                argumentGrouping?.ContainsAddition(producer) != true && usedLocal?.Contains(producer) != true && castParent?.Contains(producer) != true &&
                 !Allowed(producer, returnPosition, allowThis, allowDeclarations, binaryParentRoles, coalesce)) { return false; }
             var shape = StructuredSourceShape.Capture(producer, true);
             if (shape.Opaque) { return false; }
             region.Add((producer, shape));
             foreach (var child in shape.Children)
             {
-                if (!CaptureRegion(child.Producer, region, ancestors, depth + 1, producer.GetType() == typeof(ExpressionStatement), allowThis, allowDeclarations, binaryParentRoles, coalesce, usedLocal, argumentGrouping)) { return false; }
+                if (!CaptureRegion(child.Producer, region, ancestors, depth + 1, producer.GetType() == typeof(ExpressionStatement), allowThis, allowDeclarations, binaryParentRoles, coalesce, usedLocal, argumentGrouping, castParent)) { return false; }
             }
             ancestors.Remove(producer);
             return true;

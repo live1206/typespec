@@ -102,6 +102,13 @@ corrections for retained metadata and formal shadowing. Fresh broad validation
 also passes; complete independent review found no outstanding findings. This
 bounded checkpoint is accepted. Wider call, cast and raw source roles remain open.
 
+[Checkpoint 8](./pre-emission-task05-checkpoint8.md) prepares the outer cast pair
+in three exact native roles: widening local initializer, left operand of
+widening addition, and a Boolean cast in an ordinary `?:` condition. All 24 new
+cases, prior focused outcomes and fresh broad validation pass. Complete
+independent review found no verified findings; this bounded checkpoint is
+accepted. Other cast and source roles remain open.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

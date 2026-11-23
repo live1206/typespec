@@ -115,6 +115,12 @@ identity-cast argument. All 23 new cases, prior focused outcomes and fresh
 broad validation pass. Complete independent review found no verified findings;
 this bounded checkpoint is accepted.
 
+[Checkpoint 10](./pre-emission-task05-checkpoint10.md) prepares the cast pair
+in four exact native metadata returns, without changing type spelling. All 22
+new cases, prior focused outcomes and fresh broad validation pass. Complete
+independent review found no verified findings; this bounded checkpoint is
+accepted. Wider metadata and source roles remain open.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

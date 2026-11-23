@@ -81,6 +81,13 @@ legacy admission remain unchanged. The shared input callback and the actual nati
 header configuration are checked without replaying getters or changing emitted headers. Other
 statement/call roles and the full accepted inventory remain open.
 
+[Checkpoint 5](./pre-emission-task05-checkpoint5.md) prepares only the grouped
+right child in a direct native string-coalescing return or arrow body. It never
+reassociates operands or removes the root's own pair. All 30 new cases and prior
+focused outcomes are verified and fresh broad validation passes. Complete
+independent review found no verified findings; the bounded checkpoint is accepted.
+Local initializers, arguments, and sibling lists remain open.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

@@ -57,10 +57,11 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             var ownedBlockInvocation = PreparedUnusedDefaultLocalCallBlock.GetInvocation(method);
             bool binaryParentRoles = sourceCapture && PreparedBinaryParentRoles.TryGetNewRoot(method, body, out _);
             if (binaryParentRoles && parameters.Any(parameter => parameter is null || !parameter.HasCachedEmittedDeclarationState)) { return null; }
+            var coalesce = sourceCapture && !binaryParentRoles ? PreparedStringCoalesce.TryGet(method, body, parameters) : null;
             var region = ImmutableArray.CreateBuilder<(object, StructuredSourceShape)>();
             if (!CaptureRegion(body, region, new HashSet<object>(ReferenceEqualityComparer.Instance), 0,
                 allowThis: PreparedGeneratedMethodGroup.HasOwningRootCallProfile(method),
-                allowDeclarations: ownedBlockInvocation is not null, binaryParentRoles: binaryParentRoles)) { return null; }
+                allowDeclarations: ownedBlockInvocation is not null, binaryParentRoles: binaryParentRoles, coalesce: coalesce)) { return null; }
             var capturedRegion = region.ToImmutable();
             // Binary regions are a new source-capture family. Do not introduce
             // parameter-spelling callbacks where the old grammar returned no frame.
@@ -135,22 +136,22 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return current;
         }
 
-        private static bool CaptureRegion(object producer, ImmutableArray<(object, StructuredSourceShape)>.Builder region, HashSet<object> ancestors, int depth, bool returnPosition = false, bool allowThis = false, bool allowDeclarations = false, bool binaryParentRoles = false)
+        private static bool CaptureRegion(object producer, ImmutableArray<(object, StructuredSourceShape)>.Builder region, HashSet<object> ancestors, int depth, bool returnPosition = false, bool allowThis = false, bool allowDeclarations = false, bool binaryParentRoles = false, PreparedStringCoalesce? coalesce = null)
         {
-            if (depth >= 32 || binaryParentRoles && region.Count >= PreparedBinaryParentRoles.MaximumOccurrences ||
-                !ancestors.Add(producer) || !Allowed(producer, returnPosition, allowThis, allowDeclarations, binaryParentRoles)) { return false; }
+            if (depth >= 32 || (binaryParentRoles || coalesce.HasValue) && region.Count >= PreparedBinaryParentRoles.MaximumOccurrences ||
+                !ancestors.Add(producer) || !Allowed(producer, returnPosition, allowThis, allowDeclarations, binaryParentRoles, coalesce)) { return false; }
             var shape = StructuredSourceShape.Capture(producer, true);
             if (shape.Opaque) { return false; }
             region.Add((producer, shape));
             foreach (var child in shape.Children)
             {
-                if (!CaptureRegion(child.Producer, region, ancestors, depth + 1, producer.GetType() == typeof(ExpressionStatement), allowThis, allowDeclarations, binaryParentRoles)) { return false; }
+                if (!CaptureRegion(child.Producer, region, ancestors, depth + 1, producer.GetType() == typeof(ExpressionStatement), allowThis, allowDeclarations, binaryParentRoles, coalesce)) { return false; }
             }
             ancestors.Remove(producer);
             return true;
         }
 
-        private static bool Allowed(object producer, bool returnPosition, bool allowThis, bool allowDeclarations, bool binaryParentRoles) => producer switch
+        private static bool Allowed(object producer, bool returnPosition, bool allowThis, bool allowDeclarations, bool binaryParentRoles, PreparedStringCoalesce? coalesce) => producer switch
         {
             ScopedApi wrapper => PreparedCallProofs.IsTransparentWrapper(wrapper),
             FuncExpression closure => ContractCollections.TryCopy(closure.Parameters, out var parameters) && parameters.Length == 0,
@@ -158,7 +159,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 (keyword.Expression is null && (keyword.Keyword is "null" or "default" || allowThis && keyword.Keyword == "this") ||
                     returnPosition && keyword.Keyword == "return" && keyword.Expression is not null),
             MemberExpression member => member.GetType() == typeof(MemberExpression) && member.Declaration is null,
-            BinaryOperatorExpression binary => binaryParentRoles && PreparedBinaryParentRoles.IsBinaryOperator(binary.Operator) ||
+            BinaryOperatorExpression binary => coalesce?.Contains(binary) == true ||
+                binaryParentRoles && PreparedBinaryParentRoles.IsBinaryOperator(binary.Operator) ||
                 binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
             _ => allowDeclarations && (producer.GetType() == typeof(DeclarationExpression) || producer.GetType() == typeof(AssignmentExpression)) ||
                 producer.GetType() == typeof(MethodBodyStatements) || producer.GetType() == typeof(ExpressionStatement) ||

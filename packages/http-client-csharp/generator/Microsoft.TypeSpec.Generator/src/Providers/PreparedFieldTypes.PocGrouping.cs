@@ -47,6 +47,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureDirectCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureIfConditions(file, nativeNodes, choices);
+                    CaptureStringCoalescing(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                 }
                 var envelope = CapturePocEnvelope(file, nativeMethods, out var finalData);
                 var nodes = file.Roots.Where(r => r.Id.RootRole != "type-documentation").SelectMany(r => r.DescendantsAndSelf()).ToArray();
@@ -127,6 +128,36 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 { nodes.Add(node.Id); }
                 choices.AddRange(omitted);
             }
+        }
+
+        private static void CaptureStringCoalescing(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            foreach (var methodRoot in file.Roots)
+            {
+                if (methodRoot.Producer is not MethodProvider method ||
+                    PreparedStringCoalesce.TryGet(method, (object?)method.BodyStatements ?? method.BodyExpression!) is not { } coalesce ||
+                    !PocSignature(method.Signature, stringCoalesce: true)) { continue; }
+                var matches = methodRoot.DescendantsAndSelf().Where(node => ReferenceEquals(node.Producer, coalesce.Root)).ToArray();
+                if (matches.Length != 1 || !HasChildren(matches[0], coalesce.Root)) { continue; }
+                var root = matches[0];
+                var right = root.Children[1];
+                if (!HasChildren(right, coalesce.Right) || !IsBoundString(root.Children[0]) ||
+                    !IsBoundString(right.Children[0]) || !IsBoundString(right.Children[1])) { continue; }
+
+                methods.Add(method);
+                signatures.Add(method.Signature);
+                nodes.Add(root.Id);
+                nodes.Add(right.Id);
+                choices.Add(right);
+            }
+
+            static bool HasChildren(PreparedSourceOccurrence node, BinaryOperatorExpression binary) =>
+                !node.IsOpaque && ReferenceEquals(node.Producer, binary) && node.Children.Length == 2 &&
+                ReferenceEquals(node.Children[0].Producer, binary.Left) && ReferenceEquals(node.Children[1].Producer, binary.Right);
+
+            static bool IsBoundString(PreparedSourceOccurrence node) => !node.IsOpaque && node.Children.IsEmpty &&
+                node.Producer is VariableExpression variable && PreparedStringCoalesce.IsString(node.ResolveParameterType(variable));
         }
 
         private static void CaptureDirectCasts(PreparedSourceFile file, HashSet<MethodProvider> methods,
@@ -230,7 +261,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 if (root.Producer is MethodProvider method)
                 {
                     if (method.GetType() != typeof(MethodProvider) ||
-                        !PocSignature(method.Signature) && !(nativeMethods.Contains(method) && PocSignature(method.Signature, true)))
+                        !PocSignature(method.Signature) && !(nativeMethods.Contains(method) && PocNativeSignature(method.Signature)))
                     { return null; }
                     var suppressions = method.Suppressions;
                     if (!ContractCollections.TryCopy(suppressions, out var ownedSuppressions) ||
@@ -266,17 +297,21 @@ namespace Microsoft.TypeSpec.Generator.Providers
             PreparedGeneratedTypeHeader.HasKnownNativeEmissionHeader(owner, fileWarnings) &&
             owner.CachedType is { } type && Identifier(type.Name);
 
-        private static bool PocSignature(MethodSignatureBase signature, bool arithmeticReturn = false)
+        private static bool PocNativeSignature(MethodSignature signature) =>
+            PocSignature(signature, true) || PocSignature(signature, stringCoalesce: true);
+
+        private static bool PocSignature(MethodSignatureBase signature, bool arithmeticReturn = false, bool stringCoalesce = false)
         {
             if (signature is not MethodSignature method || method.NonDocumentComment is not null || !Identifier(method.Name) ||
-                !(PocType(method.ReturnType, typeof(bool)) || arithmeticReturn && PocType(method.ReturnType, typeof(int))) ||
+                !(stringCoalesce ? PreparedStringCoalesce.IsString(method.ReturnType) :
+                    PocType(method.ReturnType, typeof(bool)) || arithmeticReturn && PocType(method.ReturnType, typeof(int))) ||
                 !ContractCollections.TryCopy(method.Attributes, out var attributes) || !attributes.IsEmpty || method.ExplicitInterface is not null ||
                 method.GenericArguments is not null || method.GenericParameterConstraints is not null ||
                 !ContractCollections.TryCopy(method.Parameters, out var parameters))
             { return false; }
             const MethodSignatureModifiers allowed = MethodSignatureModifiers.Public | MethodSignatureModifiers.Private | MethodSignatureModifiers.Static;
             return (method.Modifiers & ~allowed) == 0 && parameters.All(p => p is not null && p.GetType() == typeof(ParameterProvider) &&
-                Identifier(p.Name) && PocType(p.Type, typeof(int)) &&
+                Identifier(p.Name) && (stringCoalesce ? PreparedStringCoalesce.IsString(p.Type) : PocType(p.Type, typeof(int))) &&
                 ContractCollections.TryCopy(p.Attributes, out var parameterAttributes) && parameterAttributes.IsEmpty && p.DefaultValue is null &&
                 !p.IsRef && !p.IsOut && !p.IsIn && !p.IsParams && p.Field is null && p.Property is null && p.InputParameter is null);
         }
@@ -302,7 +337,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) && keyword.Keyword is "return" or "default",
                 VariableExpression variable => variable.GetType() == typeof(VariableExpression),
                 MethodProvider method => method.GetType() == typeof(MethodProvider),
-                MethodSignature signature => PocSignature(signature) || nativeSignatures.Contains(signature) && PocSignature(signature, true),
+                MethodSignature signature => PocSignature(signature) || nativeSignatures.Contains(signature) && PocNativeSignature(signature),
                 ParameterProvider parameter => parameter.GetType() == typeof(ParameterProvider),
                 PropertyProvider property => _pocSeeds.TryGetValue(property, out var projection) && projection.IsCurrent,
                 ExpressionPropertyBody body => body.GetType() == typeof(ExpressionPropertyBody),

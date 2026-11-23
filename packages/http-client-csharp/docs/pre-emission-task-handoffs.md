@@ -32,6 +32,11 @@ reproduced host- and provider-callback corrections. Fresh broader validation pas
 complete stable independent review found no remaining findings. This bounded
 checkpoint is accepted; broader Task05 coverage remains open.
 
+The [fifth checkpoint](./pre-emission-task05-checkpoint5.md) prepares only the
+right-child pair in a direct native string coalescing body, without reassociation.
+Focused and fresh broad validation pass; complete independent review found no
+verified findings. This bounded checkpoint is accepted.
+
 | Task | Implementation handoff                                                                                | Authoritative contract                                                               |
 | ---- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | 04   | [Ordinary type spellings](./pre-emission-task04-implementation-handoff.md)                            | [Task04](https://github.com/microsoft/typespec/issues/12454#issuecomment-6543541243) |

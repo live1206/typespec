@@ -48,6 +48,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     CaptureDirectCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureIfConditions(file, nativeNodes, choices);
                     CaptureStringCoalescing(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    CaptureUsedLocalInitializers(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                 }
                 var envelope = CapturePocEnvelope(file, nativeMethods, out var finalData);
                 var nodes = file.Roots.Where(r => r.Id.RootRole != "type-documentation").SelectMany(r => r.DescendantsAndSelf()).ToArray();
@@ -158,6 +159,45 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
             static bool IsBoundString(PreparedSourceOccurrence node) => !node.IsOpaque && node.Children.IsEmpty &&
                 node.Producer is VariableExpression variable && PreparedStringCoalesce.IsString(node.ResolveParameterType(variable));
+        }
+
+        private static void CaptureUsedLocalInitializers(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            foreach (var methodRoot in file.Roots)
+            {
+                if (methodRoot.Producer is not MethodProvider { BodyStatements: { } body } method ||
+                    PreparedUsedLocalInitializer.TryGet(method, body) is not { } profile ||
+                    !PocSignature(method.Signature, arithmeticReturn: true)) { continue; }
+
+                var matches = methodRoot.Children.Where(node => ReferenceEquals(node.Producer, profile.Block)).ToArray();
+                if (matches.Length != 1 || matches[0].IsOpaque || matches[0].Children.Length != 2) { continue; }
+                var block = matches[0];
+                var first = block.Children[0];
+                if (!HasChildren(first, profile.Assignment)) { continue; }
+                var assignment = first.Children[0];
+                if (!HasChildren(assignment, profile.Declaration, profile.Initializer)) { continue; }
+                var declaration = assignment.Children[0];
+                var initializer = assignment.Children[1];
+                if (!HasChildren(declaration, profile.Declaration.Variable) ||
+                    !HasChildren(initializer, profile.Initializer.Left, profile.Initializer.Right) ||
+                    !IsBoundInt(initializer.Children[0]) || !IsBoundInt(initializer.Children[1])) { continue; }
+
+                methods.Add(method);
+                signatures.Add(method.Signature);
+                nodes.Add(block.Id);
+                nodes.Add(assignment.Id);
+                nodes.Add(declaration.Id);
+                nodes.Add(initializer.Id);
+                choices.Add(initializer);
+            }
+
+            static bool HasChildren(PreparedSourceOccurrence node, params object[] producers) => !node.IsOpaque &&
+                node.Children.Length == producers.Length &&
+                node.Children.Select(child => child.Producer).SequenceEqual(producers, ReferenceEqualityComparer.Instance);
+
+            static bool IsBoundInt(PreparedSourceOccurrence node) => !node.IsOpaque && node.Children.IsEmpty &&
+                node.Producer is VariableExpression variable && PreparedUsedLocalInitializer.IsInt(node.ResolveParameterType(variable));
         }
 
         private static void CaptureDirectCasts(PreparedSourceFile file, HashSet<MethodProvider> methods,
@@ -333,7 +373,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
             {
                 BinaryOperatorExpression binary => nativeNodes.Contains(node.Id) ||
                     binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
-                CastExpression or MethodBodyStatements or IfStatement or LiteralExpression => nativeNodes.Contains(node.Id),
+                CastExpression or MethodBodyStatements or IfStatement or LiteralExpression or AssignmentExpression or DeclarationExpression =>
+                    nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) && keyword.Keyword is "return" or "default",
                 VariableExpression variable => variable.GetType() == typeof(VariableExpression),
                 MethodProvider method => method.GetType() == typeof(MethodProvider),

@@ -88,6 +88,12 @@ focused outcomes are verified and fresh broad validation passes. Complete
 independent review found no verified findings; the bounded checkpoint is accepted.
 Local initializers, arguments, and sibling lists remain open.
 
+[Checkpoint 6](./pre-emission-task05-checkpoint6.md) prepares only the native
+pair in a direct, used `int` local initializer, with the second statement returning
+that exact declaration. All 23 new cases and prior focused outcomes are verified,
+and fresh broad validation passes. Complete independent review found no verified
+findings; this bounded checkpoint is accepted. Arguments and sibling lists remain open.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

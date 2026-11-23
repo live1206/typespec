@@ -58,10 +58,12 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             bool binaryParentRoles = sourceCapture && PreparedBinaryParentRoles.TryGetNewRoot(method, body, out _);
             if (binaryParentRoles && parameters.Any(parameter => parameter is null || !parameter.HasCachedEmittedDeclarationState)) { return null; }
             var coalesce = sourceCapture && !binaryParentRoles ? PreparedStringCoalesce.TryGet(method, body, parameters) : null;
+            var usedLocal = sourceCapture && !binaryParentRoles && coalesce is null && ownedBlockInvocation is null
+                ? PreparedUsedLocalInitializer.TryGet(method, body, parameters) : null;
             var region = ImmutableArray.CreateBuilder<(object, StructuredSourceShape)>();
             if (!CaptureRegion(body, region, new HashSet<object>(ReferenceEqualityComparer.Instance), 0,
                 allowThis: PreparedGeneratedMethodGroup.HasOwningRootCallProfile(method),
-                allowDeclarations: ownedBlockInvocation is not null, binaryParentRoles: binaryParentRoles, coalesce: coalesce)) { return null; }
+                allowDeclarations: ownedBlockInvocation is not null, binaryParentRoles: binaryParentRoles, coalesce: coalesce, usedLocal: usedLocal)) { return null; }
             var capturedRegion = region.ToImmutable();
             // Binary regions are a new source-capture family. Do not introduce
             // parameter-spelling callbacks where the old grammar returned no frame.
@@ -136,16 +138,17 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return current;
         }
 
-        private static bool CaptureRegion(object producer, ImmutableArray<(object, StructuredSourceShape)>.Builder region, HashSet<object> ancestors, int depth, bool returnPosition = false, bool allowThis = false, bool allowDeclarations = false, bool binaryParentRoles = false, PreparedStringCoalesce? coalesce = null)
+        private static bool CaptureRegion(object producer, ImmutableArray<(object, StructuredSourceShape)>.Builder region, HashSet<object> ancestors, int depth, bool returnPosition = false, bool allowThis = false, bool allowDeclarations = false, bool binaryParentRoles = false, PreparedStringCoalesce? coalesce = null, PreparedUsedLocalInitializer? usedLocal = null)
         {
-            if (depth >= 32 || (binaryParentRoles || coalesce.HasValue) && region.Count >= PreparedBinaryParentRoles.MaximumOccurrences ||
-                !ancestors.Add(producer) || !Allowed(producer, returnPosition, allowThis, allowDeclarations, binaryParentRoles, coalesce)) { return false; }
+            if (depth >= 32 || (binaryParentRoles || coalesce.HasValue || usedLocal.HasValue) && region.Count >= PreparedBinaryParentRoles.MaximumOccurrences ||
+                !ancestors.Add(producer) || usedLocal?.Contains(producer) != true &&
+                !Allowed(producer, returnPosition, allowThis, allowDeclarations, binaryParentRoles, coalesce)) { return false; }
             var shape = StructuredSourceShape.Capture(producer, true);
             if (shape.Opaque) { return false; }
             region.Add((producer, shape));
             foreach (var child in shape.Children)
             {
-                if (!CaptureRegion(child.Producer, region, ancestors, depth + 1, producer.GetType() == typeof(ExpressionStatement), allowThis, allowDeclarations, binaryParentRoles, coalesce)) { return false; }
+                if (!CaptureRegion(child.Producer, region, ancestors, depth + 1, producer.GetType() == typeof(ExpressionStatement), allowThis, allowDeclarations, binaryParentRoles, coalesce, usedLocal)) { return false; }
             }
             ancestors.Remove(producer);
             return true;

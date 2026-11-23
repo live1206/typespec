@@ -71,6 +71,16 @@ is accepted. Native
 type spelling, one operand traversal and late qualified fallback are preserved.
 Other cast targets/operands, receivers and Task04 composition remain separate.
 
+[Checkpoint 4](./pre-emission-task05-checkpoint4.md) prepares exact native integer
+equality in the `if` condition of a closed Boolean method body. Its 91 new cases
+and all 1,156 prior focused outcomes pass, including the host- and provider-callback
+corrections. Fresh broader validation passes and complete stable independent review
+found no remaining findings; this bounded checkpoint is accepted. Required `if`
+delimiters, native body writing, parameter-frame capture and
+legacy admission remain unchanged. The shared input callback and the actual native
+header configuration are checked without replaying getters or changing emitted headers. Other
+statement/call roles and the full accepted inventory remain open.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

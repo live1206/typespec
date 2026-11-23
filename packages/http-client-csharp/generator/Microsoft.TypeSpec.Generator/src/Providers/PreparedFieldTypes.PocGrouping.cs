@@ -46,6 +46,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 {
                     CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureDirectCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    CaptureIfConditions(file, nativeNodes, choices);
                 }
                 var envelope = CapturePocEnvelope(file, nativeMethods, out var finalData);
                 var nodes = file.Roots.Where(r => r.Id.RootRole != "type-documentation").SelectMany(r => r.DescendantsAndSelf()).ToArray();
@@ -144,14 +145,14 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     _ => null
                 };
                 if (cast?.Inner is not VariableExpression variable || variable.GetType() != typeof(VariableExpression) ||
-                    !PocCastType(cast.Type) || !PocCastType(method.Signature.ReturnType) || method.Signature.HasUnsupportedBaseContract ||
+                    !PocIntType(cast.Type) || !PocIntType(method.Signature.ReturnType) || method.Signature.HasUnsupportedBaseContract ||
                     !PocSignature(method.Signature, true) ||
                     !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters) || parameters.Length != 1 ||
                     !parameters[0].HasCachedEmittedDeclarationState || parameters[0].HasUnsupportedParameterModifiers || parameters[0].HasUnsupportedDefaultValue)
                 { continue; }
                 var matches = methodRoot.DescendantsAndSelf().Where(node => ReferenceEquals(node.Producer, cast)).ToArray();
                 if (matches.Length != 1 || matches[0].Children.Length != 1 ||
-                    !ReferenceEquals(matches[0].Children[0].Producer, variable) || !PocCastType(matches[0].ResolveParameterType(variable)))
+                    !ReferenceEquals(matches[0].Children[0].Producer, variable) || !PocIntType(matches[0].ResolveParameterType(variable)))
                 { continue; }
                 methods.Add(method);
                 signatures.Add(method.Signature);
@@ -160,7 +161,56 @@ namespace Microsoft.TypeSpec.Generator.Providers
             }
         }
 
-        private static bool PocCastType(CSharpType? type) => PocType(type, typeof(int)) && !type!.IsLiteral && !type.HasUnionMetadata;
+        private static bool PocIntType(CSharpType? type) => PocType(type, typeof(int)) && !type!.IsLiteral && !type.HasUnionMetadata;
+
+        private static void CaptureIfConditions(PreparedSourceFile file, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            foreach (var methodRoot in file.Roots)
+            {
+                if (methodRoot.Producer is not MethodProvider method || method.GetType() != typeof(MethodProvider) ||
+                    !PocSignature(method.Signature) || method.Signature.HasUnsupportedBaseContract ||
+                    method.Signature.ReturnType!.IsLiteral || method.Signature.ReturnType.HasUnionMetadata ||
+                    !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters) || parameters.Length != 2 ||
+                    parameters.Any(parameter => !PocIntType(parameter.Type) || !parameter.HasCachedEmittedDeclarationState ||
+                        parameter.HasUnsupportedParameterModifiers || parameter.HasUnsupportedDefaultValue) ||
+                    method.BodyStatements is not MethodBodyStatements body || body.GetType() != typeof(MethodBodyStatements) ||
+                    !ContractCollections.TryCopy(body.Statements, out var statements) || statements.Length != 2 ||
+                    statements[0] is not IfStatement conditional ||
+                    !ContractCollections.TryCopy(conditional.SourceBody, out var whenTrue) || whenTrue.Length != 1 ||
+                    !PocReturnBoolean(whenTrue[0], true, out var trueLiteral) ||
+                    !PocReturnBoolean(statements[1], false, out var falseLiteral) ||
+                    conditional.Condition is not BinaryOperatorExpression { Operator: "==", AddParentheses: true,
+                        Left: VariableExpression left, Right: VariableExpression right } binary ||
+                    left.GetType() != typeof(VariableExpression) || right.GetType() != typeof(VariableExpression))
+                { continue; }
+                var occurrences = methodRoot.DescendantsAndSelf().ToArray();
+                var matches = occurrences.Where(node => ReferenceEquals(node.Producer, binary)).ToArray();
+                if (matches.Length != 1 || matches[0].IsOpaque || matches[0].Children.Length != 2 ||
+                    !ReferenceEquals(matches[0].Children[0].Producer, left) || !ReferenceEquals(matches[0].Children[1].Producer, right) ||
+                    !PocIntType(matches[0].ResolveParameterType(left)) || !PocIntType(matches[0].ResolveParameterType(right)))
+                { continue; }
+                // Admit only the four extra context occurrences in this closed
+                // native method, never these producer kinds in unrelated roots.
+                var context = occurrences.Where(node => ReferenceEquals(node.Producer, body) || ReferenceEquals(node.Producer, conditional) ||
+                    ReferenceEquals(node.Producer, trueLiteral) || ReferenceEquals(node.Producer, falseLiteral)).ToArray();
+                if (context.Length != 4 || context.Any(node => node.IsOpaque))
+                { continue; }
+                foreach (var node in context) { nodes.Add(node.Id); }
+                choices.Add(matches[0]);
+            }
+        }
+
+        private static bool PocReturnBoolean(MethodBodyStatement? statement, bool expected, out LiteralExpression literal)
+        {
+            literal = null!;
+            if (statement is not ExpressionStatement expression || expression.GetType() != typeof(ExpressionStatement) ||
+                expression.Expression is not KeywordExpression { Keyword: "return", Expression: LiteralExpression value } keyword ||
+                keyword.GetType() != typeof(KeywordExpression) || value.GetType() != typeof(LiteralExpression) ||
+                value.Literal is not bool actual || actual != expected)
+            { return false; }
+            literal = value;
+            return true;
+        }
 
         private Func<bool>? CapturePocEnvelope(PreparedSourceFile file, HashSet<MethodProvider> nativeMethods, out Func<bool>? finalData)
         {
@@ -248,7 +298,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
             {
                 BinaryOperatorExpression binary => nativeNodes.Contains(node.Id) ||
                     binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
-                CastExpression => nativeNodes.Contains(node.Id),
+                CastExpression or MethodBodyStatements or IfStatement or LiteralExpression => nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) && keyword.Keyword is "return" or "default",
                 VariableExpression variable => variable.GetType() == typeof(VariableExpression),
                 MethodProvider method => method.GetType() == typeof(MethodProvider),

@@ -20,6 +20,17 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private bool HasLegacyPocPlans => _pocGrouping.Values.Any(choice => !choice.File.UsesNativeWrittenIdentity);
         private bool HasLegacyPocUses => _pocUsedByFile.Values.Any(use => !use.File.UsesNativeWrittenIdentity);
 
+        internal void ObserveNativePocHeader(CodeModelGenerator generator)
+        {
+            // The actual header is part of the written source, including when
+            // a provider callback temporarily changed the generator before it.
+            // Keep this veto on the native-written inventory, not legacy choices.
+            if (HasNativePocPlans && !ReferenceEquals(_sourceConfiguration, generator.Configuration))
+            {
+                _nativePocInvalid = true;
+            }
+        }
+
         internal bool IsNativePocFile(CodeFile output) => output.SourceConsumption is { } receipt &&
             _nativePocFiles.Any(file => file.Generation == receipt.Generation && file.FilePath == receipt.File);
 

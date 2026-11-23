@@ -25,6 +25,13 @@ and all prior outcomes pass after the unsupported-metadata correction, as does
 fresh broader validation. Renewed complete stable independent review found no
 remaining findings; this bounded checkpoint is accepted. Current WSL is the agreed validation domain.
 
+The [fourth checkpoint](./pre-emission-task05-checkpoint4.md) prepares native `if`
+condition equality in a closed Boolean method profile, retaining the statement's
+required delimiters. Focused cases and all prior outcomes pass after the
+reproduced host- and provider-callback corrections. Fresh broader validation passes;
+complete stable independent review found no remaining findings. This bounded
+checkpoint is accepted; broader Task05 coverage remains open.
+
 | Task | Implementation handoff                                                                                | Authoritative contract                                                               |
 | ---- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | 04   | [Ordinary type spellings](./pre-emission-task04-implementation-handoff.md)                            | [Task04](https://github.com/microsoft/typespec/issues/12454#issuecomment-6543541243) |

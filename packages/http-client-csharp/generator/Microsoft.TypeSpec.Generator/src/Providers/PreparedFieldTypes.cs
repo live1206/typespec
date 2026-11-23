@@ -645,11 +645,23 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         private bool SourceInputsAreCurrent()
         {
-            bool current = _sourceInputs is null ||
-                _sourceModel is not null && ReferenceEquals(_sourceModel.PreEmissionSourceInputs, _sourceInputs) &&
+            if (_sourceInputs is null)
+            {
+                return true;
+            }
+
+            var generator = CodeModelGenerator.Instance;
+            bool current = _sourceModel is not null && ReferenceEquals(_sourceModel.PreEmissionSourceInputs, _sourceInputs) &&
                 _sourceOutputDirectory is not null && _sourceInputs.IsCurrentFor(_sourceOutputDirectory) &&
-                // The truthful host check can run user code. Retain both identities.
                 ReferenceEquals(_sourceModel.PreEmissionSourceInputs, _sourceInputs);
+            // A truthful host check can change the generator without changing
+            // compiler inputs. Latch that loss of source authority here, even
+            // when legacy validation runs this callback outside source observation.
+            if (!ReferenceEquals(generator, CodeModelGenerator.Instance))
+            {
+                InvalidateSourceFiles();
+                current = false;
+            }
             if (!current)
             {
                 _nativePocInvalid = true;

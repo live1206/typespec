@@ -74,7 +74,7 @@ source, trivia, token-boundary and native writer-repair anchors remain required.
 In particular, the custom `Fixtures.Number` cast with a parenthesized unary
 operand and shortened type spelling is not replaced by a built-in cast bridge.
 Task04 spelling-plan composition and broader cast/receiver support remain open.
-Conditional-expression grouping remains Task12. SDK adoption, default/public
+Conditional-profile grouping remains Task12. SDK adoption, default/public
 activation, production performance and broader Task05 completion are separate.
 
 ## Validation status

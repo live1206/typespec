@@ -1072,7 +1072,9 @@ namespace Microsoft.TypeSpec.Generator
                 .ThenBy(ns => ns, StringComparer.Ordinal);
             if (header)
             {
-                string licenseString = CodeModelGenerator.Instance.LicenseHeader;
+                var generator = CodeModelGenerator.Instance;
+                _sourcePreparation?.ObserveNativePocHeader(generator);
+                string licenseString = generator.LicenseHeader;
                 if (!string.IsNullOrEmpty(licenseString))
                 {
                     // split license string into lines on new line

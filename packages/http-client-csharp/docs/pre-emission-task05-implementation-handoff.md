@@ -94,6 +94,14 @@ that exact declaration. All 23 new cases and prior focused outcomes are verified
 and fresh broad validation passes. Complete independent review found no verified
 findings; this bounded checkpoint is accepted. Arguments and sibling lists remain open.
 
+[Checkpoint 7](./pre-emission-task05-checkpoint7.md) covers a closed native
+ordinary argument, sibling additions sharing one original argument-list fact,
+and an explicit caller-expression override. An omitted text argument retains
+native spelling. All 20 new cases and prior focused outcomes pass after scoped
+corrections for retained metadata and formal shadowing. Fresh broad validation
+also passes; complete independent review found no outstanding findings. This
+bounded checkpoint is accepted. Wider call, cast and raw source roles remain open.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

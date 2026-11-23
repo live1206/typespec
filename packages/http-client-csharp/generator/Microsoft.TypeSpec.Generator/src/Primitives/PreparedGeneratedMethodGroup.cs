@@ -71,14 +71,20 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         // Import-envelope facts are never published as generated call candidates.
         internal static PreparedGeneratedMethodGroup? TryCaptureImportEnvelope(TypeProvider owner, CSharpCompilation compilation) => TryCaptureCore(owner, compilation, true);
 
+        internal static PreparedGeneratedMethodGroup? TryCaptureForOrdinaryArgumentGrouping(TypeProvider owner, CSharpCompilation compilation,
+            MethodProvider caller, MethodProvider callee, PreparedOrdinaryArgumentGrouping argumentGrouping) =>
+            TryCaptureCore(owner, compilation, false, ordinaryArgumentGroup: (caller, callee, argumentGrouping));
+
         private static PreparedGeneratedMethodGroup? TryCaptureCore(TypeProvider owner, CSharpCompilation compilation, bool forImports,
-            Func<CSharpType, PreparedGeneratedTypeHeader?>? resolveSignatureHeader = null)
+            Func<CSharpType, PreparedGeneratedTypeHeader?>? resolveSignatureHeader = null,
+            (MethodProvider Caller, MethodProvider Callee, PreparedOrdinaryArgumentGrouping Profile)? ordinaryArgumentGroup = null)
         {
             var generator = CodeModelGenerator.Instance;
             if (!PreparedSourceFile.HasCommentOnlyLicenseHeader(generator.LicenseHeader)) { return null; }
             var typeFactory = AuditedTypeFactory(generator);
             if (typeFactory is null) { return null; }
-            var header = PreparedGeneratedTypeHeader.TryCapture(owner);
+            bool nativeWrittenIdentity = ordinaryArgumentGroup.HasValue;
+            var header = nativeWrittenIdentity ? PreparedGeneratedTypeHeader.TryCaptureForNativeWrittenGrouping(owner) : PreparedGeneratedTypeHeader.TryCapture(owner);
             if (header is null || owner.PartialDeclarationOwner is not null || !owner.PartialDeclarationParts.IsEmpty ||
                 !ContractCollections.TryCopy(owner.CachedMethods, out var methods) ||
                 !ContractCollections.TryCopy(owner.CachedFields, out var fields) || !fields.IsEmpty ||
@@ -142,14 +148,18 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                     parameters.Any(parameter => ReferenceEquals(parameter.CachedVariableExpression?.Declaration, variable.Declaration) &&
                         SymbolEqualityComparer.Default.Equals(ScalarType(parameter.Type, compilation), ScalarType(signature.ReturnType, compilation))) &&
                     SafeExpression(variable, method, 0, false);
-                var owningAccessOnly = privateOrdinary ||
+                bool nativeArgumentCallee = ordinaryArgumentGroup is { } argumentCallee && ReferenceEquals(method, argumentCallee.Callee) &&
+                    argumentCallee.Profile.MatchesCallee(method);
+                bool nativeArgumentCaller = ordinaryArgumentGroup is { } argumentCaller && ReferenceEquals(method, argumentCaller.Caller) &&
+                    ReferenceEquals(method.BodyExpression, argumentCaller.Profile.Call) && argumentCaller.Profile.IsOriginalListCurrent && selectable;
+                var owningAccessOnly = privateOrdinary || nativeArgumentCallee ||
                     signature.Modifiers == MethodSignatureModifiers.Private && genericSignature?.HasTypeOfParameterBody == true;
                 if (privateOrdinary && forImports || !owningAccessOnly && ((signature.Modifiers & ~allowed) != 0 || !signature.Modifiers.HasFlag(MethodSignatureModifiers.Public)) ||
                     !Identifier(signature.Name) || !SyntaxFacts.IsValidIdentifier(signature.Name) || SyntaxFacts.GetKeywordKind(signature.Name) != SyntaxKind.None || signature.NonDocumentComment is not null || signature.ExplicitInterface is not null ||
                     signature.HasUnsupportedBaseContract ||
                     signature.GenericParameterConstraints is not null && (!ContractCollections.TryCopy(signature.GenericParameterConstraints, out var constraints) || !constraints.IsEmpty) ||
                     !ContractCollections.TryCopy(signature.Attributes, out var attributes) || !attributes.IsEmpty ||
-                    !SafeMethodBody(method, forImports || !selectable, genericSignature)) { return null; }
+                    !nativeArgumentCaller && !nativeArgumentCallee && !SafeMethodBody(method, forImports || !selectable, genericSignature)) { return null; }
                 var returns = ScalarType(signature.ReturnType, compilation);
                 if (returns is null && (signature.ReturnType is null || genericSignature?.Owns(signature.ReturnType) != true)) { return null; }
                 var formalTypes = ImmutableArray.CreateBuilder<ITypeSymbol>();
@@ -167,8 +177,11 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                     }
                     else if (parameter.DefaultValue is not null || !parameterAttributes.IsEmpty) { return null; }
                 }
-                if (PreparedGeneratedMethodDeclaration.TryCapture(method, compilation) is not { } declaration ||
-                    genericSignature is not null && (declaration.Contract.DeclarationSymbol is not null || declaration.Contract.Arity != 1)) { return null; }
+                var declaration = nativeWrittenIdentity
+                    ? PreparedGeneratedMethodDeclaration.TryCaptureForNativeWrittenGrouping(method, compilation)
+                    : PreparedGeneratedMethodDeclaration.TryCapture(method, compilation);
+                if (declaration is null || genericSignature is not null &&
+                    (declaration.Contract.DeclarationSymbol is not null || declaration.Contract.Arity != 1)) { return null; }
                 contracts.Add(declaration.Contract);
                 // Definition T has no native symbol here. Only a tagged call binding
                 // supplies actual native formal/return types after explicit syntax.

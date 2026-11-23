@@ -17,17 +17,18 @@ namespace Microsoft.TypeSpec.Generator.Primitives
     internal sealed class PreparedGeneratedTypeHeader
     {
         internal TypeProvider Owner { get; }
-        internal IEnumerable<string> ImportNamespaces => _metadataBase is null ? _documentation.ImportNamespaces : _documentation.ImportNamespaces.Append(_metadataBase.Namespace);
-        internal IEnumerable<CSharpType> ImportTypes => _metadataBase is null ? _documentation.ImportTypes : _documentation.ImportTypes.Append(_metadataBase);
+        internal IEnumerable<string> ImportNamespaces => _metadataBase is null ? _documentation?.ImportNamespaces ?? [] : _documentation!.ImportNamespaces.Append(_metadataBase.Namespace);
+        internal IEnumerable<CSharpType> ImportTypes => _metadataBase is null ? _documentation?.ImportTypes ?? [] : _documentation!.ImportTypes.Append(_metadataBase);
         private readonly PreparedSourceFile.OwnerSnapshot _ownerSnapshot;
-        private readonly XmlDocProvider _docs;
-        private readonly PreparedGeneratedDocumentationEnvelope _documentation;
+        private readonly XmlDocProvider? _docs;
+        private readonly PreparedGeneratedDocumentationEnvelope? _documentation;
         private readonly CSharpType? _metadataBase;
         private readonly DeclaredTypeSnapshot? _baseSnapshot;
+        private readonly PreparedNativeFileWarningFacts? _nativeWrittenWarnings;
         private int _stale;
 
-        private PreparedGeneratedTypeHeader(TypeProvider owner, XmlDocProvider docs, PreparedGeneratedDocumentationEnvelope documentation,
-            CSharpType? metadataBase = null, DeclaredTypeSnapshot? baseSnapshot = null)
+        private PreparedGeneratedTypeHeader(TypeProvider owner, XmlDocProvider? docs, PreparedGeneratedDocumentationEnvelope? documentation,
+            CSharpType? metadataBase = null, DeclaredTypeSnapshot? baseSnapshot = null, PreparedNativeFileWarningFacts? nativeWrittenWarnings = null)
         {
             Owner = owner;
             _ownerSnapshot = new(owner);
@@ -35,6 +36,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             _documentation = documentation;
             _metadataBase = metadataBase;
             _baseSnapshot = baseSnapshot;
+            _nativeWrittenWarnings = nativeWrittenWarnings;
         }
 
         internal static PreparedGeneratedTypeHeader? TryCapture(TypeProvider owner)
@@ -43,6 +45,23 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 PreparedGeneratedDocumentationEnvelope.TryCapture(docs) is not { } documentation) { return null; }
             return new(owner, docs, documentation);
         }
+
+        // Only the native argument grouping route may use this header. Its
+        // actual file identity is proved separately by the written inventory.
+        internal static PreparedGeneratedTypeHeader? TryCaptureForNativeWrittenGrouping(TypeProvider owner)
+        {
+            if (PreparedNativeFileWarningFacts.TryCapture(owner) is not { } warnings ||
+                !HasKnownNativeGroupingHeader(owner, warnings)) { return null; }
+            return new(owner, null, null, nativeWrittenWarnings: warnings);
+        }
+
+        private static bool HasKnownNativeGroupingHeader(TypeProvider owner, PreparedNativeFileWarningFacts warnings) =>
+            // Disabled docs contribute no source or lookup facts. The native
+            // writer may still request the provider, so a cold builder must
+            // have audited default dispatch without forcing its cache.
+            CodeModelGenerator.Instance.Configuration.DisableXmlDocs &&
+            (owner.CachedXmlDocs is not null || DefaultMethod(owner, "BuildXmlDocs") && DefaultMethod(owner, "BuildDescription")) &&
+            HasKnownNativeEmissionHeader(owner, warnings);
 
         // A separate constructor-owner profile; ordinary generated-group and
         // import-envelope admission intentionally keep their no-base boundary.
@@ -61,8 +80,11 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             get
             {
                 if (System.Threading.Volatile.Read(ref _stale) != 0) { return false; }
-                if (_ownerSnapshot.IsCurrent() && HasKnownHeader(Owner, _metadataBase) && _baseSnapshot?.IsCurrent() != false &&
-                    ReferenceEquals(Owner.CachedXmlDocs, _docs) && _documentation.IsCurrent) { return true; }
+                if (_ownerSnapshot.IsCurrent(nativeWrittenIdentity: _nativeWrittenWarnings is not null) &&
+                    (_nativeWrittenWarnings is { } warnings
+                        ? HasKnownNativeGroupingHeader(Owner, warnings)
+                        : HasKnownHeader(Owner, _metadataBase) && _baseSnapshot?.IsCurrent() != false &&
+                            ReferenceEquals(Owner.CachedXmlDocs, _docs) && _documentation!.IsCurrent)) { return true; }
                 System.Threading.Interlocked.Exchange(ref _stale, 1);
                 return false;
             }

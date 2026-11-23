@@ -127,6 +127,9 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             Func<ITypeSymbol, string, CSharpType?, PreparedReducedExtensionGroup?>? resolveReducedGroup = null, bool allowBaseInitializer = false) => new(id, producer, boundary, compilation, disableXmlDocs,
                 false, new HashSet<object>(ReferenceEqualityComparer.Instance), 0, resolveCallType, callEnvironmentCurrent, null, null, null, resolveGeneratedGroup, resolveReducedGroup, null, allowBaseInitializer);
 
+        internal PreparedOrdinaryArgumentGrouping? OrdinaryArgumentGrouping =>
+            _parameterFrame?.OrdinaryArgumentGrouping is { } grouping && ReferenceEquals(grouping.Call, Producer) ? grouping : null;
+
         internal CSharpType? ResolveParameterType(VariableExpression variable) => _parameterFrame?.Resolve(variable);
 
         internal ITypeSymbol? ResolveContextualParameterType(VariableExpression variable) => _lambdaParameterPlan?.GetFrame(Id)?.Resolve(variable);

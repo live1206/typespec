@@ -162,6 +162,20 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             }
         }
 
+        // The native direct-root grouping proof supplies its own actual
+        // selected call. Do not ask the legacy global observation environment
+        // to rediscover it on a new callback schedule.
+        internal static bool TryCaptureDirectArgumentEdges(PreparedSourceOccurrence node, PreparedSelectedCall selection,
+            out ImmutableArray<PreparedSourceCapture> edges)
+        {
+            edges = [];
+            if (selection.Occurrence != node.Id || !selection.IsCurrent) { return false; }
+            var captures = ImmutableArray.CreateBuilder<PreparedSourceCapture>();
+            if (!CaptureArguments(node, selection.Arguments, captures)) { return false; }
+            edges = captures.ToImmutable();
+            return true;
+        }
+
         private static bool CaptureArguments(PreparedSourceOccurrence node, DeclaredArgumentMap map, ImmutableArray<PreparedSourceCapture>.Builder captures)
         {
             foreach (var observer in map.Parameters)

@@ -10,6 +10,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.TypeSpec.Generator.Expressions;
 using Microsoft.TypeSpec.Generator.Primitives;
+using Microsoft.TypeSpec.Generator.Snippets;
 using Microsoft.TypeSpec.Generator.Statements;
 
 namespace Microsoft.TypeSpec.Generator.Providers
@@ -42,6 +43,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 var nativeSignatures = new HashSet<MethodSignature>(ReferenceEqualityComparer.Instance);
                 var nativeNodes = new HashSet<SourceOccurrenceId>();
                 var choices = new List<PreparedSourceOccurrence>();
+                Func<bool>? argumentCurrent = null;
                 if (binaryCatalogKnown)
                 {
                     CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
@@ -49,8 +51,17 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     CaptureIfConditions(file, nativeNodes, choices);
                     CaptureStringCoalescing(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureUsedLocalInitializers(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    if (files.Length == 1)
+                    {
+                        argumentCurrent = CaptureOrdinaryArguments(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    }
                 }
                 var envelope = CapturePocEnvelope(file, nativeMethods, out var finalData);
+                if (argumentCurrent is not null && envelope is { } fileEnvelope && finalData is { } fileData)
+                {
+                    envelope = () => fileEnvelope() && argumentCurrent();
+                    finalData = () => fileData() && argumentCurrent();
+                }
                 var nodes = file.Roots.Where(r => r.Id.RootRole != "type-documentation").SelectMany(r => r.DescendantsAndSelf()).ToArray();
                 if (envelope is null || finalData is null || nodes.Any(n => !PocKnown(n, nativeSignatures, nativeNodes)))
                 { continue; }
@@ -200,6 +211,70 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 node.Producer is VariableExpression variable && PreparedUsedLocalInitializer.IsInt(node.ResolveParameterType(variable));
         }
 
+        private Func<bool>? CaptureOrdinaryArguments(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            // First native argument profile: one closed written type with the
+            // caller and its audited private member. No global call
+            // environment walk or additional host callback at capture or seal.
+            var owner = file.FileOwner;
+            if (_sourceRootSnapshot.Length != 1 || !ReferenceEquals(_sourceRootSnapshot[0], owner) || _callLookupScopes.Length != 1 ||
+                file.Compilation is not CSharpCompilation compilation) { return null; }
+
+            var methodRoots = file.Roots.Where(root => root.Producer is MethodProvider).ToArray();
+            if (methodRoots.Length != 2) { return null; }
+            foreach (var callerRoot in methodRoots)
+            {
+                var caller = (MethodProvider)callerRoot.Producer;
+                var calleeRoot = methodRoots.Single(root => !ReferenceEquals(root, callerRoot));
+                var callee = (MethodProvider)calleeRoot.Producer;
+                var calls = callerRoot.Children.Where(node => node.OrdinaryArgumentGrouping.HasValue).ToArray();
+                if (calls.Length != 1 || calls[0].IsOpaque || calls[0].OrdinaryArgumentGrouping is not { } profile ||
+                    !profile.IsOriginalListCurrent || !PocNativeSignature(caller.Signature) ||
+                    !PocNativeSignature(callee.Signature) || !profile.MatchesCallee(callee)) { continue; }
+                var call = calls[0];
+                var calleeBody = calleeRoot.Children.SingleOrDefault(node => ReferenceEquals(node.Producer, callee.BodyExpression));
+                if (calleeBody is null || calleeBody.IsOpaque || call.Children.Length != profile.OrderedArguments.Length ||
+                    call.Children.Where((child, index) => child.Id.EdgePath != call.Id.EdgePath + $"/argument[{index}]" ||
+                        !ReferenceEquals(child.Producer, profile.OrderedArguments[index])).Any() ||
+                    !NativePocContextDataIsCurrent() || owner.CachedType is not { IsFrameworkType: false } type ||
+                    !GeneratedNameIsUncontested(compilation, type.Namespace, type.Name) ||
+                    compilation.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error) ||
+                    PreparedGeneratedMethodGroup.TryCaptureForOrdinaryArgumentGrouping(owner, compilation, caller, callee, profile) is not { } group) { continue; }
+                var proof = PreparedCallProofs.Capture(call.Id, profile.Call, compilation, static _ => null, NativePocContextDataIsCurrent,
+                    call.IsCurrent, children: call.Children,
+                    resolveGeneratedGroup: emitted => ReferenceEquals(emitted, owner.CachedType) && ReferenceEquals(emitted, type) && group.IsCurrent ? group : null,
+                    resolveOwningType: invocation => ReferenceEquals(invocation, profile.Call) && ReferenceEquals(caller.BodyExpression, invocation)
+                        && ReferenceEquals(caller.EnclosingType, owner) ? owner.CachedType : null, allowNativeIntAddition: true);
+                if (proof.Selection is not { GeneratedDeclaration: { } selected } selection || !ReferenceEquals(selected.Method, callee) ||
+                    !PreparedSourceObservations.TryCaptureDirectArgumentEdges(call, selection, out var captures) || !captures.IsEmpty)
+                { continue; }
+
+                methods.Add(caller);
+                methods.Add(callee);
+                signatures.Add(caller.Signature);
+                signatures.Add(callee.Signature);
+                nodes.Add(call.Id);
+                if (calleeBody.Producer is BinaryOperatorExpression) { nodes.Add(calleeBody.Id); }
+                foreach (var child in call.Children.Take(profile.CandidateCount)) { nodes.Add(child.Id); choices.Add(child); }
+                if (profile.HasCallerExpression)
+                {
+                    // The admitted signature/actuals contain only this checked
+                    // observer attribute, default string and explicit string.
+                    foreach (var node in calleeRoot.Children.Where(child => ReferenceEquals(child.Producer, callee.Signature))
+                        .Concat(call.Children.Skip(profile.CandidateCount)).SelectMany(child => child.DescendantsAndSelf()))
+                    {
+                        if (node.Producer is AttributeStatement or LiteralExpression ||
+                            node.Producer is ScopedApi wrapper && PreparedCallProofs.IsTransparentWrapper(wrapper)) { nodes.Add(node.Id); }
+                    }
+                }
+                // All sibling choices close over the same original list fact,
+                // independently of the existing receipt/selection shape walks.
+                return () => profile.IsOriginalListCurrent && selection.IsCurrent;
+            }
+            return null;
+        }
+
         private static void CaptureDirectCasts(PreparedSourceFile file, HashSet<MethodProvider> methods,
             HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
         {
@@ -338,7 +413,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
             owner.CachedType is { } type && Identifier(type.Name);
 
         private static bool PocNativeSignature(MethodSignature signature) =>
-            PocSignature(signature, true) || PocSignature(signature, stringCoalesce: true);
+            PocSignature(signature, true) || PocSignature(signature, stringCoalesce: true) ||
+            PreparedOrdinaryArgumentGrouping.HasCallerExpressionSignature(signature);
 
         private static bool PocSignature(MethodSignatureBase signature, bool arithmeticReturn = false, bool stringCoalesce = false)
         {
@@ -373,7 +449,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
             {
                 BinaryOperatorExpression binary => nativeNodes.Contains(node.Id) ||
                     binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
-                CastExpression or MethodBodyStatements or IfStatement or LiteralExpression or AssignmentExpression or DeclarationExpression =>
+                CastExpression or MethodBodyStatements or IfStatement or LiteralExpression or AssignmentExpression or DeclarationExpression or
+                    InvokeMethodExpression or AttributeStatement or ScopedApi =>
                     nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) && keyword.Keyword is "return" or "default",
                 VariableExpression variable => variable.GetType() == typeof(VariableExpression),

@@ -109,6 +109,12 @@ cases, prior focused outcomes and fresh broad validation pass. Complete
 independent review found no verified findings; this bounded checkpoint is
 accepted. Other cast and source roles remain open.
 
+[Checkpoint 9](./pre-emission-task05-checkpoint9.md) prepares the cast pair in
+an exact widening assignment to the declared local and in an actual bound
+identity-cast argument. All 23 new cases, prior focused outcomes and fresh
+broad validation pass. Complete independent review found no verified findings;
+this bounded checkpoint is accepted.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

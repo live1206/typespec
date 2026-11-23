@@ -12,9 +12,9 @@ using Microsoft.TypeSpec.Generator.Statements;
 
 namespace Microsoft.TypeSpec.Generator.Primitives
 {
-    // These are three exact native parent slots, not a cast precedence table.
+    // Exact native parent slots, not a cast precedence table.
     internal readonly record struct PreparedPrimitiveCastParent(object Root, CastExpression Cast,
-        AssignmentExpression? Assignment = null, DeclarationExpression? Declaration = null)
+        AssignmentExpression? Assignment = null, DeclarationExpression? Declaration = null, bool SeparateAssignment = false)
     {
         internal static PreparedPrimitiveCastParent? TryGet(MethodProvider method, object body, ImmutableArray<ParameterProvider> parameters = default)
         {
@@ -36,8 +36,9 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 parameters.Length == 2 && IsWideningCast(left) && right.GetType() == typeof(VariableExpression))
             { return new(binary, left); }
             if (body is not MethodBodyStatements block || block.GetType() != typeof(MethodBodyStatements) || parameters.Length != 1 ||
-                !ContractCollections.TryCopy(block.Statements, out var statements) || statements.Length != 2 ||
-                statements[0] is not ExpressionStatement { Expression: AssignmentExpression { UseNullCoalesce: false } assignment } first ||
+                !ContractCollections.TryCopy(block.Statements, out var statements)) { return null; }
+            if (statements.Length == 3) { return TryGetSeparateAssignment(block, statements, parameters[0]); }
+            if (statements.Length != 2 || statements[0] is not ExpressionStatement { Expression: AssignmentExpression { UseNullCoalesce: false } assignment } first ||
                 first.GetType() != typeof(ExpressionStatement) ||
                 assignment.Variable is not DeclarationExpression { IsOut: false, IsUsing: false, IsConst: false } declaration ||
                 declaration.Variable?.GetType() != typeof(VariableExpression) || !IsLong(declaration.Variable.Type) ||
@@ -49,6 +50,24 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             var formal = parameters[0].CachedVariableExpression!.Declaration;
             return !ReferenceEquals(local, formal) && Identifier(local.RequestedName) && Identifier(formal.RequestedName) &&
                 local.RequestedName != formal.RequestedName ? new(block, initializer, assignment, declaration) : null;
+        }
+
+        private static PreparedPrimitiveCastParent? TryGetSeparateAssignment(MethodBodyStatements block, ImmutableArray<MethodBodyStatement> statements,
+            ParameterProvider parameter)
+        {
+            if (statements[0] is not ExpressionStatement { Expression: DeclarationExpression { IsOut: false, IsUsing: false, IsConst: false } declaration } first ||
+                first.GetType() != typeof(ExpressionStatement) || declaration.Variable?.GetType() != typeof(VariableExpression) ||
+                !IsLong(declaration.Variable.Type) || declaration.Variable.Declaration is not { } local ||
+                statements[1] is not ExpressionStatement { Expression: AssignmentExpression { UseNullCoalesce: false,
+                    Variable: VariableExpression target, Value: CastExpression cast } assignment } second ||
+                second.GetType() != typeof(ExpressionStatement) || target.GetType() != typeof(VariableExpression) ||
+                !ReferenceEquals(target.Declaration, local) || !IsLong(target.Type) || !IsWideningCast(cast) ||
+                statements[2] is not ExpressionStatement { Expression: KeywordExpression { Keyword: "return", Expression: VariableExpression returned } keyword } last ||
+                last.GetType() != typeof(ExpressionStatement) || keyword.GetType() != typeof(KeywordExpression) ||
+                returned.GetType() != typeof(VariableExpression) || !ReferenceEquals(returned.Declaration, local) || !IsLong(returned.Type)) { return null; }
+            var formal = parameter.CachedVariableExpression!.Declaration;
+            return !ReferenceEquals(local, formal) && Identifier(local.RequestedName) && Identifier(formal.RequestedName) &&
+                local.RequestedName != formal.RequestedName ? new(block, cast, assignment, declaration, SeparateAssignment: true) : null;
         }
 
         internal bool Contains(object node) => ReferenceEquals(node, Root) || ReferenceEquals(node, Assignment) || ReferenceEquals(node, Declaration);

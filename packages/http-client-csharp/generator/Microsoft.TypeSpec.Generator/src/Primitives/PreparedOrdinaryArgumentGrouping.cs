@@ -18,7 +18,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
     // Source-only root and value shape. Neither this profile nor a declared
     // argument map establishes lookup or selects a generated declaration.
     internal readonly record struct PreparedOrdinaryArgumentGrouping(InvokeMethodExpression Call, IReadOnlyList<ValueExpression> OriginalList,
-        ImmutableArray<ValueExpression> OrderedArguments, long InvocationRevision, bool HasCallerExpression)
+        ImmutableArray<ValueExpression> OrderedArguments, long InvocationRevision, bool HasCallerExpression, bool IsIdentityCastArgument = false)
     {
         internal int CandidateCount => HasCallerExpression ? 1 : OrderedArguments.Length;
         internal static PreparedOrdinaryArgumentGrouping? TryGet(MethodProvider method, object body, ImmutableArray<ParameterProvider> parameters = default)
@@ -30,7 +30,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 method.Signature.Modifiers != MethodSignatureModifiers.Public ||
                 !PreparedUsedLocalInitializer.IsInt(method.Signature.ReturnType) && !IsObject(method.Signature.ReturnType) ||
                 method.Signature.HasUnsupportedBaseContract || parameters.IsDefault && !ContractCollections.TryCopy(method.Signature.Parameters, out parameters) ||
-                parameters.Length is not (2 or 4) || !parameters.All(IsCachedIntFormal)) { return null; }
+                parameters.Length is not (1 or 2 or 4) || !parameters.All(IsCachedIntFormal)) { return null; }
             // The unqualified call is in the exact arrow scope. A formal's
             // actual cached declaration can shadow the audited private member.
             if (parameters.Any(parameter => string.Equals(parameter.CachedVariableExpression!.Declaration.RequestedName,
@@ -38,6 +38,12 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             bool hasCallerExpression = IsObject(method.Signature.ReturnType);
             var list = call.Arguments;
             if (!ContractCollections.TryCopy(list, out var arguments)) { return null; }
+            if (parameters.Length == 1)
+            {
+                return !hasCallerExpression && arguments.Length == 1 && arguments[0] is CastExpression cast &&
+                    PreparedUsedLocalInitializer.IsInt(cast.Type) && cast.Inner?.GetType() == typeof(VariableExpression)
+                    ? new(call, list, arguments, call.DeclarationRevision, HasCallerExpression: false, IsIdentityCastArgument: true) : null;
+            }
             if (hasCallerExpression
                 ? parameters.Length != 2 || arguments.Length is not (1 or 2) || !IsAddition(arguments[0]) ||
                     arguments.Length == 2 && LiteralPayload(arguments[1]) is not { Literal: string }
@@ -53,7 +59,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         internal bool IsOriginalListCurrent => Call.DeclarationRevision == InvocationRevision && ReferenceEquals(Call.Arguments, OriginalList) &&
             ContractCollections.SameReferences(Call.Arguments, OrderedArguments);
 
-        internal bool ContainsAddition(object node) => OrderedArguments.Take(CandidateCount).Any(argument => ReferenceEquals(argument, node));
+        internal bool ContainsAddition(object node) => !IsIdentityCastArgument &&
+            OrderedArguments.Take(CandidateCount).Any(argument => ReferenceEquals(argument, node));
 
         internal bool MatchesCallee(MethodProvider method)
         {

@@ -242,11 +242,16 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     !GeneratedNameIsUncontested(compilation, type.Namespace, type.Name) ||
                     compilation.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error) ||
                     PreparedGeneratedMethodGroup.TryCaptureForOrdinaryArgumentGrouping(owner, compilation, caller, callee, profile) is not { } group) { continue; }
-                var proof = PreparedCallProofs.Capture(call.Id, profile.Call, compilation, static _ => null, NativePocContextDataIsCurrent,
+                // Only the closed identity-cast argument route needs a type
+                // resolver. Reuse the existing exact operand/conversion proof.
+                INamedTypeSymbol? ResolveArgumentType(CSharpType candidate) => profile.IsIdentityCastArgument &&
+                    PreparedUsedLocalInitializer.IsInt(candidate) && compilation.GetSpecialType(SpecialType.System_Int32) is { TypeKind: not TypeKind.Error } resolved
+                    ? resolved : null;
+                var proof = PreparedCallProofs.Capture(call.Id, profile.Call, compilation, ResolveArgumentType, NativePocContextDataIsCurrent,
                     call.IsCurrent, children: call.Children,
                     resolveGeneratedGroup: emitted => ReferenceEquals(emitted, owner.CachedType) && ReferenceEquals(emitted, type) && group.IsCurrent ? group : null,
                     resolveOwningType: invocation => ReferenceEquals(invocation, profile.Call) && ReferenceEquals(caller.BodyExpression, invocation)
-                        && ReferenceEquals(caller.EnclosingType, owner) ? owner.CachedType : null, allowNativeIntAddition: true);
+                        && ReferenceEquals(caller.EnclosingType, owner) ? owner.CachedType : null, allowNativeIntAddition: !profile.IsIdentityCastArgument);
                 if (proof.Selection is not { GeneratedDeclaration: { } selected } selection || !ReferenceEquals(selected.Method, callee) ||
                     !PreparedSourceObservations.TryCaptureDirectArgumentEdges(call, selection, out var captures) || !captures.IsEmpty)
                 { continue; }
@@ -288,7 +293,16 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 if (root is null) { continue; }
                 PreparedSourceOccurrence? cast;
                 var context = new List<PreparedSourceOccurrence> { root };
-                if (profile.Assignment is { } assignment && profile.Declaration is { } declaration)
+                if (profile.SeparateAssignment && profile.Assignment is { } separateAssignment && profile.Declaration is { } standaloneDeclaration)
+                {
+                    if (root.Children.Length != 3 || Child(root.Children[0], "expression", standaloneDeclaration) is not { } actualDeclaration ||
+                        Child(root.Children[1], "expression", separateAssignment) is not { } actualAssignment ||
+                        Child(actualAssignment, "target", separateAssignment.Variable) is null) { continue; }
+                    cast = Child(actualAssignment, "value", profile.Cast);
+                    context.Add(actualDeclaration);
+                    context.Add(actualAssignment);
+                }
+                else if (profile.Assignment is { } assignment && profile.Declaration is { } declaration)
                 {
                     if (root.Children.Length != 2 || Child(root.Children[0], "expression", assignment) is not { } actualAssignment ||
                         Child(actualAssignment, "target", declaration) is not { } actualDeclaration) { continue; }

@@ -137,6 +137,13 @@ independent review found no verified production findings. This bounded checkpoin
 is accepted and separate from
 Task12 conditional preprocessor correspondence.
 
+[Checkpoint 13](./pre-emission-task05-checkpoint13.md) verifies exact native
+barrier retentions and prepares only the independent inner cast pair in a
+checked-binary bridge. The direct cast's required checked delimiters remain.
+All 22 new cases, prior focused outcomes and fresh broad validation pass.
+Complete independent review found no verified findings; this bounded checkpoint
+is accepted.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

@@ -14,17 +14,29 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 {
     // Exact native parent slots, not a cast precedence table.
     internal readonly record struct PreparedPrimitiveCastParent(object Root, CastExpression Cast,
-        AssignmentExpression? Assignment = null, DeclarationExpression? Declaration = null, bool SeparateAssignment = false)
+        AssignmentExpression? Assignment = null, DeclarationExpression? Declaration = null, bool SeparateAssignment = false,
+        BinaryOperatorExpression? CheckedBinary = null)
     {
         internal static PreparedPrimitiveCastParent? TryGet(MethodProvider method, object body, ImmutableArray<ParameterProvider> parameters = default)
         {
             if (method.GetType() != typeof(MethodProvider) || !ReferenceEquals((object?)method.BodyStatements ?? method.BodyExpression, body) ||
-                body is not (MethodBodyStatements or BinaryOperatorExpression or TernaryConditionalExpression) ||
+                body is not (MethodBodyStatements or BinaryOperatorExpression or TernaryConditionalExpression or KeywordExpression { Keyword: "checked" }) ||
                 method.Signature.HasUnsupportedBaseContract ||
                 parameters.IsDefault && !ContractCollections.TryCopy(method.Signature.Parameters, out parameters) ||
                 parameters.Length is not (1 or 2) || !parameters.All(HasCachedFormal)) { return null; }
 
             var result = method.Signature.ReturnType;
+            if (body is KeywordExpression { Keyword: "checked" } keywordRoot)
+            {
+                // This binary's pair is required by checked. Only the cast
+                // nested inside the binary may supply a separate removable pair.
+                return keywordRoot.Expression is BinaryOperatorExpression { Operator: "+", AddParentheses: true,
+                        Left: CastExpression checkedCast, Right: VariableExpression other } checkedBinary && parameters.Length == 2 &&
+                    IsLong(parameters[0].Type) && PreparedUsedLocalInitializer.IsInt(parameters[1].Type) &&
+                    PreparedUsedLocalInitializer.IsInt(result) && PreparedUsedLocalInitializer.IsInt(checkedCast.Type) &&
+                    checkedCast.Inner?.GetType() == typeof(VariableExpression) && other.GetType() == typeof(VariableExpression)
+                    ? new(keywordRoot, checkedCast, CheckedBinary: checkedBinary) : null;
+            }
             if (body is TernaryConditionalExpression { Condition: CastExpression condition } ternary &&
                 parameters.Length == 1 && IsBool(parameters[0].Type) && PreparedUsedLocalInitializer.IsInt(result) &&
                 IsBool(condition.Type) && condition.Inner?.GetType() == typeof(VariableExpression) &&
@@ -70,7 +82,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 local.RequestedName != formal.RequestedName ? new(block, cast, assignment, declaration, SeparateAssignment: true) : null;
         }
 
-        internal bool Contains(object node) => ReferenceEquals(node, Root) || ReferenceEquals(node, Assignment) || ReferenceEquals(node, Declaration);
+        internal bool Contains(object node) => ReferenceEquals(node, Root) || ReferenceEquals(node, Assignment) ||
+            ReferenceEquals(node, Declaration) || ReferenceEquals(node, CheckedBinary);
 
         internal static bool IsLong(CSharpType? type) => IsPrimitive(type, typeof(long));
         internal static bool IsBool(CSharpType? type) => IsPrimitive(type, typeof(bool));

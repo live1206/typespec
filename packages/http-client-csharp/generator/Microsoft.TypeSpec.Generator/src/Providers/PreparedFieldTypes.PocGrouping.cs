@@ -313,6 +313,14 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     context.Add(actualAssignment);
                     context.Add(actualDeclaration);
                 }
+                else if (profile.CheckedBinary is { } checkedBinary)
+                {
+                    if (root.Children.Length != 1 || Child(root, "value", checkedBinary) is not { } binaryRoot ||
+                        binaryRoot.Children.Length != 2 || Child(binaryRoot, "right", checkedBinary.Right) is not { } other ||
+                        !IsBound(other, useBool: false)) { continue; }
+                    cast = Child(binaryRoot, "left", profile.Cast);
+                    context.Add(binaryRoot);
+                }
                 else if (profile.Root is BinaryOperatorExpression binary)
                 {
                     if (root.Children.Length != 2 || Child(root, "right", binary.Right) is not { } other || !IsBound(other, useBool: false))
@@ -329,7 +337,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 }
                 else { continue; }
                 if (cast is null || cast.Children.Length != 1 || Child(cast, "value", profile.Cast.Inner) is not { } operand ||
-                    !IsBound(operand, profile.Root is TernaryConditionalExpression)) { continue; }
+                    !IsBound(operand, profile.Root is TernaryConditionalExpression, useLong: profile.CheckedBinary is not null)) { continue; }
 
                 methods.Add(method);
                 signatures.Add(method.Signature);
@@ -342,10 +350,13 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 parent.Children.FirstOrDefault(node => !node.IsOpaque && ReferenceEquals(node.Producer, producer) &&
                     node.Id.EdgePath == parent.Id.EdgePath + "/" + role);
 
-            static bool IsBound(PreparedSourceOccurrence node, bool useBool) => !node.IsOpaque && node.Children.IsEmpty &&
-                node.Producer is VariableExpression variable && (useBool
-                    ? PreparedPrimitiveCastParent.IsBool(node.ResolveParameterType(variable))
-                    : PreparedUsedLocalInitializer.IsInt(node.ResolveParameterType(variable)));
+            static bool IsBound(PreparedSourceOccurrence node, bool useBool, bool useLong = false)
+            {
+                if (node.IsOpaque || !node.Children.IsEmpty || node.Producer is not VariableExpression variable) { return false; }
+                var type = node.ResolveParameterType(variable);
+                return useBool ? PreparedPrimitiveCastParent.IsBool(type) :
+                    useLong ? PreparedPrimitiveCastParent.IsLong(type) : PreparedUsedLocalInitializer.IsInt(type);
+            }
         }
 
         private Func<bool>? CaptureLambdaCast(PreparedSourceFile file, HashSet<MethodProvider> methods,
@@ -657,7 +668,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
             const MethodSignatureModifiers allowed = MethodSignatureModifiers.Public | MethodSignatureModifiers.Private | MethodSignatureModifiers.Static;
             return (method.Modifiers & ~allowed) == 0 && parameters.All(p => p is not null && p.GetType() == typeof(ParameterProvider) &&
                 Identifier(p.Name) && (stringCoalesce ? PreparedStringCoalesce.IsString(p.Type) :
-                    metadataCastReturn ? PreparedMetadataCastReturn.IsObject(p.Type) : PocType(p.Type, typeof(int)) || primitiveCastParent && PreparedPrimitiveCastParent.IsBool(p.Type)) &&
+                    metadataCastReturn ? PreparedMetadataCastReturn.IsObject(p.Type) : PocType(p.Type, typeof(int)) || primitiveCastParent &&
+                    (PreparedPrimitiveCastParent.IsBool(p.Type) || PreparedPrimitiveCastParent.IsLong(p.Type))) &&
                 ContractCollections.TryCopy(p.Attributes, out var parameterAttributes) && parameterAttributes.IsEmpty && p.DefaultValue is null &&
                 !p.IsRef && !p.IsOut && !p.IsIn && !p.IsParams && p.Field is null && p.Property is null && p.InputParameter is null);
         }
@@ -683,7 +695,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression or FuncExpression or NewInstanceExpression =>
                     nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) &&
-                    (keyword.Keyword is "return" or "default" || keyword.Keyword == "null" && nativeNodes.Contains(node.Id)),
+                    (keyword.Keyword is "return" or "default" || (keyword.Keyword is "null" or "checked") && nativeNodes.Contains(node.Id)),
                 VariableExpression variable => variable.GetType() == typeof(VariableExpression),
                 MethodProvider method => method.GetType() == typeof(MethodProvider),
                 MethodSignature signature => PocSignature(signature) || nativeSignatures.Contains(signature) && PocNativeSignature(signature),

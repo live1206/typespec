@@ -44,6 +44,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 var nativeNodes = new HashSet<SourceOccurrenceId>();
                 var choices = new List<PreparedSourceOccurrence>();
                 Func<bool>? argumentCurrent = null;
+                (SourceOccurrenceId Member, SourceOccurrenceId Receiver)? qualifiedMember = null;
                 if (binaryCatalogKnown)
                 {
                     CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
@@ -63,6 +64,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                         argumentCurrent = CaptureOrdinaryArguments(file, nativeMethods, nativeSignatures, nativeNodes, choices) ??
                             CaptureLambdaCast(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                         CaptureMetadataCastReturns(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                        qualifiedMember = CaptureQualifiedMemberReturn(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                         CaptureSourceNumberCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     }
                 }
@@ -73,7 +75,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     finalData = () => fileData() && argumentCurrent();
                 }
                 var nodes = file.Roots.Where(r => r.Id.RootRole != "type-documentation").SelectMany(r => r.DescendantsAndSelf()).ToArray();
-                if (envelope is null || finalData is null || nodes.Any(n => !PocKnown(n, nativeSignatures, nativeNodes)))
+                if (envelope is null || finalData is null || nodes.Any(n => !PocKnown(n, nativeSignatures, nativeNodes) &&
+                    (n.IsOpaque || qualifiedMember is not { } exact || n.Id != exact.Member && n.Id != exact.Receiver)))
                 { continue; }
                 // Compatibility is the OLD whole-file admission, not merely the
                 // shape of one equality inside a newly admitted arithmetic file.
@@ -525,6 +528,47 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 nodes.Add(operand.Id);
                 choices.Add(cast);
             }
+        }
+
+        private (SourceOccurrenceId Member, SourceOccurrenceId Receiver)? CaptureQualifiedMemberReturn(PreparedSourceFile file,
+            HashSet<MethodProvider> methods, HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            PreparedSourceOccurrence? root = null;
+            foreach (var candidate in file.Roots)
+            {
+                if (candidate.Id.RootRole == "type-documentation") { continue; }
+                if (root is not null) { return null; }
+                root = candidate;
+            }
+            // No general member or type-reference admission: this exact
+            // qualified leaf has no prepared name alternative.
+            if (root?.Producer is not MethodProvider method || method.GetType() != typeof(MethodProvider) || method.BodyStatements is not null ||
+                method.BodyExpression is not ParenthesizedExpression { Operand: ParenthesizedExpression { Operand: MemberExpression
+                    { MemberName: nameof(DateTimeOffset.Now), Declaration: null, Inner: TypeReferenceExpression receiver } member } inner } outer ||
+                !PocSignature(method.Signature, metadataCastReturn: true) || method.Signature.HasUnsupportedBaseContract || method.Signature.OriginalSymbol is not null ||
+                !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters) || !parameters.IsEmpty ||
+                _sourceRootSnapshot.Length != 1 || _callLookupScopes.Length != 1 || !ReferenceEquals(_sourceRootSnapshot[0], file.FileOwner) ||
+                file.Compilation is not CSharpCompilation compilation || file.FileOwner.CachedType is not { } ownerType ||
+                !PreparedMetadataCastReturn.IsCanonicalDateTimeOffsetNow(compilation, ownerType, receiver.Type))
+            { return null; }
+
+            static PreparedSourceOccurrence? OnlyChild(PreparedSourceOccurrence? parent, object producer) =>
+                parent is { IsOpaque: false, Children.Length: 1 } && ReferenceEquals(parent.Children[0].Producer, producer)
+                    ? parent.Children[0] : null;
+            var outerNode = root.Children.FirstOrDefault(node => node.Id.EdgePath == root.Id.EdgePath + "/expression-body" &&
+                ReferenceEquals(node.Producer, outer));
+            var innerNode = OnlyChild(outerNode, inner);
+            var memberNode = OnlyChild(innerNode, member);
+            if (outerNode is null || innerNode is null || memberNode is null ||
+                OnlyChild(memberNode, receiver) is not { IsOpaque: false, Children.IsEmpty: true } receiverNode)
+            { return null; }
+            methods.Add(method);
+            signatures.Add(method.Signature);
+            nodes.Add(outerNode.Id);
+            nodes.Add(innerNode.Id);
+            choices.Add(outerNode);
+            choices.Add(innerNode);
+            return (memberNode.Id, receiverNode.Id);
         }
 
         private void CaptureSourceNumberCasts(PreparedSourceFile file, HashSet<MethodProvider> methods,

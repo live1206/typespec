@@ -76,6 +76,27 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return new(cast, needsFormal);
         }
 
+        internal static bool IsCanonicalDateTimeOffsetNow(CSharpCompilation compilation, CSharpType ownerType, CSharpType? receiver)
+        {
+            if (!ExactRuntime(receiver, typeof(DateTimeOffset), "DateTimeOffset", true, 0)) { return false; }
+            var objectType = compilation.GetSpecialType(SpecialType.System_Object);
+            var core = objectType.ContainingAssembly;
+            if (core is null || objectType.TypeKind == TypeKind.Error || !compilation.References.Any(reference =>
+                (reference.Properties.Aliases.IsDefaultOrEmpty || reference.Properties.Aliases.Contains("global")) &&
+                SymbolEqualityComparer.Default.Equals(compilation.GetAssemblyOrModuleSymbol(reference), core)) ||
+                FindCoreType(compilation, core, ownerType, "System.DateTimeOffset", 0) is not { TypeKind: TypeKind.Struct } target)
+            { return false; }
+            var members = target.GetMembers(nameof(DateTimeOffset.Now));
+            if (members.Length != 1 || members[0] is not IPropertySymbol
+                { DeclaredAccessibility: Accessibility.Public, IsStatic: true, IsIndexer: false, Parameters.IsEmpty: true,
+                    ReturnsByRef: false, ReturnsByRefReadonly: false, GetMethod: { DeclaredAccessibility: Accessibility.Public,
+                        IsStatic: true, MethodKind: MethodKind.PropertyGet, Parameters.IsEmpty: true } getter } property ||
+                !SymbolEqualityComparer.Default.Equals(property.Type, target) || !SymbolEqualityComparer.Default.Equals(getter.ReturnType, target))
+            { return false; }
+            var conversion = compilation.ClassifyConversion(target, objectType);
+            return conversion.IsImplicit && conversion.IsBoxing && !conversion.IsUserDefined;
+        }
+
         internal static bool IsObject(CSharpType? type) => ExactRuntime(type, typeof(object), "Object", false, 0);
 
         private static bool ExactRuntime(CSharpType? type, Type expected, string name, bool valueType, int arity) =>

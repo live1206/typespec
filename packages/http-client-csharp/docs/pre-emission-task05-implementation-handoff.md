@@ -202,6 +202,14 @@ outputs. An actually hidden header, unsupported role or spelling, or a stale
 source/physical input keeps native fallback or requires discard as appropriate.
 Ordinary statement line breaks still differ from the compact original member.
 
+Checkpoint 23 covers the exact native nested pairs around
+`global::System.DateTimeOffset.Now` in an ordinary parameterless `object`
+arrow method. The property must be the canonical static framework getter,
+with implicit boxing. Only the two wrapper occurrences are choices. The
+qualified type spelling is unchanged; neither absent raw name metadata nor
+an empty native name inventory grants type shortening. Actual competing
+source or generated owners retain native grouping.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

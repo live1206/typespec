@@ -50,6 +50,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     CaptureBareArithmeticChildren(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureDirectCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureWrappedReturnCast(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    CaptureWrappedEquality(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureAuthoredBinaryTrivia(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CapturePrimitiveCastParents(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureTypedDefaultCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
@@ -624,6 +625,57 @@ namespace Microsoft.TypeSpec.Generator.Providers
             // spelling is then the already supported direct identity cast pair.
             choices.Add(wrapperNode);
             choices.Add(castNode);
+        }
+
+        private static void CaptureWrappedEquality(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            PreparedSourceOccurrence? root = null;
+            foreach (var candidate in file.Roots)
+            {
+                if (candidate.Id.RootRole == "type-documentation") { continue; }
+                if (root is not null) { return; }
+                root = candidate;
+            }
+            // A new native-written occurrence family, not a change to the
+            // legacy direct equality matcher or its observation schedule.
+            if (root?.Producer is not MethodProvider method || method.GetType() != typeof(MethodProvider)) { return; }
+
+            static PreparedSourceOccurrence? OnlyChild(PreparedSourceOccurrence? parent, object producer) =>
+                parent is { IsOpaque: false, Children.Length: 1 } && ReferenceEquals(parent.Children[0].Producer, producer)
+                    ? parent.Children[0] : null;
+            PreparedSourceOccurrence? wrapperNode;
+            if (method.BodyStatements is null && method.BodyExpression is ParenthesizedExpression arrow)
+            {
+                wrapperNode = root.Children.FirstOrDefault(node => ReferenceEquals(node.Producer, arrow));
+            }
+            else if (method.BodyStatements is ExpressionStatement { Expression: KeywordExpression
+                { Keyword: "return", Expression: ParenthesizedExpression returned } keyword } statement &&
+                statement.GetType() == typeof(ExpressionStatement) && keyword.GetType() == typeof(KeywordExpression))
+            {
+                var body = root.Children.FirstOrDefault(node => ReferenceEquals(node.Producer, statement));
+                wrapperNode = OnlyChild(OnlyChild(body, keyword), returned);
+            }
+            else { return; }
+
+            if (wrapperNode?.Producer is not ParenthesizedExpression { Operand: BinaryOperatorExpression
+                { Operator: "==", AddParentheses: true, Left: VariableExpression left, Right: VariableExpression right } binary } ||
+                !PocSignature(method.Signature) || method.Signature.HasUnsupportedBaseContract ||
+                method.Signature.ReturnType!.IsLiteral || method.Signature.ReturnType.HasUnionMetadata ||
+                !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters) || parameters.Length != 2 ||
+                !IsActualPlainIntFormal(parameters[0], left) || !IsActualPlainIntFormal(parameters[1], right) ||
+                left.Declaration.RequestedName == right.Declaration.RequestedName ||
+                OnlyChild(wrapperNode, binary) is not { IsOpaque: false, Children.Length: 2 } binaryNode ||
+                binaryNode.Children[0] is not { IsOpaque: false, Children.IsEmpty: true } leftNode ||
+                binaryNode.Children[1] is not { IsOpaque: false, Children.IsEmpty: true } rightNode ||
+                !ReferenceEquals(leftNode.Producer, left) || !ReferenceEquals(rightNode.Producer, right))
+            { return; }
+            methods.Add(method);
+            signatures.Add(method.Signature);
+            nodes.Add(wrapperNode.Id);
+            nodes.Add(binaryNode.Id);
+            choices.Add(wrapperNode);
+            choices.Add(binaryNode);
         }
 
         private static void CaptureAuthoredBinaryTrivia(PreparedSourceFile file, HashSet<MethodProvider> methods,

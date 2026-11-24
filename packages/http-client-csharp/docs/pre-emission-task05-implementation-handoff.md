@@ -188,6 +188,13 @@ Checkpoint 20 covers the exact already-bare arrow roots `(x - y) - z` and
 grouped-root rules are unchanged; unmatched forms retain and stale evidence
 falls back to the same-write native output or requires discarding isolated output.
 
+Checkpoint 21 represents the exact `((x == y))` arrow and direct-return cases
+with an authored wrapper and the native grouped equality. The two optional
+pairs each require their own physical occurrence and two actual ordered `int`
+formals. Qualified fallback retains both pairs when a restore or physical
+input expiry vetoes selection. The legacy direct equality rule is unchanged;
+the separate wrapped `if` condition is not covered by this checkpoint.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

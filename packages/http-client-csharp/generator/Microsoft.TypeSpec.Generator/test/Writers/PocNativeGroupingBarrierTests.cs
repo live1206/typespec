@@ -18,6 +18,7 @@ using Microsoft.TypeSpec.Generator.Input;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
 using Microsoft.TypeSpec.Generator.SourceInput;
+using Microsoft.TypeSpec.Generator.Statements;
 using Microsoft.TypeSpec.Generator.Tests.TestHelpers;
 using NUnit.Framework;
 using static Microsoft.TypeSpec.Generator.Snippets.Snippet;
@@ -29,6 +30,74 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
     internal class PocNativeGroupingBarrierTests
     {
         private const string Configuration = "{\"package-name\":\"Sample\",\"enable-pre-emission-simplification\":true,\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}";
+
+        [Test]
+        public async Task OriginalConstructorInitializerRetainsItsCastPair()
+        {
+            var inputs = Compilation().AddSyntaxTrees(CSharpSyntaxTree.ParseText("""
+                namespace Sample;
+                public class Parent
+                {
+                    public readonly int Value;
+                    public Parent(int value) => Value = value;
+                }
+                """, path: "Parent.cs"));
+            var mock = await MockHelpers.LoadMockGeneratorAsync(configuration: Configuration,
+                compilation: () => Task.FromResult<Compilation>(inputs));
+            var owner = new ConstructorInitializerClock();
+            var generator = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+            generator.SourceInputModel = new SourceInputModel(inputs, null)
+            {
+                PreEmissionSourceInputs = new CompleteSourceInputSnapshot(generator.Configuration.OutputDirectory,
+                    "task05-constructor-initializer", inputs, ["constructor-initializer"], () => true)
+            };
+            CodeModelGenerator.Instance = generator;
+            var roots = generator.OutputLibrary.TypeProviders;
+            foreach (var root in roots) { root.ProcessTypeForBackCompatibility(); }
+            var nativeOwner = new ConstructorInitializerClock();
+            nativeOwner.ProcessTypeForBackCompatibility();
+            var native = new TypeProviderWriter(nativeOwner).Write();
+            using var references = ProviderReferenceMapAnalyzer.PrepareForGeneration(roots);
+            using var prepared = PreparedFieldTypes.CreateForGeneration(generator, roots, references.ShouldWriteProvider);
+            Assert.That(prepared, Is.Not.Null);
+            int casts = 0;
+            int operands = 0;
+            prepared!.PocNativeWriteObserver = node =>
+            {
+                if (ReferenceEquals(node, owner.Cast)) { casts++; }
+                if (ReferenceEquals(node, owner.Cast.Inner)) { operands++; }
+            };
+            var raw = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+            var selected = raw.SelectPreparedForms(true, true, prepared.CanCommitPocGrouping(raw) && prepared.SealPocGroupingWithoutCallbacks(raw));
+            var qualified = raw.SelectPreparedForms(false, false, false);
+            Assert.That(casts, Is.EqualTo(1));
+            Assert.That(operands, Is.EqualTo(1));
+            Assert.That(prepared.PocGroupingCount, Is.Zero);
+            Assert.That(prepared.PocGroupingUses, Is.Zero);
+            Assert.That(raw.PreparedGroupingCount, Is.Zero);
+            Assert.That(selected.Name, Is.EqualTo(native.Name));
+            Assert.That(qualified.Name, Is.EqualTo(native.Name));
+            Assert.That(selected.Content, Is.EqualTo(native.Content));
+            Assert.That(qualified.Content, Is.EqualTo(native.Content));
+
+            var tree = Tree(selected);
+            var witness = CSharpSyntaxTree.ParseText(
+                "namespace Sample; public static class Witness { public static int Run(int value) => new Clock(value).Value; }",
+                path: "Witness.cs");
+            var output = inputs.AddSyntaxTrees(tree, witness);
+            var initializer = tree.GetRoot().DescendantNodes().OfType<ConstructorInitializerSyntax>().Single();
+            Assert.That(initializer.NormalizeWhitespace().ToFullString(), Is.EqualTo(": base(((int)value))"));
+            var model = output.GetSemanticModel(tree);
+            var bound = model.GetOperation(initializer);
+            Assert.That(bound, Is.InstanceOf<IInvocationOperation>());
+            var selectedBase = ((IInvocationOperation)bound!).TargetMethod;
+            var declaredBase = output.GetTypeByMetadataName("Sample.Parent")!.InstanceConstructors.Single();
+            Assert.That(SymbolEqualityComparer.Default.Equals(selectedBase, declaredBase), Is.True);
+            var cast = initializer.DescendantNodes().OfType<CastExpressionSyntax>().Single();
+            Assert.That(((IConversionOperation)model.GetOperation(cast)!).Conversion.IsIdentity, Is.True);
+            Assert.That(PreparedGeneratedRuntime.Invoke(output, "Sample.Witness", "Run", [int.MinValue], [19]),
+                Is.EqualTo(new object?[] { int.MinValue, 19 }));
+        }
 
         [TestCase("generic-ambiguity")]
         [TestCase("relational-sibling")]
@@ -482,6 +551,24 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(bool), null, [x, y]), Return(new BinaryOperatorExpression("==", x, y)), this)];
             }
         }
+        private sealed class ConstructorInitializerClock : TypeProvider
+        {
+            internal CastExpression Cast { get; private set; } = null!;
+            protected override string BuildName() => "Clock";
+            protected override string BuildNamespace() => "Sample";
+            protected override string BuildRelativeFilePath() => "Clock.cs";
+            protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Public | TypeSignatureModifiers.Class;
+            protected override CSharpType BuildBaseType() => new("Parent", "Sample", false, false, null, [], true, false);
+            protected internal override ConstructorProvider[] BuildConstructors()
+            {
+                var value = new ParameterProvider("value", $"", typeof(int));
+                Cast = new CastExpression(value, typeof(int));
+                var initializer = new ConstructorInitializer(true, [Cast]);
+                return [new ConstructorProvider(new ConstructorSignature(Type, null, MethodSignatureModifiers.Public,
+                    new[] { value }, initializer: initializer), new MethodBodyStatements(Array.Empty<MethodBodyStatement>()), this)];
+            }
+        }
+
         private sealed class Clock(string mode, string path = "Clock.cs", Action? observePath = null) : TypeProvider
         {
             internal ValueExpression[] Observed = [];

@@ -195,6 +195,13 @@ formals. Qualified fallback retains both pairs when a restore or physical
 input expiry vetoes selection. The legacy direct equality rule is unchanged;
 the separate wrapped `if` condition is not covered by this checkpoint.
 
+Checkpoint 22 covers the exact native condition `if (((x == y)))` with
+inline `return true;` and a following `return false;`. Only the two expression
+pairs can be omitted; the `IfStatement` writes its required pair in both
+outputs. An actually hidden header, unsupported role or spelling, or a stale
+source/physical input keeps native fallback or requires discard as appropriate.
+Ordinary statement line breaks still differ from the compact original member.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

@@ -55,6 +55,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     CapturePrimitiveCastParents(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureTypedDefaultCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureIfConditions(file, nativeNodes, choices);
+                    CaptureWrappedIfCondition(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureStringCoalescing(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureUsedLocalInitializers(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     if (files.Length == 1)
@@ -812,6 +813,60 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 foreach (var node in context) { nodes.Add(node.Id); }
                 choices.Add(matches[0]);
             }
+        }
+
+        private static void CaptureWrappedIfCondition(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            PreparedSourceOccurrence? root = null;
+            foreach (var candidate in file.Roots)
+            {
+                if (candidate.Id.RootRole == "type-documentation") { continue; }
+                if (root is not null) { return; }
+                root = candidate;
+            }
+            // Match the opted-in wrapper before reading signature/formal state;
+            // the existing single-pair condition profile remains independent.
+            if (root?.Producer is not MethodProvider method || method.GetType() != typeof(MethodProvider) ||
+                method.BodyStatements is not MethodBodyStatements body || body.GetType() != typeof(MethodBodyStatements) ||
+                !ContractCollections.TryCopy(body.Statements, out var statements) || statements.Length != 2 ||
+                statements[0] is not IfStatement { Inline: true, AddBraces: true, Condition: ParenthesizedExpression
+                    { Operand: BinaryOperatorExpression { Operator: "==", AddParentheses: true, Left: VariableExpression left, Right: VariableExpression right } binary } wrapper } conditional ||
+                !ContractCollections.TryCopy(conditional.SourceBody, out var whenTrue) || whenTrue.Length != 1 ||
+                !PocReturnBoolean(whenTrue[0], true, out var trueLiteral) || !PocReturnBoolean(statements[1], false, out var falseLiteral) ||
+                !PocSignature(method.Signature) || method.Signature.HasUnsupportedBaseContract ||
+                method.Signature.ReturnType!.IsLiteral || method.Signature.ReturnType.HasUnionMetadata ||
+                !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters) || parameters.Length != 2 ||
+                !IsActualPlainIntFormal(parameters[0], left) || !IsActualPlainIntFormal(parameters[1], right) ||
+                left.Declaration.RequestedName == right.Declaration.RequestedName)
+            { return; }
+
+            var bodyNode = root.Children.FirstOrDefault(node => ReferenceEquals(node.Producer, body));
+            if (bodyNode is not { IsOpaque: false, Children.Length: 2 } || !ReferenceEquals(bodyNode.Children[1].Producer, statements[1])) { return; }
+            var conditionalNode = bodyNode.Children[0];
+            if (conditionalNode is not { IsOpaque: false, Children.Length: 2 } || !ReferenceEquals(conditionalNode.Producer, conditional) ||
+                !ReferenceEquals(conditionalNode.Children[1].Producer, whenTrue[0])) { return; }
+            var wrapperNode = conditionalNode.Children[0];
+            if (wrapperNode is not { IsOpaque: false, Children.Length: 1 } || !ReferenceEquals(wrapperNode.Producer, wrapper)) { return; }
+            var binaryNode = wrapperNode.Children[0];
+            static bool IsLeaf(PreparedSourceOccurrence node, object producer) =>
+                !node.IsOpaque && node.Children.IsEmpty && ReferenceEquals(node.Producer, producer);
+            if (binaryNode is not { IsOpaque: false, Children.Length: 2 } || !ReferenceEquals(binaryNode.Producer, binary) ||
+                !IsLeaf(binaryNode.Children[0], left) || !IsLeaf(binaryNode.Children[1], right))
+            { return; }
+            var literals = bodyNode.DescendantsAndSelf().Where(node => ReferenceEquals(node.Producer, trueLiteral) || ReferenceEquals(node.Producer, falseLiteral)).ToArray();
+            if (literals.Length != 2 || literals.Any(node => node.IsOpaque)) { return; }
+
+            methods.Add(method);
+            signatures.Add(method.Signature);
+            nodes.Add(bodyNode.Id);
+            nodes.Add(conditionalNode.Id);
+            nodes.Add(wrapperNode.Id);
+            nodes.Add(binaryNode.Id);
+            foreach (var literal in literals) { nodes.Add(literal.Id); }
+            // The IfStatement still writes its required syntax in both buffers.
+            choices.Add(wrapperNode);
+            choices.Add(binaryNode);
         }
 
         private static bool PocReturnBoolean(MethodBodyStatement? statement, bool expected, out LiteralExpression literal)

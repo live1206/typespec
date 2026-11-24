@@ -144,6 +144,12 @@ All 22 new cases, prior focused outcomes and fresh broad validation pass.
 Complete independent review found no verified findings; this bounded checkpoint
 is accepted.
 
+[Checkpoint 14](./pre-emission-task05-checkpoint14.md) owns the required checked
+expression delimiters separately, allowing omission of only the outer cast
+pair in the exact direct checked narrowing case. Focused and broad validation
+pass, and complete independent review found no verified production findings.
+The bounded internal profile is accepted.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

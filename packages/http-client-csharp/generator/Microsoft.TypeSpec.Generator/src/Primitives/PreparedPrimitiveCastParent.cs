@@ -20,12 +20,16 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         internal static PreparedPrimitiveCastParent? TryGet(MethodProvider method, object body, ImmutableArray<ParameterProvider> parameters = default)
         {
             if (method.GetType() != typeof(MethodProvider) || !ReferenceEquals((object?)method.BodyStatements ?? method.BodyExpression, body) ||
-                body is not (MethodBodyStatements or BinaryOperatorExpression or TernaryConditionalExpression or KeywordExpression { Keyword: "checked" }) ||
+                body is not (MethodBodyStatements or BinaryOperatorExpression or TernaryConditionalExpression or CheckedExpression or KeywordExpression { Keyword: "checked" }) ||
                 method.Signature.HasUnsupportedBaseContract ||
                 parameters.IsDefault && !ContractCollections.TryCopy(method.Signature.Parameters, out parameters) ||
                 parameters.Length is not (1 or 2) || !parameters.All(HasCachedFormal)) { return null; }
 
             var result = method.Signature.ReturnType;
+            if (body is CheckedExpression { Operand: CastExpression cast } checkedRoot && parameters.Length == 1 &&
+                IsLong(parameters[0].Type) && PreparedUsedLocalInitializer.IsInt(result) &&
+                PreparedUsedLocalInitializer.IsInt(cast.Type) && cast.Inner?.GetType() == typeof(VariableExpression))
+            { return new(checkedRoot, cast); }
             if (body is KeywordExpression { Keyword: "checked" } keywordRoot)
             {
                 // This binary's pair is required by checked. Only the cast

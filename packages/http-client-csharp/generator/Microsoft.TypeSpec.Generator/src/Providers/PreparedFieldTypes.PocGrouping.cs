@@ -313,6 +313,11 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     context.Add(actualAssignment);
                     context.Add(actualDeclaration);
                 }
+                else if (profile.Root is CheckedExpression)
+                {
+                    if (root.Children.Length != 1) { continue; }
+                    cast = Child(root, "operand", profile.Cast);
+                }
                 else if (profile.CheckedBinary is { } checkedBinary)
                 {
                     if (root.Children.Length != 1 || Child(root, "value", checkedBinary) is not { } binaryRoot ||
@@ -337,7 +342,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 }
                 else { continue; }
                 if (cast is null || cast.Children.Length != 1 || Child(cast, "value", profile.Cast.Inner) is not { } operand ||
-                    !IsBound(operand, profile.Root is TernaryConditionalExpression, useLong: profile.CheckedBinary is not null)) { continue; }
+                    !IsBound(operand, profile.Root is TernaryConditionalExpression, useLong: profile.CheckedBinary is not null || profile.Root is CheckedExpression)) { continue; }
 
                 methods.Add(method);
                 signatures.Add(method.Signature);
@@ -692,7 +697,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 BinaryOperatorExpression binary => nativeNodes.Contains(node.Id) ||
                     binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
                 CastExpression or MethodBodyStatements or IfStatement or LiteralExpression or AssignmentExpression or DeclarationExpression or
-                    InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression or FuncExpression or NewInstanceExpression =>
+                    InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression or CheckedExpression or FuncExpression or NewInstanceExpression =>
                     nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) &&
                     (keyword.Keyword is "return" or "default" || (keyword.Keyword is "null" or "checked") && nativeNodes.Contains(node.Id)),

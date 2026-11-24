@@ -30,6 +30,182 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
     {
         private const string Configuration = "{\"package-name\":\"Sample\",\"enable-pre-emission-simplification\":true,\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}";
 
+        [Test]
+        public async Task OriginalExtraReturnWrapperBindsTheActualIdentityCast()
+        {
+            var compilation = Compilation("NativeExtraReturnWrapper", []);
+            var enabled = "\"enable-pre-emission-simplification\":true";
+            var mock = await MockHelpers.LoadMockGeneratorAsync(
+                configuration: Configuration.Replace(enabled, "\"enable-pre-emission-simplification\":false", StringComparison.Ordinal),
+                compilation: () => Task.FromResult<Compilation>(compilation));
+            var owner = new Clock(false, "Clock", "Clock.cs");
+            var generator = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+            generator.SourceInputModel = ControlledInputs(generator, compilation, () => true);
+            CodeModelGenerator.Instance = generator;
+            owner.ProcessTypeForBackCompatibility();
+            var native = new TypeProviderWriter(owner).Write();
+            Assert.That(Expression(native), Is.EqualTo("((int)value)"), "The legacy direct node writes only its own pair");
+
+            var original = new CodeFile("namespace Sample; public class Clock { public int M(int value) { return (((int)value)); } }", "Clock.cs");
+            var tree = CSharpSyntaxTree.ParseText(original.Content, path: original.Name);
+            var model = compilation.AddSyntaxTrees(tree).GetSemanticModel(tree);
+            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single();
+            var returned = method.DescendantNodes().OfType<ReturnStatementSyntax>().Single();
+            Assert.That(returned.Expression, Is.TypeOf<ParenthesizedExpressionSyntax>());
+            var outer = (ParenthesizedExpressionSyntax)returned.Expression!;
+            Assert.That(outer.Expression, Is.TypeOf<ParenthesizedExpressionSyntax>());
+            var inner = (ParenthesizedExpressionSyntax)outer.Expression;
+            Assert.That(inner.Expression, Is.TypeOf<CastExpressionSyntax>());
+            var cast = (CastExpressionSyntax)inner.Expression;
+            Assert.That(((IConversionOperation)model.GetOperation(cast)!).Conversion.IsIdentity, Is.True);
+            Assert.That(SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(cast.Expression).Symbol,
+                model.GetDeclaredSymbol(method)!.Parameters.Single()), Is.True);
+            object?[][] arguments = [[int.MinValue], [19], [int.MaxValue]];
+            object?[] expected = [int.MinValue, 19, int.MaxValue];
+            Assert.That(Execute(original, "Clock", arguments), Is.EqualTo(expected));
+            Assert.That(Execute(native, "Clock", arguments), Is.EqualTo(expected));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task ExtraReturnWrapperUsesItsOwnNativePair(bool enableOmission)
+        {
+            var compilation = Compilation("NativeOwnedReturnWrapper", []);
+            string configuration = enableOmission ? Configuration : Configuration.Replace(
+                "\"enable-pre-emission-simplification\":true", "\"enable-pre-emission-simplification\":false", StringComparison.Ordinal);
+            var mock = await MockHelpers.LoadMockGeneratorAsync(configuration: configuration,
+                compilation: () => Task.FromResult<Compilation>(compilation));
+            var owner = new Clock(false, "Clock", "Clock.cs", extraWrapper: true);
+            var generator = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+            generator.SourceInputModel = ControlledInputs(generator, compilation, () => true);
+            CodeModelGenerator.Instance = generator;
+            var roots = generator.OutputLibrary.TypeProviders;
+            foreach (var root in roots) { root.ProcessTypeForBackCompatibility(); }
+            var nativeOwner = new Clock(false, "Clock", "Clock.cs", extraWrapper: true);
+            nativeOwner.ProcessTypeForBackCompatibility();
+            var native = new TypeProviderWriter(nativeOwner).Write();
+            using var references = ProviderReferenceMapAnalyzer.PrepareForGeneration(roots);
+            using var prepared = PreparedFieldTypes.CreateForGeneration(generator, roots, references.ShouldWriteProvider);
+            List<object> visits = [];
+            if (enableOmission)
+            {
+                Assert.That(prepared, Is.Not.Null);
+                prepared!.PocNativeWriteObserver = node =>
+                {
+                    if (ReferenceEquals(node, owner.Wrapper) || ReferenceEquals(node, owner.Cast) || ReferenceEquals(node, owner.Leaf))
+                    { visits.Add(node); }
+                };
+            }
+            var raw = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+            var selected = raw.SelectPreparedForms(true, true, prepared?.CanCommitPocGrouping(raw) == true && prepared.SealPocGroupingWithoutCallbacks(raw));
+            var qualified = raw.SelectPreparedForms(false, false, false);
+            Assert.That(selected.Name, Is.EqualTo(native.Name));
+            Assert.That(qualified.Name, Is.EqualTo(native.Name));
+            Assert.That(qualified.Content, Is.EqualTo(native.Content));
+            var tree = CSharpSyntaxTree.ParseText(qualified.Content, path: qualified.Name);
+            var model = compilation.AddSyntaxTrees(tree).GetSemanticModel(tree);
+            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single();
+            var returned = method.DescendantNodes().OfType<ReturnStatementSyntax>().Single();
+            Assert.That(returned.ToString(), Is.EqualTo("return (((int)value));"));
+            var wrapper = (ParenthesizedExpressionSyntax)returned.Expression!;
+            var castPair = (ParenthesizedExpressionSyntax)wrapper.Expression;
+            var cast = (CastExpressionSyntax)castPair.Expression;
+            Assert.That(cast.Type.ToString(), Is.EqualTo("int"));
+            Assert.That(((IConversionOperation)model.GetOperation(cast)!).Conversion.IsIdentity, Is.True);
+            Assert.That(SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(cast.Expression).Symbol,
+                model.GetDeclaredSymbol(method)!.Parameters.Single()), Is.True);
+            object?[][] arguments = [[int.MinValue], [19], [int.MaxValue]];
+            Assert.That(Execute(native, "Clock", arguments), Is.EqualTo(new object?[] { int.MinValue, 19, int.MaxValue }));
+            Assert.That(Execute(selected, "Clock", arguments), Is.EqualTo(Execute(native, "Clock", arguments)));
+            if (enableOmission)
+            {
+                Assert.That(visits, Has.Count.EqualTo(3));
+                Assert.That(visits[0], Is.SameAs(owner.Wrapper));
+                Assert.That(visits[1], Is.SameAs(owner.Cast));
+                Assert.That(visits[2], Is.SameAs(owner.Leaf));
+                Assert.That(raw.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+            }
+            Assert.That(Expression(selected), Is.EqualTo(enableOmission ? "(int)value" : "(((int)value))"));
+            Assert.That(prepared?.PocGroupingCount ?? 0, Is.EqualTo(enableOmission ? 2 : 0));
+            Assert.That(prepared?.PocGroupingUses ?? 0, Is.EqualTo(enableOmission ? 2 : 0));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task ExtraReturnWrapperRetainsNewlineInActualFormalSpelling(bool enabled)
+        {
+            var compilation = Compilation("NativeReturnWrapperFormalSpelling", []);
+            string configuration = enabled ? Configuration : Configuration.Replace(
+                "\"enable-pre-emission-simplification\":true", "\"enable-pre-emission-simplification\":false", StringComparison.Ordinal);
+            var mock = await MockHelpers.LoadMockGeneratorAsync(configuration: configuration, compilation: () => Task.FromResult<Compilation>(compilation));
+            var owner = new Clock(false, "Clock", "Clock.cs", extraWrapper: true);
+            var generator = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+            generator.SourceInputModel = ControlledInputs(generator, compilation, () => true);
+            CodeModelGenerator.Instance = generator;
+            var roots = generator.OutputLibrary.TypeProviders;
+            foreach (var root in roots) { root.ProcessTypeForBackCompatibility(); }
+            var formal = owner.Methods.Single().Signature.Parameters.Single();
+            owner.Leaf.Declaration.Update("value\n");
+            Assert.That(formal.Name, Is.EqualTo("value"));
+            var control = new Clock(false, "Clock", "Clock.cs", extraWrapper: true);
+            control.ProcessTypeForBackCompatibility();
+            _ = control.Methods.Single();
+            control.Leaf.Declaration.Update("value\n");
+            var native = new TypeProviderWriter(control).Write();
+            Assert.That(native.Content, Does.Contain("return (((int)value\n"));
+            Assert.That(Expression(native), Is.EqualTo("(((int)value))"));
+            Assert.That(Execute(native, "Clock", [[17]]), Is.EqualTo(new object?[] { 17 }));
+
+            using var references = ProviderReferenceMapAnalyzer.PrepareForGeneration(roots);
+            using var prepared = PreparedFieldTypes.CreateForGeneration(generator, roots, references.ShouldWriteProvider);
+            var raw = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+            var selected = raw.SelectPreparedForms(true, true, prepared?.CanCommitPocGrouping(raw) == true && prepared.SealPocGroupingWithoutCallbacks(raw));
+            Assert.That(selected.Name, Is.EqualTo(native.Name));
+            Assert.That(selected.Content, Is.EqualTo(native.Content));
+            Assert.That(prepared?.PocGroupingCount ?? 0, Is.Zero);
+            Assert.That(prepared?.PocGroupingUses ?? 0, Is.Zero);
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public async Task ExtraReturnWrapperRejectsUnknownRoleOrRestoredState(bool arrow)
+        {
+            var compilation = Compilation("NativeReturnWrapperVeto", []);
+            var mock = await MockHelpers.LoadMockGeneratorAsync(configuration: Configuration, compilation: () => Task.FromResult<Compilation>(compilation));
+            var owner = new Clock(arrow, "Clock", "Clock.cs", extraWrapper: true);
+            var generator = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+            generator.SourceInputModel = ControlledInputs(generator, compilation, () => true);
+            CodeModelGenerator.Instance = generator;
+            var roots = generator.OutputLibrary.TypeProviders;
+            foreach (var root in roots) { root.ProcessTypeForBackCompatibility(); }
+            var control = new Clock(arrow, "Clock", "Clock.cs", extraWrapper: true);
+            control.ProcessTypeForBackCompatibility();
+            var native = new TypeProviderWriter(control).Write();
+            using var references = ProviderReferenceMapAnalyzer.PrepareForGeneration(roots);
+            using var prepared = PreparedFieldTypes.CreateForGeneration(generator, roots, references.ShouldWriteProvider);
+            Assert.That(prepared, Is.Not.Null);
+            Assert.That(prepared!.PocGroupingCount, Is.EqualTo(arrow ? 0 : 2));
+            int openings = 0;
+            prepared.PocAfterOpening = () =>
+            {
+                openings++;
+                var declaration = owner.Leaf.Declaration;
+                var name = declaration.RequestedName;
+                declaration.Update("otherValue");
+                declaration.Update(name);
+            };
+            var raw = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+            Assert.That(openings, Is.EqualTo(arrow ? 0 : 1));
+            Assert.That(prepared.PocGroupingUses, Is.EqualTo(arrow ? 0 : 1));
+            Assert.That(Expression(raw), Is.EqualTo(arrow ? "(((int)value))" : "((int)value)"));
+            bool allowed = prepared.CanCommitPocGrouping(raw) && prepared.SealPocGroupingWithoutCallbacks(raw);
+            Assert.That(allowed, Is.EqualTo(arrow), "The restored formal must veto even the first already-used choice");
+            var selected = raw.SelectPreparedForms(true, true, allowed);
+            Assert.That(selected.Name, Is.EqualTo(native.Name));
+            Assert.That(selected.Content, Is.EqualTo(native.Content));
+            Assert.That(Execute(selected, "Clock", [[17]]), Is.EqualTo(new object?[] { 17 }));
+        }
+
         [TestCase("stable", false)]
         [TestCase("stable", true)]
         [TestCase("source-expiry", false)]
@@ -40,7 +216,16 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
         [TestCase("ast-expiry", true)]
         [TestCase("isolated-link", false)]
         [TestCase("isolated-link", true)]
-        public async Task CompilerPipelineUsesActualCastFilesAndFinalPhysicalAuthority(string mode, bool arrow)
+        public async Task CompilerPipelineUsesActualCastFilesAndFinalPhysicalAuthority(string mode, bool arrow) =>
+            await CheckCompilerPipeline(mode, arrow, extraWrapper: false);
+
+        [TestCase("stable")]
+        [TestCase("source-expiry")]
+        [TestCase("result-expiry")]
+        public async Task CompilerPipelineUsesActualWrapperFilesAndFinalPhysicalAuthority(string mode) =>
+            await CheckCompilerPipeline(mode, arrow: false, extraWrapper: true);
+
+        private static async Task CheckCompilerPipeline(string mode, bool arrow, bool extraWrapper)
         {
             if (mode == "isolated-link" && OperatingSystem.IsWindows())
             { Assert.Ignore("The controlled fixture requires unprivileged Unix symbolic links"); }
@@ -56,7 +241,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             {
                 var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original, configuration: Configuration,
                     compilation: () => Task.FromResult<Compilation>(CSharpCompilation.Create("CastCompilerInputs")));
-                var owner = new Clock(arrow, "Clock", "alias/Clock.cs");
+                var owner = new Clock(arrow, "Clock", "alias/Clock.cs", extraWrapper);
                 var generator = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
                 CodeModelGenerator.Instance = generator;
                 var session = new Session(original, source);
@@ -65,17 +250,19 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 int uses = 0;
                 int casts = 0;
                 int operands = 0;
+                int wrappers = 0;
                 bool? decision = null;
                 var pipeline = new CSharpGen
                 {
                     PocPreparationObserved = prepared =>
                     {
                         Assert.That(prepared, Is.Not.Null);
-                        Assert.That(prepared!.PocGroupingCount, Is.EqualTo(1));
+                        Assert.That(prepared!.PocGroupingCount, Is.EqualTo(extraWrapper ? 2 : 1));
                         proof = generator.CompilerBuildContext?.SourceProof;
                         Assert.That(proof, Is.Not.Null, "A real captured compiler session supplies physical input authority");
                         prepared.PocNativeWriteObserver = node =>
                         {
+                            if (ReferenceEquals(node, owner.Wrapper)) { wrappers++; }
                             if (ReferenceEquals(node, owner.Cast)) { casts++; }
                             if (ReferenceEquals(node, owner.Leaf)) { operands++; }
                         };
@@ -111,17 +298,18 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 catch (Exception exception) { failure = exception; }
                 // The compiler pipeline initializes SourceInputModel. Render the
                 // independent native control only after that initialization.
-                var nativeOwner = new Clock(arrow, "Clock", "alias/Clock.cs");
+                var nativeOwner = new Clock(arrow, "Clock", "alias/Clock.cs", extraWrapper);
                 nativeOwner.ProcessTypeForBackCompatibility();
                 var native = new TypeProviderWriter(nativeOwner).Write();
-                Assert.That(uses, Is.EqualTo(1));
+                Assert.That(wrappers, Is.EqualTo(extraWrapper ? 1 : 0));
+                Assert.That(uses, Is.EqualTo(extraWrapper ? 2 : 1));
                 Assert.That(casts, Is.EqualTo(1));
                 Assert.That(operands, Is.EqualTo(1));
                 Assert.That(decision, Is.EqualTo(mode != "ast-expiry"));
                 Assert.That(selected, Is.Not.Null);
                 Assert.That(selected!.Name, Is.EqualTo(native.Name));
                 bool shortForm = mode is "stable" or "result-expiry";
-                Assert.That(Expression(selected), Is.EqualTo(shortForm ? "(int)value" : "((int)value)"));
+                Assert.That(Expression(selected), Is.EqualTo(shortForm ? "(int)value" : extraWrapper ? "(((int)value))" : "((int)value)"));
                 PreparedParenthesesTests.AssertOperations(native.Content, selected.Content);
                 object?[][] arguments = [[int.MinValue], [int.MaxValue], [17]];
                 Assert.That(Execute(selected, "Clock", arguments), Is.EqualTo(new object?[] { int.MinValue, int.MaxValue, 17 }));
@@ -144,7 +332,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     // cast entirely. Preserve strict raw-to-selected conversion
                     // checks above; compare final output to actual native final
                     // output, not to the pre-legacy conversion operation.
-                    var nativeFinal = await NativeFinalControl(arrow, sandbox, source);
+                    var nativeFinal = await NativeFinalControl(arrow, sandbox, source, extraWrapper);
                     PreparedParenthesesTests.AssertOperations(nativeFinal.Content, final.Content);
                     Assert.That(Execute(final, "Clock", arguments), Is.EqualTo(Execute(native, "Clock", arguments)));
                 }
@@ -235,7 +423,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Assert.That(Execute(otherSelected, "Other", [[int.MinValue], [int.MaxValue]]), Is.EqualTo(new object?[] { int.MinValue, int.MaxValue }));
         }
 
-        private static async Task<CodeFile> NativeFinalControl(bool arrow, string sandbox, string source)
+        private static async Task<CodeFile> NativeFinalControl(bool arrow, string sandbox, string source, bool extraWrapper)
         {
             var previous = CodeModelGenerator.Instance;
             var original = Path.Combine(sandbox, "native-original");
@@ -247,7 +435,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 var configuration = Configuration.Replace("\"enable-pre-emission-simplification\":true", "\"enable-pre-emission-simplification\":false", StringComparison.Ordinal);
                 var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original, configuration: configuration,
                     compilation: () => Task.FromResult<Compilation>(CSharpCompilation.Create("NativeFinalCastInputs")));
-                var owner = new Clock(arrow, "Clock", "alias/Clock.cs");
+                var owner = new Clock(arrow, "Clock", "alias/Clock.cs", extraWrapper);
                 var generator = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
                 CodeModelGenerator.Instance = generator;
                 CodeFile? raw = null;
@@ -264,8 +452,8 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 Assert.That(uses, Is.Zero);
                 Assert.That(raw, Is.Not.Null);
                 Assert.That(selected, Is.Not.Null);
-                Assert.That(Expression(raw!), Is.EqualTo("((int)value)"));
-                Assert.That(Expression(selected!), Is.EqualTo("((int)value)"));
+                Assert.That(Expression(raw!), Is.EqualTo(extraWrapper ? "(((int)value))" : "((int)value)"));
+                Assert.That(Expression(selected!), Is.EqualTo(extraWrapper ? "(((int)value))" : "((int)value)"));
                 Assert.That(selected!.Name, Is.EqualTo("alias/Clock.cs"));
                 var final = new CodeFile(File.ReadAllText(Path.Combine(isolated, "alias", "Clock.cs")), "alias/Clock.cs");
                 Assert.That(Expression(final), Is.EqualTo("value"), "Actual BASE-characterized native legacy result");
@@ -313,8 +501,9 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             public override InputLibrary InputLibrary => input;
             public override OutputLibrary OutputLibrary => output;
         }
-        private sealed class Clock(bool arrow, string name, string path) : TypeProvider
+        private sealed class Clock(bool arrow, string name, string path, bool extraWrapper = false) : TypeProvider
         {
+            internal ParenthesizedExpression? Wrapper { get; private set; }
             internal CastExpression Cast { get; private set; } = null!;
             internal VariableExpression Leaf { get; private set; } = null!;
             protected override string BuildName() => name;
@@ -327,6 +516,11 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 Leaf = parameter;
                 Cast = new CastExpression(Leaf, typeof(int));
                 var signature = new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, [parameter]);
+                if (extraWrapper)
+                {
+                    Wrapper = new ParenthesizedExpression(Cast);
+                    return [arrow ? new MethodProvider(signature, Wrapper, this) : new MethodProvider(signature, Return(Wrapper), this)];
+                }
                 return [arrow ? new MethodProvider(signature, Cast, this) : new MethodProvider(signature, Return(Cast), this)];
             }
         }

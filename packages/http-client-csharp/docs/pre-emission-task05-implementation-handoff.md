@@ -156,6 +156,18 @@ return. The written constraint and actual parameter identity are required.
 Focused and broad validation pass, and complete independent review found no
 verified production findings. The bounded internal profile is accepted.
 
+Checkpoint 16 adds the exact native retention control for `base(((int)value))`.
+It verifies the actual base constructor, identity conversion, and forwarded
+value; it changes no production code.
+
+Checkpoint 17 represents one explicitly authored, trivia-free expression pair.
+In the exact closed single-method `int` return profile, the wrapper pair and
+cast grouping pair each have their own source occurrence. The required cast-type
+pair remains: `return (((int)value));` can select `return (int)value;`. An
+unsupported arrow role retains, a restored formal between pair writes vetoes
+selection, and final compiler input expiry still requires discard. This is not
+provenance for arbitrary raw wrappers, trivia, line mapping, or child spellings.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

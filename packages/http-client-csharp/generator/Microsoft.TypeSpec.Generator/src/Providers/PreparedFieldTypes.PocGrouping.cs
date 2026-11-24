@@ -48,6 +48,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 {
                     CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureDirectCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    CaptureWrappedReturnCast(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CapturePrimitiveCastParents(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureTypedDefaultCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureIfConditions(file, nativeNodes, choices);
@@ -577,6 +578,52 @@ namespace Microsoft.TypeSpec.Generator.Providers
             }
         }
 
+        private static void CaptureWrappedReturnCast(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            // Only the closed native single-method file; do not infer trivia,
+            // directive state or token positions from original or emitted text.
+            PreparedSourceOccurrence? root = null;
+            foreach (var candidate in file.Roots)
+            {
+                if (candidate.Id.RootRole == "type-documentation") { continue; }
+                if (root is not null) { return; }
+                root = candidate;
+            }
+            if (root?.Producer is not MethodProvider method || method.GetType() != typeof(MethodProvider) ||
+                method.BodyStatements is not ExpressionStatement { Expression: KeywordExpression
+                    { Keyword: "return", Expression: ParenthesizedExpression { Operand: CastExpression cast } wrapper } keyword } statement ||
+                statement.GetType() != typeof(ExpressionStatement) || keyword.GetType() != typeof(KeywordExpression) ||
+                cast.Inner is not VariableExpression variable || variable.GetType() != typeof(VariableExpression) ||
+                !PocIntType(cast.Type) || !PocIntType(method.Signature.ReturnType) || method.Signature.HasUnsupportedBaseContract ||
+                !PocSignature(method.Signature, true) || !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters) ||
+                parameters.Length != 1 || !parameters[0].HasCachedEmittedDeclarationState ||
+                parameters[0].HasUnsupportedParameterModifiers || parameters[0].HasUnsupportedDefaultValue)
+            { return; }
+            static PreparedSourceOccurrence? OnlyChild(PreparedSourceOccurrence? parent, object producer) =>
+                parent is { IsOpaque: false, Children.Length: 1 } && ReferenceEquals(parent.Children[0].Producer, producer)
+                    ? parent.Children[0] : null;
+            var body = root.Children.FirstOrDefault(child => ReferenceEquals(child.Producer, statement));
+            var returned = OnlyChild(body, keyword);
+            var wrapperNode = OnlyChild(returned, wrapper);
+            var castNode = OnlyChild(wrapperNode, cast);
+            // The frame proves declaration identity, not lexical safety. The
+            // writer uses this declaration's cached spelling, not Parameter.Name;
+            // only a plain identifier preserves the closing delimiter's non-BOL state.
+            if (wrapperNode is null || castNode is null || OnlyChild(castNode, variable) is not { IsOpaque: false, Children.IsEmpty: true } ||
+                variable.Declaration?.RequestedName is not { } emittedName || !Identifier(emittedName) ||
+                !PocIntType(castNode.ResolveParameterType(variable)))
+            { return; }
+            methods.Add(method);
+            signatures.Add(method.Signature);
+            nodes.Add(wrapperNode.Id);
+            nodes.Add(castNode.Id);
+            // Either pair can be absent while the other remains; the surviving
+            // spelling is then the already supported direct identity cast pair.
+            choices.Add(wrapperNode);
+            choices.Add(castNode);
+        }
+
         private static bool PocIntType(CSharpType? type) => PocType(type, typeof(int)) && !type!.IsLiteral && !type.HasUnionMetadata;
 
         private static void CaptureIfConditions(PreparedSourceFile file, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
@@ -728,7 +775,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 BinaryOperatorExpression binary => nativeNodes.Contains(node.Id) ||
                     binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
                 CastExpression or MethodBodyStatements or IfStatement or LiteralExpression or AssignmentExpression or DeclarationExpression or
-                    InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression or CheckedExpression or FuncExpression or NewInstanceExpression or TypedDefaultExpression or WhereExpression =>
+                    InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression or CheckedExpression or FuncExpression or NewInstanceExpression or TypedDefaultExpression or ParenthesizedExpression or WhereExpression =>
                     nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) &&
                     (keyword.Keyword is "return" or "default" || (keyword.Keyword is "null" or "checked" or "struct") && nativeNodes.Contains(node.Id)),

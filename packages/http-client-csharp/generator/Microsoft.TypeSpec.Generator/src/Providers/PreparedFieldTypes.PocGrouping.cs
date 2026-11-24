@@ -49,6 +49,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureDirectCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureWrappedReturnCast(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    CaptureAuthoredBinaryTrivia(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CapturePrimitiveCastParents(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureTypedDefaultCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureIfConditions(file, nativeNodes, choices);
@@ -624,6 +625,54 @@ namespace Microsoft.TypeSpec.Generator.Providers
             choices.Add(castNode);
         }
 
+        private static void CaptureAuthoredBinaryTrivia(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            PreparedSourceOccurrence? root = null;
+            foreach (var candidate in file.Roots)
+            {
+                if (candidate.Id.RootRole == "type-documentation") { continue; }
+                if (root is not null) { return; }
+                root = candidate;
+            }
+            // Deliberately authored trivia on this exact return only. No raw
+            // declaration lookup or general trivia/line-mapping permission.
+            if (root?.Producer is not MethodProvider method || method.GetType() != typeof(MethodProvider) ||
+                method.BodyStatements is not ExpressionStatement { Expression: KeywordExpression
+                    { Keyword: "return", Expression: AuthoredBinaryTriviaExpression outer } keyword } statement ||
+                statement.GetType() != typeof(ExpressionStatement) || keyword.GetType() != typeof(KeywordExpression) ||
+                outer.Operand is not { Operand: { Operator: "+", AddParentheses: false, Left: VariableExpression left, Right: VariableExpression right } binary } inner ||
+                !PocIntType(method.Signature.ReturnType) || method.Signature.HasUnsupportedBaseContract || !PocSignature(method.Signature, true) ||
+                !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters) || parameters.Length != 2 ||
+                !IsActualPlainFormal(parameters[0], left) || !IsActualPlainFormal(parameters[1], right) ||
+                ReferenceEquals(left.Declaration, right.Declaration) || left.Declaration.RequestedName == right.Declaration.RequestedName)
+            { return; }
+            // The occurrence tree independently snapshots the two parameter
+            // declarations, variable names/types, exact binary and both trivia edges.
+            static bool IsActualPlainFormal(ParameterProvider formal, VariableExpression variable) =>
+                variable.GetType() == typeof(VariableExpression) && formal.HasCachedEmittedDeclarationState &&
+                !formal.HasUnsupportedParameterModifiers && !formal.HasUnsupportedDefaultValue &&
+                ReferenceEquals(formal.CachedVariableExpression, variable) && PocIntType(formal.Type) && PocIntType(variable.Type) &&
+                variable.Declaration?.RequestedName is { } emittedName && Identifier(emittedName);
+            static PreparedSourceOccurrence? OnlyChild(PreparedSourceOccurrence? parent, object producer) =>
+                parent is { IsOpaque: false, Children.Length: 1 } && ReferenceEquals(parent.Children[0].Producer, producer)
+                    ? parent.Children[0] : null;
+            var body = root.Children.FirstOrDefault(child => ReferenceEquals(child.Producer, statement));
+            var returned = OnlyChild(body, keyword);
+            var outerNode = OnlyChild(returned, outer);
+            var innerNode = OnlyChild(outerNode, inner);
+            if (outerNode is null || innerNode is null || OnlyChild(innerNode, binary) is not { IsOpaque: false, Children.Length: 2 } binaryNode ||
+                !ReferenceEquals(binaryNode.Children[0].Producer, left) || !ReferenceEquals(binaryNode.Children[1].Producer, right))
+            { return; }
+            methods.Add(method);
+            signatures.Add(method.Signature);
+            nodes.Add(outerNode.Id);
+            nodes.Add(innerNode.Id);
+            nodes.Add(binaryNode.Id);
+            choices.Add(outerNode);
+            choices.Add(innerNode);
+        }
+
         private static bool PocIntType(CSharpType? type) => PocType(type, typeof(int)) && !type!.IsLiteral && !type.HasUnionMetadata;
 
         private static void CaptureIfConditions(PreparedSourceFile file, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
@@ -775,7 +824,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 BinaryOperatorExpression binary => nativeNodes.Contains(node.Id) ||
                     binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
                 CastExpression or MethodBodyStatements or IfStatement or LiteralExpression or AssignmentExpression or DeclarationExpression or
-                    InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression or CheckedExpression or FuncExpression or NewInstanceExpression or TypedDefaultExpression or ParenthesizedExpression or WhereExpression =>
+                    InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression or CheckedExpression or FuncExpression or NewInstanceExpression or TypedDefaultExpression or ParenthesizedExpression or
+                    AuthoredBinaryTriviaExpression or AuthoredBinaryLineExpression or WhereExpression =>
                     nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) &&
                     (keyword.Keyword is "return" or "default" || (keyword.Keyword is "null" or "checked" or "struct") && nativeNodes.Contains(node.Id)),

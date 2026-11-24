@@ -168,6 +168,16 @@ unsupported arrow role retains, a restored formal between pair writes vetoes
 selection, and final compiler input expiry still requires discard. This is not
 provenance for arbitrary raw wrappers, trivia, line mapping, or child spellings.
 
+Checkpoint 18 authors the exact two delimiter pairs for the single-method
+binary return with inline block comments and LF or CRLF boundaries. The native
+binary and its two actual `int` formal references still own their writes.
+Selection removes only the four pair characters; the inner closing boundary
+writes its line ending and trailing comment to both outputs before ordinary
+indentation resumes. Qualified fallback retains the original statement, and
+stale physical compiler input still requires discard. This profile does not
+derive provenance from arbitrary raw source, transfer line comments or mapped
+source, or prove later `CallerLineNumber` values.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

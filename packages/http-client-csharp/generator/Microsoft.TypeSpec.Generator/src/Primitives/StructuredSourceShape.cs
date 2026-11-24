@@ -102,6 +102,11 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                     s.Value(n.Operator); s.Value(n.OperandOnTheLeft); s.Child("operand", n.Operand); s.IntrinsicTokens = false; s.IntrinsicLayoutKnown = false; break;
                 case CheckedExpression n: s.Child("operand", n.Operand); break;
                 case ParenthesizedExpression n: s.Child("operand", n.Operand); break;
+                case AuthoredBinaryTriviaExpression n:
+                    s.Value(n.Before); s.Child("operand", n.Operand); s.IntrinsicTokens = false; break;
+                case AuthoredBinaryLineExpression n:
+                    s.Value(n.CrLf); s.Value(n.After); s.Child("operand", n.Operand);
+                    s.IntrinsicTokens = false; s.IntrinsicLineBreaks = true; break;
                 case TypedDefaultExpression n: s.Type(n.Type); break;
                 case CastExpression n: s.Type(n.Type); s.Child("value", n.Inner); break;
                 case AsExpression n: s.Type(n.Type); s.Child("value", n.Inner); break;

@@ -28,6 +28,125 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
     {
         private const string Configuration = "{\"package-name\":\"Sample\",\"enable-pre-emission-simplification\":true,\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}";
 
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        [TestCase(true, true)]
+        public async Task OriginalBareArithmeticRootUsesOnlyItsChildPair(bool multiply, bool selectOmission)
+        {
+            var mock = await MockHelpers.LoadMockGeneratorAsync(configuration: Configuration);
+            var owner = new BareArithmeticOwner(multiply);
+            var generator = new PipelineGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+            generator.SourceInputModel = new SourceInputModel(Compilation("BareArithmeticInputs", []), null);
+            CodeModelGenerator.Instance = generator;
+            var roots = generator.OutputLibrary.TypeProviders;
+            foreach (var root in roots) { root.ProcessTypeForBackCompatibility(); }
+            var nativeOwner = new BareArithmeticOwner(multiply);
+            nativeOwner.ProcessTypeForBackCompatibility();
+            var native = new TypeProviderWriter(nativeOwner).Write();
+            using var references = ProviderReferenceMapAnalyzer.PrepareForGeneration(roots);
+            using var prepared = PreparedFieldTypes.CreateForGeneration(generator, roots, references.ShouldWriteProvider);
+            Assert.That(prepared, Is.Not.Null);
+            List<object> visits = [];
+            prepared!.PocNativeWriteObserver = node =>
+            {
+                if (ReferenceEquals(node, owner.Root) || ReferenceEquals(node, owner.Child) ||
+                    Array.Exists(owner.Parameters, parameter => ReferenceEquals(node, parameter))) { visits.Add(node); }
+            };
+            var raw = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+            var qualified = raw.SelectPreparedForms(false, false, false);
+            var selected = raw.SelectPreparedForms(true, true, selectOmission && prepared.CanCommitPocGrouping(raw) && prepared.SealPocGroupingWithoutCallbacks(raw));
+            Assert.That(raw.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+            Assert.That(native.Name, Is.EqualTo(selected.Name));
+            Assert.That(native.Name, Is.EqualTo(qualified.Name));
+            Assert.That(qualified.Content, Is.EqualTo(native.Content));
+            if (!selectOmission) { Assert.That(selected.Content, Is.EqualTo(native.Content)); }
+            object[] expectedVisits = multiply ? [owner.Root, owner.Parameters[0], owner.Child, owner.Parameters[1], owner.Parameters[2]] :
+                [owner.Root, owner.Child, owner.Parameters[0], owner.Parameters[1], owner.Parameters[2]];
+            Assert.That(visits, Has.Count.EqualTo(expectedVisits.Length));
+            for (int i = 0; i < expectedVisits.Length; i++) { Assert.That(visits[i], Is.SameAs(expectedVisits[i])); }
+            Assert.That(owner.Root.AddParentheses, Is.False);
+            Assert.That(owner.Child.AddParentheses, Is.True);
+
+            var tree = CSharpSyntaxTree.ParseText(native.Content, path: native.Name);
+            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single();
+            string retained = multiply ? "x + (y * z)" : "(x - y) - z";
+            Assert.That(method.ExpressionBody!.Expression.NormalizeWhitespace().ToFullString(), Is.EqualTo(retained));
+            var model = Compilation("BareArithmeticBinding", [tree]).GetSemanticModel(tree);
+            var parameters = model.GetDeclaredSymbol(method)!.Parameters;
+            var leaves = method.ExpressionBody.Expression.DescendantNodes().OfType<IdentifierNameSyntax>().ToArray();
+            Assert.That(leaves, Has.Length.EqualTo(3));
+            for (int i = 0; i < leaves.Length; i++)
+            { Assert.That(SymbolEqualityComparer.Default.Equals(parameters[i], model.GetSymbolInfo(leaves[i]).Symbol), Is.True); }
+            PreparedParenthesesTests.AssertOperations(native.Content, selected.Content);
+            object?[][] arguments = multiply ? [[10, 2, 3], [int.MaxValue, 2, 2]] : [[10, 7, 3], [int.MinValue, 1, 1]];
+            object?[] expected = multiply ? [16, int.MinValue + 3] : [0, int.MaxValue - 1];
+            Assert.That(Execute(native, arguments), Is.EqualTo(expected));
+            Assert.That(Execute(selected, arguments), Is.EqualTo(expected));
+            var wrong = new CodeFile("namespace Sample; public class Clock { public int M(int x, int y, int z) => " +
+                (multiply ? "(x + y) * z" : "x - (y - z)") + "; }", native.Name);
+            Assert.That(Execute(wrong, [arguments[0]]).Single(), Is.EqualTo(multiply ? 36 : 6));
+            Assert.Throws<AssertionException>(() => PreparedParenthesesTests.AssertOperations(native.Content, wrong.Content));
+            string selectedExpression = PreparedParenthesesTests.MethodExpression(selected.Content).NormalizeWhitespace().ToFullString();
+            Assert.That(selectedExpression, Is.EqualTo(selectOmission ? multiply ? "x + y * z" : "x - y - z" : retained));
+            if (selectOmission)
+            {
+                Assert.That(prepared.PocGroupingCount, Is.EqualTo(1));
+                Assert.That(raw.PreparedGroupingCount, Is.EqualTo(1));
+            }
+        }
+
+        [TestCase(false, "restored")]
+        [TestCase(true, "restored")]
+        [TestCase(false, "other-side")]
+        [TestCase(true, "other-side")]
+        [TestCase(false, "bare-child")]
+        [TestCase(true, "alias-carrier")]
+        [TestCase(true, "newline")]
+        public async Task BareArithmeticUnknownOrRestoredChildrenUseNative(bool multiply, string mode)
+        {
+            var mock = await MockHelpers.LoadMockGeneratorAsync(configuration: Configuration);
+            var owner = new BareArithmeticOwner(multiply, mode);
+            var generator = new PipelineGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+            generator.SourceInputModel = new SourceInputModel(Compilation("BareArithmeticVeto", []), null);
+            CodeModelGenerator.Instance = generator;
+            var roots = generator.OutputLibrary.TypeProviders;
+            foreach (var root in roots) { root.ProcessTypeForBackCompatibility(); }
+            var nativeOwner = new BareArithmeticOwner(multiply, mode);
+            nativeOwner.ProcessTypeForBackCompatibility();
+            var native = new TypeProviderWriter(nativeOwner).Write();
+            using var references = ProviderReferenceMapAnalyzer.PrepareForGeneration(roots);
+            using var prepared = PreparedFieldTypes.CreateForGeneration(generator, roots, references.ShouldWriteProvider);
+            Assert.That(prepared, Is.Not.Null);
+            bool restore = mode == "restored";
+            Assert.That(prepared!.PocGroupingCount, Is.EqualTo(restore ? 1 : 0));
+            int openings = 0;
+            prepared.PocAfterOpening = () =>
+            {
+                openings++;
+                var declaration = owner.Parameters[1].Declaration;
+                string name = declaration.RequestedName;
+                declaration.Update("other");
+                declaration.Update(name);
+            };
+            var raw = new TypeProviderWriter(owner) { PreparedFieldTypes = prepared }.Write();
+            Assert.That(openings, Is.EqualTo(restore ? 1 : 0));
+            Assert.That(prepared.PocGroupingUses, Is.EqualTo(restore ? 1 : 0));
+            if (restore)
+            {
+                Assert.That(raw.SourceConsumption?.WasCurrentAtEndOfWrite, Is.False);
+                Assert.That(raw.Content, Does.Contain(multiply ? "=> x + y * z;" : "=> x - y - z;"));
+            }
+            bool allowed = prepared.CanCommitPocGrouping(raw) && prepared.SealPocGroupingWithoutCallbacks(raw);
+            Assert.That(allowed, Is.EqualTo(!restore));
+            var selected = raw.SelectPreparedForms(true, true, allowed);
+            Assert.That(selected.Name, Is.EqualTo(native.Name));
+            Assert.That(selected.Content, Is.EqualTo(native.Content));
+            if (mode == "other-side") { Assert.That(selected.Content, Does.Contain(multiply ? "=> (x * y) + z;" : "=> x - (y - z);")); }
+            if (mode == "newline") { Assert.That(selected.Content, Does.Contain("y\n")); }
+            Assert.That(Execute(selected, [[10, 2, 3]]), Is.EqualTo(Execute(native, [[10, 2, 3]])));
+        }
+
         [TestCase("stable")]
         [TestCase("child")]
         [TestCase("host")]
@@ -260,6 +379,32 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                             () => OnSourceCheck?.Invoke() ?? SourceCurrent);
                     }
                 }
+            }
+        }
+
+        internal sealed class BareArithmeticOwner(bool multiply, string mode = "ordinary") : TypeProvider
+        {
+            internal BinaryOperatorExpression Root { get; private set; } = null!;
+            internal BinaryOperatorExpression Child { get; private set; } = null!;
+            internal VariableExpression[] Parameters { get; private set; } = [];
+            protected override string BuildName() => "Clock";
+            protected override string BuildNamespace() => "Sample";
+            protected override string BuildRelativeFilePath() => "Clock.cs";
+            protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Public | TypeSignatureModifiers.Class;
+            protected internal override MethodProvider[] BuildMethods()
+            {
+                var x = new ParameterProvider("x", $"", typeof(int));
+                var y = new ParameterProvider("y", $"", typeof(int));
+                var z = new ParameterProvider("z", $"", typeof(int));
+                Parameters = [x, y, z];
+                var first = mode == "alias-carrier" ? new VariableExpression(typeof(int), Parameters[0].Declaration) : Parameters[0];
+                if (mode == "newline") { Parameters[1].Declaration.Update("y\n"); }
+                bool leftGrouped = multiply == (mode == "other-side");
+                Child = leftGrouped ? new BinaryOperatorExpression(multiply ? "*" : "-", first, Parameters[1], mode != "bare-child") :
+                    new BinaryOperatorExpression(multiply ? "*" : "-", Parameters[1], Parameters[2], mode != "bare-child");
+                Root = leftGrouped ? new BinaryOperatorExpression(multiply ? "+" : "-", Child, Parameters[2], AddParentheses: false) :
+                    new BinaryOperatorExpression(multiply ? "+" : "-", first, Child, AddParentheses: false);
+                return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, [x, y, z]), Root, this)];
             }
         }
 

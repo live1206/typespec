@@ -23,6 +23,100 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
     [NonParallelizable]
     internal class PocBinaryParentRoleCompilerOutputTests
     {
+        [TestCase("stable", false)]
+        [TestCase("stable", true)]
+        [TestCase("source-expiry", false)]
+        [TestCase("source-expiry", true)]
+        [TestCase("result-expiry", false)]
+        [TestCase("result-expiry", true)]
+        public async Task BareArithmeticUsesActualCompilerOutputAndFinalAuthority(string mode, bool multiply)
+        {
+            var sandbox = Directory.CreateTempSubdirectory("task05-bare-arithmetic-");
+            string source = Path.Combine(sandbox.FullName, "Marker.cs");
+            string nativeSource = Path.Combine(sandbox.FullName, "NativeMarker.cs");
+            const string input = "namespace Inputs { internal class Marker {} }\n";
+            File.WriteAllText(source, input);
+            File.WriteAllText(nativeSource, input);
+            string retained = multiply ? "=> x + (y * z);" : "=> (x - y) - z;";
+            string shortened = multiply ? "=> x + y * z;" : "=> x - y - z;";
+            try
+            {
+                var actual = await WriteBareArithmeticCompilerOutput(sandbox.FullName, source, multiply, mode);
+                var native = await WriteBareArithmeticCompilerOutput(sandbox.FullName, nativeSource, multiply, "native");
+                Assert.That(native.Selected.Content, Does.Contain(retained));
+                Assert.That(actual.Selected.Content, Does.Contain(mode == "source-expiry" ? retained : shortened));
+                if (mode == "source-expiry") { Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content)); }
+                Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Selected.Content, actual.Selected.Content);
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                object?[][] arguments = multiply ? [[10, 2, 3], [int.MaxValue, 2, 2]] : [[10, 7, 3], [int.MinValue, 1, 1]];
+                object?[] expected = multiply ? [16, int.MinValue + 3] : [0, int.MaxValue - 1];
+                foreach (var file in new[] { native.Selected, actual.Selected, native.Final, actual.Final })
+                {
+                    var compilation = CSharpCompilation.Create("BareArithmeticPhysicalStage", [CSharpSyntaxTree.ParseText(file.Content, path: file.Name)],
+                        [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)], new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+                    Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", arguments), Is.EqualTo(expected));
+                }
+            }
+            finally { sandbox.Delete(recursive: true); }
+        }
+
+        private static async Task<(CodeFile Selected, CodeFile Final)> WriteBareArithmeticCompilerOutput(string directory, string source, bool multiply, string mode)
+        {
+            bool enabled = mode != "native";
+            string original = Directory.CreateDirectory(Path.Combine(directory, mode + "-original")).FullName;
+            string isolated = Directory.CreateDirectory(Path.Combine(directory, mode + "-isolated")).FullName;
+            string config = "{\"package-name\":\"Sample\",\"enable-pre-emission-simplification\":" + (enabled ? "true" : "false") +
+                ",\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}";
+            var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original, configuration: config,
+                compilation: () => Task.FromResult<Compilation>(CSharpCompilation.Create("BareArithmeticPhysicalInput")));
+            var owner = new PocBinaryParentRoleIntegrationTests.BareArithmeticOwner(multiply);
+            var generator = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+            CodeModelGenerator.Instance = generator;
+            CodeFile? selected = null;
+            int rootVisits = 0;
+            int childVisits = 0;
+            var pipeline = new CSharpGen
+            {
+                PocPreparationObserved = prepared =>
+                {
+                    if (!enabled) { Assert.That(prepared, Is.Null); return; }
+                    Assert.That(prepared, Is.Not.Null);
+                    Assert.That(prepared!.PocGroupingCount, Is.EqualTo(1));
+                    Assert.That(generator.CompilerBuildContext?.SourceProof, Is.Not.Null);
+                    prepared.PocNativeWriteObserver = node =>
+                    {
+                        if (ReferenceEquals(node, owner.Root)) { rootVisits++; }
+                        if (ReferenceEquals(node, owner.Child)) { childVisits++; }
+                    };
+                },
+                PocRawFileObserved = (prepared, provider, file) =>
+                {
+                    Assert.That(provider, Is.SameAs(owner));
+                    Assert.That(prepared?.PocGroupingUses ?? 0, Is.EqualTo(enabled ? 1 : 0));
+                    if (enabled) { Assert.That(file.Content, Does.Contain(multiply ? "=> x + y * z;" : "=> x - y - z;")); }
+                },
+                PocGroupingDecisionObserved = (_, allowed) =>
+                {
+                    Assert.That(allowed, Is.True);
+                    if (mode == "source-expiry") { File.AppendAllText(source, "// expired before selection\n"); }
+                },
+                PocSelectedFileObserved = file =>
+                {
+                    selected = file;
+                    if (mode == "result-expiry") { File.AppendAllText(source, "// expired after selection\n"); }
+                }
+            };
+            var result = await pipeline.ExecuteForCompilerBuildAsync(isolated, new Session(original, source));
+            Assert.That(result.UsedCapturedResidualInputs, Is.EqualTo(mode == "stable"), "False means the caller must discard isolated output");
+            Assert.That(rootVisits, Is.EqualTo(enabled ? 1 : 0));
+            Assert.That(childVisits, Is.EqualTo(enabled ? 1 : 0));
+            Assert.That(selected, Is.Not.Null);
+            Assert.That(selected!.Name, Is.EqualTo("Clock.cs"));
+            return (selected, new CodeFile(File.ReadAllText(Path.Combine(isolated, selected.Name)), selected.Name));
+        }
+
         [TestCase("stable")]
         [TestCase("isolated-link")]
         [TestCase("original-link")]

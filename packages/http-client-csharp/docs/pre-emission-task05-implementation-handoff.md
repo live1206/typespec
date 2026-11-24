@@ -178,6 +178,16 @@ stale physical compiler input still requires discard. This profile does not
 derive provenance from arbitrary raw source, transfer line comments or mapped
 source, or prove later `CallerLineNumber` values.
 
+Checkpoint 19 adds test-only exact LF/CRLF cast-trivia and caller-line oracles,
+plus a native typed-local cast retention control with a real later caller-line
+call. It does not represent the original compact `var` statement in the writer.
+
+Checkpoint 20 covers the exact already-bare arrow roots `(x - y) - z` and
+`x + (y * z)`. Only the grouped child is a choice, yielding `x - y - z` and
+`x + y * z` with the same bound operations. Writer flags and the existing
+grouped-root rules are unchanged; unmatched forms retain and stale evidence
+falls back to the same-write native output or requires discarding isolated output.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

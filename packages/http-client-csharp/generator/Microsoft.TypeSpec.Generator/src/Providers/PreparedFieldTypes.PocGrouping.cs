@@ -47,6 +47,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 if (binaryCatalogKnown)
                 {
                     CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    CaptureBareArithmeticChildren(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureDirectCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureWrappedReturnCast(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureAuthoredBinaryTrivia(file, nativeMethods, nativeSignatures, nativeNodes, choices);
@@ -644,16 +645,11 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 outer.Operand is not { Operand: { Operator: "+", AddParentheses: false, Left: VariableExpression left, Right: VariableExpression right } binary } inner ||
                 !PocIntType(method.Signature.ReturnType) || method.Signature.HasUnsupportedBaseContract || !PocSignature(method.Signature, true) ||
                 !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters) || parameters.Length != 2 ||
-                !IsActualPlainFormal(parameters[0], left) || !IsActualPlainFormal(parameters[1], right) ||
+                !IsActualPlainIntFormal(parameters[0], left) || !IsActualPlainIntFormal(parameters[1], right) ||
                 ReferenceEquals(left.Declaration, right.Declaration) || left.Declaration.RequestedName == right.Declaration.RequestedName)
             { return; }
             // The occurrence tree independently snapshots the two parameter
             // declarations, variable names/types, exact binary and both trivia edges.
-            static bool IsActualPlainFormal(ParameterProvider formal, VariableExpression variable) =>
-                variable.GetType() == typeof(VariableExpression) && formal.HasCachedEmittedDeclarationState &&
-                !formal.HasUnsupportedParameterModifiers && !formal.HasUnsupportedDefaultValue &&
-                ReferenceEquals(formal.CachedVariableExpression, variable) && PocIntType(formal.Type) && PocIntType(variable.Type) &&
-                variable.Declaration?.RequestedName is { } emittedName && Identifier(emittedName);
             static PreparedSourceOccurrence? OnlyChild(PreparedSourceOccurrence? parent, object producer) =>
                 parent is { IsOpaque: false, Children.Length: 1 } && ReferenceEquals(parent.Children[0].Producer, producer)
                     ? parent.Children[0] : null;
@@ -672,6 +668,60 @@ namespace Microsoft.TypeSpec.Generator.Providers
             choices.Add(outerNode);
             choices.Add(innerNode);
         }
+
+        private static void CaptureBareArithmeticChildren(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            PreparedSourceOccurrence? root = null;
+            foreach (var candidate in file.Roots)
+            {
+                if (candidate.Id.RootRole == "type-documentation") { continue; }
+                if (root is not null) { return; }
+                root = candidate;
+            }
+            // Recognize only the two authored bare arrow roots; the grouped
+            // root grammar, parameter frame and existing child rules stay put.
+            if (root?.Producer is not MethodProvider method || method.GetType() != typeof(MethodProvider) || method.BodyStatements is not null ||
+                method.BodyExpression is not BinaryOperatorExpression { AddParentheses: false } binary ||
+                !PocIntType(method.Signature.ReturnType) || method.Signature.HasUnsupportedBaseContract || !PocSignature(method.Signature, true) ||
+                !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters) || parameters.Length != 3)
+            { return; }
+
+            bool leftGrouped = binary.Operator == "-";
+            if (!(leftGrouped || binary.Operator == "+") ||
+                (leftGrouped ? binary.Left : binary.Right) is not BinaryOperatorExpression { AddParentheses: true } child ||
+                child.Operator != (leftGrouped ? "-" : "*") ||
+                (leftGrouped ? child.Left : binary.Left) is not VariableExpression first ||
+                (leftGrouped ? child.Right : child.Left) is not VariableExpression second ||
+                (leftGrouped ? binary.Right : child.Right) is not VariableExpression third ||
+                !IsActualPlainIntFormal(parameters[0], first) || !IsActualPlainIntFormal(parameters[1], second) || !IsActualPlainIntFormal(parameters[2], third) ||
+                first.Declaration.RequestedName == second.Declaration.RequestedName ||
+                first.Declaration.RequestedName == third.Declaration.RequestedName ||
+                second.Declaration.RequestedName == third.Declaration.RequestedName)
+            { return; }
+
+            var binaryNode = root.Children.FirstOrDefault(node => ReferenceEquals(node.Producer, binary));
+            if (binaryNode is not { IsOpaque: false, Children.Length: 2 }) { return; }
+            var childNode = binaryNode.Children[leftGrouped ? 0 : 1];
+            static bool IsLeaf(PreparedSourceOccurrence node, VariableExpression variable) =>
+                !node.IsOpaque && node.Children.IsEmpty && ReferenceEquals(node.Producer, variable);
+            if (childNode is not { IsOpaque: false, Children.Length: 2 } || !ReferenceEquals(childNode.Producer, child) ||
+                !IsLeaf(binaryNode.Children[leftGrouped ? 1 : 0], leftGrouped ? third : first) ||
+                !IsLeaf(childNode.Children[0], leftGrouped ? first : second) || !IsLeaf(childNode.Children[1], leftGrouped ? second : third))
+            { return; }
+
+            methods.Add(method);
+            signatures.Add(method.Signature);
+            nodes.Add(binaryNode.Id);
+            nodes.Add(childNode.Id);
+            choices.Add(childNode);
+        }
+
+        private static bool IsActualPlainIntFormal(ParameterProvider formal, VariableExpression variable) =>
+            variable.GetType() == typeof(VariableExpression) && formal.HasCachedEmittedDeclarationState &&
+            !formal.HasUnsupportedParameterModifiers && !formal.HasUnsupportedDefaultValue &&
+            ReferenceEquals(formal.CachedVariableExpression, variable) && PocIntType(formal.Type) && PocIntType(variable.Type) &&
+            variable.Declaration?.RequestedName is { } emittedName && Identifier(emittedName);
 
         private static bool PocIntType(CSharpType? type) => PocType(type, typeof(int)) && !type!.IsLiteral && !type.HasUnionMetadata;
 

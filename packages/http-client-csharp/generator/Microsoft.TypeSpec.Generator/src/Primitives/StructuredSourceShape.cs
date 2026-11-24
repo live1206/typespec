@@ -101,6 +101,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 case UnaryOperatorExpression n:
                     s.Value(n.Operator); s.Value(n.OperandOnTheLeft); s.Child("operand", n.Operand); s.IntrinsicTokens = false; s.IntrinsicLayoutKnown = false; break;
                 case CheckedExpression n: s.Child("operand", n.Operand); break;
+                case TypedDefaultExpression n: s.Type(n.Type); break;
                 case CastExpression n: s.Type(n.Type); s.Child("value", n.Inner); break;
                 case AsExpression n: s.Type(n.Type); s.Child("value", n.Inner); break;
                 case NullConditionalExpression n: s.Child("value", n.Inner); break;

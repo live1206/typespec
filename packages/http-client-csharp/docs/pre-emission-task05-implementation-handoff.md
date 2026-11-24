@@ -150,6 +150,12 @@ pair in the exact direct checked narrowing case. Focused and broad validation
 pass, and complete independent review found no verified production findings.
 The bounded internal profile is accepted.
 
+[Checkpoint 15](./pre-emission-task05-checkpoint15.md) represents exact native
+`default(T?)` and prepares only the cast pair in the supported nullable generic
+return. The written constraint and actual parameter identity are required.
+Focused and broad validation pass, and complete independent review found no
+verified production findings. The bounded internal profile is accepted.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

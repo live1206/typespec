@@ -49,6 +49,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureDirectCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CapturePrimitiveCastParents(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    CaptureTypedDefaultCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureIfConditions(file, nativeNodes, choices);
                     CaptureStringCoalescing(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureUsedLocalInitializers(file, nativeMethods, nativeSignatures, nativeNodes, choices);
@@ -282,6 +283,35 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 return () => profile.IsOriginalListCurrent && selection.IsCurrent;
             }
             return null;
+        }
+
+        private static void CaptureTypedDefaultCasts(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            if (file.Compilation.GetSpecialType(SpecialType.System_Nullable_T).TypeKind == TypeKind.Error) { return; }
+            foreach (var root in file.Roots)
+            {
+                if (root.Producer is not MethodProvider method || !Identifier(method.Signature.Name) ||
+                    PreparedTypedDefaultCast.TryGet(method) is not { } profile ||
+                    method.Signature.ReturnType is not { } nullable || method.EnclosingType.CachedType is not { } owner || owner.Name == nullable.Name ||
+                    Child(root, "expression-body", profile.Cast) is not { } cast || cast.Children.Length != 1 ||
+                    Child(cast, "value", profile.Operand) is not { } operand || !operand.Children.IsEmpty ||
+                    Child(root, "signature", method.Signature) is not { } signature ||
+                    Child(signature, "constraint[0]", profile.Constraint) is not { Children.Length: 1 } constraint ||
+                    constraint.Children[0] is not { IsOpaque: false, Producer: KeywordExpression { Keyword: "struct", Expression: null } } keyword ||
+                    keyword.Id.EdgePath != constraint.Id.EdgePath + "/constraint[0]") { continue; }
+                methods.Add(method);
+                signatures.Add(method.Signature);
+                nodes.Add(cast.Id);
+                nodes.Add(operand.Id);
+                nodes.Add(constraint.Id);
+                nodes.Add(keyword.Id);
+                choices.Add(cast);
+            }
+
+            static PreparedSourceOccurrence? Child(PreparedSourceOccurrence parent, string role, object producer) =>
+                parent.Children.FirstOrDefault(node => !node.IsOpaque && ReferenceEquals(node.Producer, producer) &&
+                    node.Id.EdgePath == parent.Id.EdgePath + "/" + role);
         }
 
         private static void CapturePrimitiveCastParents(PreparedSourceFile file, HashSet<MethodProvider> methods,
@@ -656,7 +686,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
             PocSignature(signature, true) || PocSignature(signature, stringCoalesce: true) ||
             PreparedOrdinaryArgumentGrouping.HasCallerExpressionSignature(signature) || PocSignature(signature, primitiveCastParent: true) ||
             PocSignature(signature, metadataCastReturn: true) || PocSignature(signature, objectReturnIntFormals: true) ||
-            Identifier(signature.Name) && PreparedLambdaCaptureCast.HasGeneratedSignature(signature);
+            Identifier(signature.Name) && (PreparedLambdaCaptureCast.HasGeneratedSignature(signature) ||
+                PreparedTypedDefaultCast.HasSignature(signature, out _));
 
         private static bool PocSignature(MethodSignatureBase signature, bool arithmeticReturn = false, bool stringCoalesce = false,
             bool primitiveCastParent = false, bool metadataCastReturn = false, bool objectReturnIntFormals = false)
@@ -697,10 +728,10 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 BinaryOperatorExpression binary => nativeNodes.Contains(node.Id) ||
                     binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
                 CastExpression or MethodBodyStatements or IfStatement or LiteralExpression or AssignmentExpression or DeclarationExpression or
-                    InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression or CheckedExpression or FuncExpression or NewInstanceExpression =>
+                    InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression or CheckedExpression or FuncExpression or NewInstanceExpression or TypedDefaultExpression or WhereExpression =>
                     nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) &&
-                    (keyword.Keyword is "return" or "default" || (keyword.Keyword is "null" or "checked") && nativeNodes.Contains(node.Id)),
+                    (keyword.Keyword is "return" or "default" || (keyword.Keyword is "null" or "checked" or "struct") && nativeNodes.Contains(node.Id)),
                 VariableExpression variable => variable.GetType() == typeof(VariableExpression),
                 MethodProvider method => method.GetType() == typeof(MethodProvider),
                 MethodSignature signature => PocSignature(signature) || nativeSignatures.Contains(signature) && PocNativeSignature(signature),

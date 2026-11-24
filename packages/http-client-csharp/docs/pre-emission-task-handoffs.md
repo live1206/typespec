@@ -87,6 +87,11 @@ required checked delimiters from the removable cast pair. Focused and broad
 validation pass, and complete independent review found no verified production
 findings. This bounded internal profile is accepted.
 
+The [fifteenth checkpoint](./pre-emission-task05-checkpoint15.md) prepares an
+exact nullable generic typed-default cast. Focused and broad validation pass,
+and complete independent review found no verified production findings. This
+bounded internal profile is accepted.
+
 | Task | Implementation handoff                                                                                | Authoritative contract                                                               |
 | ---- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | 04   | [Ordinary type spellings](./pre-emission-task04-implementation-handoff.md)                            | [Task04](https://github.com/microsoft/typespec/issues/12454#issuecomment-6543541243) |

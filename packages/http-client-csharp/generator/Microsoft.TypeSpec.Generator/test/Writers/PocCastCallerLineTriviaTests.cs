@@ -1,0 +1,233 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
+using System;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Threading.Tasks;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
+using Microsoft.TypeSpec.Generator.Expressions;
+using Microsoft.TypeSpec.Generator.Input;
+using Microsoft.TypeSpec.Generator.Primitives;
+using Microsoft.TypeSpec.Generator.Providers;
+using Microsoft.TypeSpec.Generator.SourceInput;
+using Microsoft.TypeSpec.Generator.Statements;
+using Microsoft.TypeSpec.Generator.Tests.TestHelpers;
+using NUnit.Framework;
+using static Microsoft.TypeSpec.Generator.Snippets.Snippet;
+using static Microsoft.TypeSpec.Generator.SourceInput.CompilerBuildInputProof;
+
+namespace Microsoft.TypeSpec.Generator.Tests.Writers
+{
+    [NonParallelizable]
+    internal class PocCastCallerLineTriviaTests
+    {
+        [TestCase("\n")]
+        [TestCase("\r\n")]
+        public void OriginalCastChainPreservesTheActualOmittedCallerLine(string ending)
+        {
+            string source = "class Clock{public int M(int value){var result=(/*a*/(" + ending + "(int)value" + ending +
+                ")/*b*/);return result+Line();}static int Line([System.Runtime.CompilerServices.CallerLineNumber]int line=0)=>line;}";
+            var original = CSharpSyntaxTree.ParseText(source, path: "Clock.cs");
+            var originalLocal = original.GetRoot().DescendantNodes().OfType<VariableDeclaratorSyntax>().Single();
+            var outer = (ParenthesizedExpressionSyntax)originalLocal.Initializer!.Value;
+            var inner = (ParenthesizedExpressionSyntax)outer.Expression;
+            Assert.That(inner.Expression, Is.TypeOf<CastExpressionSyntax>());
+            Assert.That(outer.OpenParenToken.TrailingTrivia.ToFullString(), Is.EqualTo("/*a*/"));
+            Assert.That(inner.CloseParenToken.TrailingTrivia.ToFullString(), Is.EqualTo("/*b*/"));
+            int[] delimiters = [outer.OpenParenToken.SpanStart, outer.CloseParenToken.SpanStart,
+                inner.OpenParenToken.SpanStart, inner.CloseParenToken.SpanStart];
+            string edited = new(source.Where((_, position) => !delimiters.Contains(position)).ToArray());
+            Assert.That(edited, Does.Contain("result=/*a*/"));
+            var shortened = CSharpSyntaxTree.ParseText(edited, path: original.FilePath);
+            Assert.That(shortened.GetRoot().DescendantNodes().OfType<VariableDeclaratorSyntax>().Single().Initializer!.Value,
+                Is.TypeOf<CastExpressionSyntax>());
+            Assert.That(SignificantTrivia(shortened), Is.EqualTo(SignificantTrivia(original)));
+            Assert.That(Endings(original), Is.EqualTo(new[] { ending, ending }));
+            Assert.That(Endings(shortened), Is.EqualTo(Endings(original)));
+            PreparedParenthesesTests.AssertOperations(source, edited);
+            AssertBindingAndRuntime(original);
+            AssertBindingAndRuntime(shortened);
+        }
+
+        [Test]
+        public async Task NativeTypedCastInitializerRetainsBeforeTheActualCallerLine()
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-cast-caller-line-");
+            string marker = Path.Combine(directory.FullName, "Marker.cs");
+            File.WriteAllText(marker, "namespace Inputs { internal class Marker {} }\n");
+            try
+            {
+                var candidate = await WriteCompilerCase(directory.FullName, marker, enabled: true);
+                var native = await WriteCompilerCase(directory.FullName, marker, enabled: false);
+                Assert.That(candidate.Selected.Name, Is.EqualTo(native.Selected.Name));
+                Assert.That(candidate.Selected.Content, Is.EqualTo(native.Selected.Content));
+                var candidateTree = Tree(candidate.Selected);
+                var local = candidateTree.GetRoot().DescendantNodes().OfType<LocalDeclarationStatementSyntax>().Single();
+                Assert.That(local.NormalizeWhitespace().ToFullString(), Is.EqualTo("int result = ((int)value);"));
+                Assert.That(GeneratedCallerLine(candidateTree), Is.EqualTo(GeneratedCallerLine(Tree(native.Selected))));
+
+                // Downstream legacy reduction is not the prepared choice.
+                // Compare native and candidate at the actual physical final stage.
+                Assert.That(candidate.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, candidate.Final.Content);
+                Assert.That(GeneratedCallerLine(Tree(candidate.Final)), Is.EqualTo(GeneratedCallerLine(Tree(native.Final))));
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static async Task<(CodeFile Selected, CodeFile Final)> WriteCompilerCase(string directory, string marker, bool enabled)
+        {
+            string original = Directory.CreateDirectory(Path.Combine(directory, enabled ? "prepared-original" : "native-original")).FullName;
+            string isolated = Directory.CreateDirectory(Path.Combine(directory, enabled ? "prepared-isolated" : "native-isolated")).FullName;
+            string config = "{\"package-name\":\"Sample\",\"enable-pre-emission-simplification\":" + (enabled ? "true" : "false") +
+                ",\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}";
+            var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original, configuration: config,
+                compilation: () => Task.FromResult<Compilation>(CSharpCompilation.Create("NativeCallerLineInputs")));
+            var owner = new Clock();
+            CodeModelGenerator.Instance = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+            CodeFile? selected = null;
+            int captures = 0;
+            int castVisits = 0;
+            int operandVisits = 0;
+            var pipeline = new CSharpGen
+            {
+                PocPreparationObserved = prepared =>
+                {
+                    if (prepared is null) { return; }
+                    captures++;
+                    Assert.That(prepared.PocGroupingCount, Is.Zero);
+                    prepared.PocNativeWriteObserver = node =>
+                    {
+                        if (ReferenceEquals(node, owner.Cast)) { castVisits++; }
+                        if (ReferenceEquals(node, owner.Cast?.Inner)) { operandVisits++; }
+                    };
+                },
+                PocRawFileObserved = (prepared, provider, file) =>
+                {
+                    Assert.That(provider, Is.SameAs(owner));
+                    Assert.That(prepared?.PocGroupingUses ?? 0, Is.Zero);
+                    Assert.That(file.PreparedGroupingCount, Is.Zero);
+                },
+                PocSelectedFileObserved = file => selected = file
+            };
+            var result = await pipeline.ExecuteForCompilerBuildAsync(isolated, new Session(original, marker));
+            Assert.That(result.UsedCapturedResidualInputs, Is.EqualTo(enabled));
+            Assert.That(captures, Is.EqualTo(enabled ? 1 : 0));
+            Assert.That(castVisits, Is.EqualTo(enabled ? 1 : 0));
+            Assert.That(operandVisits, Is.EqualTo(enabled ? 1 : 0));
+            Assert.That(selected, Is.Not.Null);
+            Assert.That(selected!.Name, Is.EqualTo("Clock.cs"));
+            return (selected, new CodeFile(File.ReadAllText(Path.Combine(isolated, selected.Name)), selected.Name));
+        }
+
+        private static SyntaxTree Tree(CodeFile file) => CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
+
+        private static int GeneratedCallerLine(SyntaxTree tree)
+        {
+            var compilation = CSharpCompilation.Create("NativeCallerLineWitness", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            var root = tree.GetRoot();
+            var model = compilation.GetSemanticModel(tree);
+            var declaration = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == "Line");
+            var symbol = model.GetDeclaredSymbol(declaration)!;
+            Assert.That(symbol.Parameters.Single().GetAttributes().Single().AttributeClass?.ToDisplayString(), Is.EqualTo(typeof(CallerLineNumberAttribute).FullName));
+            var call = root.DescendantNodes().OfType<InvocationExpressionSyntax>().Single();
+            var operation = (IInvocationOperation)model.GetOperation(call)!;
+            Assert.That(SymbolEqualityComparer.Default.Equals(operation.TargetMethod, symbol), Is.True);
+            Assert.That(call.ArgumentList.Arguments, Is.Empty);
+            var argument = operation.Arguments.Single();
+            Assert.That(argument.IsImplicit, Is.True);
+            Assert.That(argument.ArgumentKind, Is.EqualTo(ArgumentKind.DefaultValue));
+            int physicalLine = call.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+            Assert.That(argument.Value.ConstantValue.HasValue, Is.True);
+            Assert.That(argument.Value.ConstantValue.Value, Is.EqualTo(physicalLine));
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [0], [17]),
+                Is.EqualTo(new object?[] { physicalLine, 17 + physicalLine }));
+            return physicalLine;
+        }
+
+        private static void AssertBindingAndRuntime(SyntaxTree tree)
+        {
+            var compilation = CSharpCompilation.Create("OriginalCallerLineTrivia", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            Assert.That(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), Is.Empty);
+            var model = compilation.GetSemanticModel(tree);
+            var root = tree.GetRoot();
+            var method = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == "M");
+            var lineMethod = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == "Line");
+            var lineSymbol = model.GetDeclaredSymbol(lineMethod)!;
+            Assert.That(lineSymbol.Parameters.Single().GetAttributes().Single().AttributeClass?.ToDisplayString(),
+                Is.EqualTo("System.Runtime.CompilerServices.CallerLineNumberAttribute"));
+            var cast = method.DescendantNodes().OfType<CastExpressionSyntax>().Single();
+            Assert.That(((IConversionOperation)model.GetOperation(cast)!).Conversion.IsIdentity, Is.True);
+            Assert.That(SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(cast.Expression).Symbol,
+                model.GetDeclaredSymbol(method)!.Parameters.Single()), Is.True);
+            var local = method.DescendantNodes().OfType<VariableDeclaratorSyntax>().Single();
+            var sum = (BinaryExpressionSyntax)method.DescendantNodes().OfType<ReturnStatementSyntax>().Single().Expression!;
+            Assert.That(SymbolEqualityComparer.Default.Equals(model.GetDeclaredSymbol(local), model.GetSymbolInfo(sum.Left).Symbol), Is.True);
+            var call = (InvocationExpressionSyntax)sum.Right;
+            var operation = (IInvocationOperation)model.GetOperation(call)!;
+            Assert.That(SymbolEqualityComparer.Default.Equals(operation.TargetMethod, lineSymbol), Is.True);
+            var argument = operation.Arguments.Single();
+            Assert.That(argument.IsImplicit, Is.True);
+            Assert.That(argument.ArgumentKind, Is.EqualTo(ArgumentKind.DefaultValue));
+            int physicalLine = call.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+            Assert.That(physicalLine, Is.EqualTo(3));
+            Assert.That(argument.Value.ConstantValue.HasValue, Is.True);
+            Assert.That(argument.Value.ConstantValue.Value, Is.EqualTo(physicalLine));
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Clock", "M", [0], [17], [int.MaxValue]),
+                Is.EqualTo(new object?[] { 3, 20, int.MinValue + 2 }));
+        }
+
+        private static string[] SignificantTrivia(SyntaxTree tree) => tree.GetRoot().DescendantTrivia()
+            .Where(trivia => !trivia.IsKind(SyntaxKind.WhitespaceTrivia) && !trivia.IsKind(SyntaxKind.EndOfLineTrivia))
+            .Select(trivia => trivia.RawKind + ":" + trivia.ToFullString()).ToArray();
+
+        private static string[] Endings(SyntaxTree tree) => tree.GetRoot().DescendantTrivia().Where(trivia => trivia.IsKind(SyntaxKind.EndOfLineTrivia))
+            .Select(trivia => trivia.ToFullString()).ToArray();
+
+        private sealed class NativeGenerator(GeneratorContext context, InputLibrary input, OutputLibrary output) : CodeModelGenerator(context)
+        {
+            public override InputLibrary InputLibrary => input;
+            public override OutputLibrary OutputLibrary => output;
+        }
+
+        private sealed class Session(string directory, string source) : ITrustedCompilerBuildSession
+        {
+            private readonly string _sourceHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(source)));
+            private readonly string _core = typeof(object).Assembly.Location;
+            private readonly string _coreHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(object).Assembly.Location)));
+            public CompilerBuildInputCapture Capture => new(directory, "native-cast-caller-line-output", "Debug|net10.0", "12.0", "Actual", [],
+                [new CapturedCompilerSource(source, _sourceHash)], [new CapturedCompilerReference(_core, _coreHash, [], false)], false, false,
+                new CSharpParseOptions(LanguageVersion.CSharp12), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary), null);
+            public bool IsCurrent() => true;
+        }
+
+        private sealed class Clock : TypeProvider
+        {
+            internal CastExpression? Cast { get; private set; }
+            protected override string BuildName() => "Clock";
+            protected override string BuildNamespace() => "Sample";
+            protected override string BuildRelativeFilePath() => "Clock.cs";
+            protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Public | TypeSignatureModifiers.Class;
+            protected internal override MethodProvider[] BuildMethods()
+            {
+                var value = new ParameterProvider("value", $"", typeof(int));
+                var line = new ParameterProvider("line", $"", typeof(int), defaultValue: Literal(0),
+                    attributes: new AttributeStatement[] { new(typeof(CallerLineNumberAttribute), Array.Empty<ValueExpression>()) });
+                var declaration = new DeclarationExpression(typeof(int), "result", out var local);
+                Cast = new CastExpression(value, typeof(int));
+                var total = new BinaryOperatorExpression("+", local, new InvokeMethodExpression(null, "Line", []), AddParentheses: false);
+                var body = new MethodBodyStatements([new AssignmentExpression(declaration, Cast).Terminate(), Return(total)]);
+                return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, [value]), body, this),
+                    new MethodProvider(new MethodSignature("Line", null, MethodSignatureModifiers.Private | MethodSignatureModifiers.Static, typeof(int), null, [line]), (VariableExpression)line, this)];
+            }
+        }
+    }
+}

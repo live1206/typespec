@@ -234,6 +234,14 @@ independent disabled pipeline still produce `f(1)` after legacy reduction,
 with the same binding and one invocation. Original final-spelling retention
 remains open; this checkpoint does not change legacy reduction.
 
+Checkpoint 33 protects the actual omitted caller-expression string for the
+native nested `return ((x + y));` lambda through downstream Roslyn reduction.
+In the closed single-document profile without custom rewriters, the bound
+invocation is excluded from simplification and rebound before output; unrelated
+reductions remain enabled. The explicit `"manual"` case and the real reduction
+switch retain their previous behavior. This is not a general caller-expression
+or final-trivia policy, and does not recreate the compact source lambda.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

@@ -220,16 +220,60 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 string nativeFinal = AssertActualBinaryCapture(native.Final, explicitText);
                 string actualFinal = AssertActualBinaryCapture(actual.Final, explicitText);
                 Assert.That(actualFinal, Is.EqualTo(nativeFinal));
-                // The independent disabled pipeline also removes the pairs
-                // and changes the implicit constant. Native selection does neither.
-                Assert.That(native.Final.Content, Does.Contain(after).And.Not.Contain(before));
-                Assert.That(actual.Final.Content, Does.Contain(after).And.Not.Contain(before));
-                Assert.That(nativeFinal, Is.EqualTo(explicitText ? "manual" : nativeLambda.Replace(before, after, StringComparison.Ordinal)));
+                TestContext.WriteLine($"NESTED-CAE-FINAL explicit={explicitText}; selected={System.Text.Json.JsonSerializer.Serialize(captured)}; nativeFinal={System.Text.Json.JsonSerializer.Serialize(nativeFinal)}; actualFinal={System.Text.Json.JsonSerializer.Serialize(actualFinal)}");
+                // Protect the observed lambda, not unrelated reductions in the
+                // same document or a lambda whose caller text is explicit.
+                Assert.That(actual.Selected.Content, Does.Contain("Unrelated() => (42);"));
+                Assert.That(native.Final.Content, Does.Contain("Unrelated() => 42;"));
+                Assert.That(actual.Final.Content, Does.Contain("Unrelated() => 42;"));
+                if (explicitText)
+                {
+                    Assert.That(native.Final.Content, Does.Contain(after).And.Not.Contain(before));
+                    Assert.That(actual.Final.Content, Does.Contain(after).And.Not.Contain(before));
+                    Assert.That(nativeFinal, Is.EqualTo("manual"));
+                }
+                else
+                {
+                    Assert.That(nativeFinal, Is.EqualTo(captured), "The final simplifier must not change the actual implicit caller-expression value");
+                    Assert.That(native.Final.Content, Does.Contain(before));
+                    Assert.That(actual.Final.Content, Does.Contain(before));
+                }
             }
             finally { directory.Delete(recursive: true); }
         }
 
-        private static string AssertActualBinaryCapture(CodeFile file, bool explicitText)
+        [TestCase("nested-cae-no-attribute", false)]
+        [TestCase("nested-cae-disable-reduce", true)]
+        public async Task DownstreamNestedBinaryReductionHonorsItsBoundary(string mode, bool disableReduce)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-nested-binary-boundary-");
+            try
+            {
+                var actual = await WriteCompilerOutput(directory.FullName, mode, enabled: true, disableRoslynReduce: disableReduce);
+                var native = await WriteCompilerOutput(directory.FullName, mode, enabled: false, disableRoslynReduce: disableReduce);
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                Assert.That(actual.Selected.Content, Does.Contain("return ((x + y));"));
+                string selected = AssertActualBinaryCapture(actual.Selected, explicitText: false, hasCaptureAttribute: disableReduce);
+                string final = AssertActualBinaryCapture(actual.Final, explicitText: false, hasCaptureAttribute: disableReduce);
+                Assert.That(final, Is.EqualTo(selected));
+                Assert.That(AssertActualBinaryCapture(native.Final, explicitText: false, hasCaptureAttribute: disableReduce), Is.EqualTo(final));
+                Assert.That(native.Final.Content, Is.EqualTo(actual.Final.Content));
+                if (disableReduce)
+                {
+                    Assert.That(final, Does.Contain("return ((x + y));"));
+                    Assert.That(actual.Final.Content, Does.Contain("Unrelated() => (42);"));
+                }
+                else
+                {
+                    Assert.That(final, Is.Empty);
+                    Assert.That(actual.Final.Content, Does.Contain("return x + y;").And.Not.Contain("return ((x + y));"));
+                    Assert.That(actual.Final.Content, Does.Contain("Unrelated() => 42;"));
+                }
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static string AssertActualBinaryCapture(CodeFile file, bool explicitText, bool hasCaptureAttribute = true)
         {
             var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
             var compilation = CSharpCompilation.Create("NestedBinaryCaptureWitness", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
@@ -243,9 +287,14 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             var target = model.GetDeclaredSymbol(capture)!;
             var invocation = (IInvocationOperation)model.GetOperation(call)!;
             Assert.That(SymbolEqualityComparer.Default.Equals(invocation.TargetMethod, target), Is.True);
-            var attribute = target.Parameters[1].GetAttributes().Single();
-            Assert.That(attribute.AttributeClass?.ToDisplayString(), Is.EqualTo(typeof(CallerArgumentExpressionAttribute).FullName));
-            Assert.That(attribute.ConstructorArguments.Single().Value, Is.EqualTo(target.Parameters[0].Name));
+            var attributes = target.Parameters[1].GetAttributes();
+            if (hasCaptureAttribute)
+            {
+                var attribute = attributes.Single();
+                Assert.That(attribute.AttributeClass?.ToDisplayString(), Is.EqualTo(typeof(CallerArgumentExpressionAttribute).FullName));
+                Assert.That(attribute.ConstructorArguments.Single().Value, Is.EqualTo(target.Parameters[0].Name));
+            }
+            else { Assert.That(attributes, Is.Empty); }
             var lambda = (LambdaExpressionSyntax)call.ArgumentList.Arguments[0].Expression;
             var binary = lambda.DescendantNodes().OfType<BinaryExpressionSyntax>().Single();
             var addition = (IBinaryOperation)model.GetOperation(binary)!;
@@ -260,7 +309,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Assert.That(text.ArgumentKind, Is.EqualTo(explicitText ? ArgumentKind.Explicit : ArgumentKind.DefaultValue));
             Assert.That(text.Value.ConstantValue.HasValue, Is.True);
             var observed = (string)text.Value.ConstantValue.Value!;
-            Assert.That(observed, Is.EqualTo(explicitText ? "manual" : lambda.ToString()));
+            Assert.That(observed, Is.EqualTo(explicitText ? "manual" : hasCaptureAttribute ? lambda.ToString() : ""));
             Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [3, 4], [int.MinValue, -1]),
                 Is.EqualTo(new object?[] { observed, observed }));
             return observed;
@@ -367,18 +416,19 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             return PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", arguments);
         }
 
-        private static async Task<(CodeFile Selected, CodeFile Final)> WriteCompilerOutput(string directory, string mode, bool enabled)
+        private static async Task<(CodeFile Selected, CodeFile Final)> WriteCompilerOutput(string directory, string mode, bool enabled, bool disableRoslynReduce = false)
         {
             string prefix = enabled ? "prepared" : "native";
             string original = Directory.CreateDirectory(Path.Combine(directory, prefix + "-original")).FullName;
             string isolated = Directory.CreateDirectory(Path.Combine(directory, prefix + "-isolated")).FullName;
             string configuration = "{\"package-name\":\"Sample\",\"enable-pre-emission-simplification\":" + (enabled ? "true" : "false") +
-                ",\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}";
+                ",\"disable-roslyn-reduce\":" + (disableRoslynReduce ? "true" : "false") + ",\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}";
             var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original, configuration: configuration,
                 compilation: () => Task.FromResult<Compilation>(CSharpCompilation.Create("OptionalInterpolationInputs")));
             var owner = new Clock(mode);
             CodeModelGenerator.Instance = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
             CodeFile? selected = null;
+            bool takesCapturedInputs = enabled && !disableRoslynReduce;
             int preparationObservations = 0;
             int rawObservations = 0;
             var pipeline = new CSharpGen
@@ -387,7 +437,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 {
                     preparationObservations++;
                     Assert.That(prepared?.PocGroupingCount ?? 0, Is.Zero);
-                    if (enabled) { Assert.That(prepared, Is.Not.Null); }
+                    if (takesCapturedInputs) { Assert.That(prepared, Is.Not.Null); }
                     else { Assert.That(prepared, Is.Null); }
                 },
                 PocRawFileObserved = (prepared, provider, file) =>
@@ -397,13 +447,13 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     Assert.That(prepared?.PocGroupingUses ?? 0, Is.Zero);
                     Assert.That(file.PreparedGroupingCount, Is.Zero);
                     Assert.That(file.SelectPreparedForms(false, false, false).Content, Is.EqualTo(file.Content));
-                    if (enabled) { Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True); }
+                    if (takesCapturedInputs) { Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True); }
                     TestContext.WriteLine($"OPTIONAL-INTERPOLATION {mode}: enabled={enabled}; prepared={prepared is not null}; receipt={file.SourceConsumption?.WasCurrentAtEndOfWrite}");
                 },
                 PocSelectedFileObserved = file => selected = file
             };
             var result = await pipeline.ExecuteForCompilerBuildAsync(isolated, new Session(original));
-            Assert.That(result.UsedCapturedResidualInputs, Is.EqualTo(enabled));
+            Assert.That(result.UsedCapturedResidualInputs, Is.EqualTo(takesCapturedInputs));
             Assert.That(preparationObservations, Is.EqualTo(1));
             Assert.That(rawObservations, Is.EqualTo(1));
             Assert.That(selected, Is.Not.Null);
@@ -464,7 +514,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Public | TypeSignatureModifiers.Class;
             protected internal override MethodProvider[] BuildMethods()
             {
-                if (mode is "nested-cae-explicit" or "nested-cae-omitted")
+                if (mode.StartsWith("nested-cae-", StringComparison.Ordinal))
                 {
                     var x = new ParameterProvider("x", $"", typeof(int));
                     var y = new ParameterProvider("y", $"", typeof(int));
@@ -473,9 +523,10 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     var call = new InvokeMethodExpression(null, "Capture", mode == "nested-cae-explicit" ? [lambda, Literal("manual")] : new ValueExpression[] { lambda });
                     var captureValue = new ParameterProvider("value", $"", typeof(Func<int>));
                     var text = new ParameterProvider("text", $"", typeof(string), defaultValue: Literal(""),
-                        attributes: new AttributeStatement[] { new(typeof(CallerArgumentExpressionAttribute), Literal("value")) });
+                        attributes: mode == "nested-cae-no-attribute" ? [] : new AttributeStatement[] { new(typeof(CallerArgumentExpressionAttribute), Literal("value")) });
                     return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(object), null, [x, y]), call, this),
-                        new MethodProvider(new MethodSignature("Capture", null, MethodSignatureModifiers.Private, typeof(object), null, [captureValue, text]), (VariableExpression)text, this)];
+                        new MethodProvider(new MethodSignature("Capture", null, MethodSignatureModifiers.Private, typeof(object), null, [captureValue, text]), (VariableExpression)text, this),
+                        new MethodProvider(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
                 }
                 if (mode is "right-addition" or "right-subtraction")
                 {

@@ -155,7 +155,9 @@ namespace Microsoft.TypeSpec.Generator
 
             if (!CodeModelGenerator.Instance.Configuration.DisableRoslynReduce)
             {
-                document = await Simplifier.ReduceAsync(document);
+                document = CodeModelGenerator.Instance.Rewriters.Count == 0
+                    ? await NestedCallerExpressionReduction.ReduceAsync(document)
+                    : await Simplifier.ReduceAsync(document);
             }
 
             // Reformat if any custom rewriters have been applied

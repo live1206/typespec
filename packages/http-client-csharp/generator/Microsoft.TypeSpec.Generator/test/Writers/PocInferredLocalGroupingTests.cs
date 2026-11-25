@@ -205,14 +205,15 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             finally { directory.Delete(recursive: true); }
         }
 
-        private static async Task<SyntaxTree> WriteIndependentNativeFinal(string directory, string expectedName)
+        private static async Task<SyntaxTree> WriteIndependentNativeFinal(string directory, string expectedName, bool widening = false)
         {
             var original = Directory.CreateDirectory(Path.Combine(directory, "native-original"));
             var isolated = Directory.CreateDirectory(Path.Combine(directory, "native-isolated"));
             var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original.FullName,
                 configuration: "{\"package-name\":\"Sample\",\"enable-pre-emission-simplification\":false,\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}",
                 compilation: () => Task.FromResult<Compilation>(Compilation()));
-            CodeModelGenerator.Instance = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(new Clock()));
+            TypeProvider owner = widening ? new WideningClock() : new Clock();
+            CodeModelGenerator.Instance = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
             CodeFile? selected = null;
             var pipeline = new CSharpGen
             {
@@ -225,8 +226,204 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Assert.That(selected!.Name, Is.EqualTo(expectedName));
             var retained = CSharpSyntaxTree.ParseText(selected.Content, path: selected.Name);
             Assert.That(retained.GetRoot().DescendantNodes().OfType<LocalDeclarationStatementSyntax>().Single().ToString(),
-                Is.EqualTo("var value = ((x + y));"));
+                Is.EqualTo(widening ? "var result = ((long)value);" : "var value = ((x + y));"));
             return CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(isolated.FullName, selected.Name)), path: selected.Name);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task OriginalInferredWideningCastKeepsRequiredTypeDelimiters(bool selectOmission)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-inferred-widening-");
+            try
+            {
+                string original = Directory.CreateDirectory(Path.Combine(directory.FullName, "original")).FullName;
+                string isolated = Directory.CreateDirectory(Path.Combine(directory.FullName, "isolated")).FullName;
+                var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original,
+                    configuration: "{\"package-name\":\"Sample\",\"enable-pre-emission-simplification\":true,\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}",
+                    compilation: () => Task.FromResult<Compilation>(Compilation()));
+                var owner = new WideningClock();
+                var generator = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+                CodeModelGenerator.Instance = generator;
+                CodeFile? selected = null;
+                CodeFile? written = null;
+                int plans = -1;
+                int uses = -1;
+                List<object> visits = [];
+                var pipeline = new CSharpGen
+                {
+                    PocPreparationObserved = prepared =>
+                    {
+                        Assert.That(prepared, Is.Not.Null);
+                        plans = prepared!.PocGroupingCount;
+                        var proof = generator.CompilerBuildContext?.SourceProof;
+                        Assert.That(proof, Is.Not.Null);
+                        var compilation = (CSharpCompilation)proof!.Compilation;
+                        Assert.That(compilation.SyntaxTrees, Is.Empty);
+                        var core = compilation.GetAssemblyOrModuleSymbol(compilation.References.Single());
+                        Assert.That(core, Is.Not.Null);
+                        Assert.That(SymbolEqualityComparer.Default.Equals(core, compilation.GetSpecialType(SpecialType.System_Int64).ContainingAssembly), Is.True);
+                        prepared.PocNativeWriteObserver = node =>
+                        {
+                            if (ReferenceEquals(node, owner.Declaration) || ReferenceEquals(node, owner.Declaration?.Variable) ||
+                                ReferenceEquals(node, owner.Cast) || ReferenceEquals(node, owner.Cast?.Inner)) { visits.Add(node); }
+                        };
+                    },
+                    PocRawFileObserved = (prepared, _, file) => { written = file; uses = prepared!.PocGroupingUses; },
+                    PocSelectedFileObserved = file => selected = file
+                };
+                var result = await pipeline.ExecuteForCompilerBuildAsync(isolated, new CoreOnlySession(original));
+                Assert.That(result.UsedCapturedResidualInputs, Is.True);
+                Assert.That(written?.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
+                Assert.That(selected?.Name, Is.EqualTo("Clock.cs"));
+                var qualified = written!.SelectPreparedForms(false, false, false);
+                object[] order = [owner.Declaration!, owner.Declaration!.Variable, owner.Cast!, owner.Cast!.Inner, owner.Declaration.Variable];
+                Assert.That(visits, Has.Count.EqualTo(order.Length));
+                for (int i = 0; i < order.Length; i++) { Assert.That(visits[i], Is.SameAs(order[i])); }
+                const string retained = "var result = ((long)value);";
+                const string shortened = "var result = (long)value;";
+                Assert.That(AssertWideningBinding(qualified), Is.EqualTo(retained));
+                var output = selectOmission ? selected! : qualified;
+                PreparedParenthesesTests.AssertOperations(qualified.Content, output.Content);
+                Assert.That(AssertWideningBinding(output), Is.EqualTo(selectOmission ? shortened : retained));
+                if (selectOmission)
+                {
+                    Assert.That(plans, Is.EqualTo(1));
+                    Assert.That(uses, Is.EqualTo(1));
+                    Assert.That(written.PreparedGroupingCount, Is.EqualTo(1));
+                    var nativeFinal = await WriteIndependentNativeFinal(directory.FullName, selected!.Name, widening: true);
+                    var actualFinal = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(isolated, selected.Name)), path: selected.Name);
+                    PreparedParenthesesTests.AssertOperations(nativeFinal.ToString(), actualFinal.ToString());
+                    AssertWideningBinding(new CodeFile(nativeFinal.ToString(), nativeFinal.FilePath));
+                    AssertWideningBinding(new CodeFile(actualFinal.ToString(), actualFinal.FilePath));
+                }
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        [TestCase("source-type")]
+        [TestCase("extra-reference")]
+        [TestCase("different-local-carrier")]
+        [TestCase("restored")]
+        [TestCase("before-selection")]
+        [TestCase("after-selection")]
+        public async Task InferredWideningCastHonorsClosedInputsAndFallback(string mode)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-inferred-widening-veto-");
+            try
+            {
+                string original = Directory.CreateDirectory(Path.Combine(directory.FullName, "original")).FullName;
+                string isolated = Directory.CreateDirectory(Path.Combine(directory.FullName, "isolated")).FullName;
+                bool competing = mode == "source-type";
+                bool extraReference = mode == "extra-reference";
+                bool expired = mode is "before-selection" or "after-selection";
+                string? source = competing ? Path.Combine(directory.FullName, "CompetingType.cs") : null;
+                const string competingSource = "namespace Sample; public struct var { public static implicit operator var(long value) => default; public static implicit operator long(var value) => 23L; }";
+                if (source is not null) { File.WriteAllText(source, competingSource); }
+                string core = typeof(object).Assembly.Location;
+                if (expired)
+                {
+                    string copy = Path.Combine(directory.FullName, Path.GetFileName(core));
+                    File.Copy(core, copy);
+                    core = copy;
+                }
+                var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original,
+                    configuration: "{\"package-name\":\"Sample\",\"enable-pre-emission-simplification\":true,\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}",
+                    compilation: () => Task.FromResult<Compilation>(Compilation()));
+                var owner = new WideningClock(mode == "different-local-carrier");
+                var generator = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+                CodeModelGenerator.Instance = generator;
+                CodeFile? selected = null;
+                CodeFile? raw = null;
+                int uses = -1;
+                int expectedPlans = competing || extraReference || mode == "different-local-carrier" ? 0 : 1;
+                var pipeline = new CSharpGen
+                {
+                    PocPreparationObserved = prepared =>
+                    {
+                        Assert.That(prepared, Is.Not.Null);
+                        Assert.That(generator.CompilerBuildContext?.SourceProof, Is.Not.Null);
+                        Assert.That(prepared!.PocGroupingCount, Is.EqualTo(expectedPlans));
+                        if (mode == "restored")
+                        {
+                            prepared.PocAfterOpening = () =>
+                            {
+                                var declaration = ((VariableExpression)owner.Cast!.Inner).Declaration;
+                                string name = declaration.RequestedName;
+                                declaration.Update("other");
+                                declaration.Update(name);
+                            };
+                        }
+                    },
+                    PocRawFileObserved = (prepared, _, file) => { raw = file; uses = prepared!.PocGroupingUses; },
+                    PocGroupingDecisionObserved = (_, allowed) =>
+                    {
+                        if (mode == "before-selection")
+                        {
+                            Assert.That(allowed, Is.True);
+                            using var append = File.Open(core, FileMode.Append);
+                            append.WriteByte(0);
+                        }
+                    },
+                    PocSelectedFileObserved = file =>
+                    {
+                        selected = file;
+                        if (mode == "after-selection")
+                        {
+                            using var append = File.Open(core, FileMode.Append);
+                            append.WriteByte(0);
+                        }
+                    }
+                };
+                var result = await pipeline.ExecuteForCompilerBuildAsync(isolated, new CoreOnlySession(original, core, source, extraReference));
+                Assert.That(result.UsedCapturedResidualInputs, Is.EqualTo(!expired));
+                Assert.That(uses, Is.EqualTo(expectedPlans));
+                Assert.That(raw, Is.Not.Null);
+                Assert.That(selected, Is.Not.Null);
+                Assert.That(selected!.Name, Is.EqualTo("Clock.cs"));
+                if (mode == "restored") { Assert.That(raw!.SourceConsumption?.WasCurrentAtEndOfWrite, Is.False); }
+                if (mode != "after-selection") { Assert.That(selected.Content, Is.EqualTo(raw!.SelectPreparedForms(false, false, false).Content)); }
+                string expected = mode == "after-selection" ? "var result = (long)value;" : "var result = ((long)value);";
+                if (competing)
+                {
+                    var tree = CSharpSyntaxTree.ParseText(selected.Content, path: selected.Name);
+                    var local = tree.GetRoot().DescendantNodes().OfType<LocalDeclarationStatementSyntax>().Single();
+                    Assert.That(local.ToString(), Is.EqualTo(expected));
+                    var compilation = Compilation().AddSyntaxTrees(tree, CSharpSyntaxTree.ParseText(competingSource, path: source!));
+                    var symbol = (ILocalSymbol)compilation.GetSemanticModel(tree).GetDeclaredSymbol(local.Declaration.Variables.Single())!;
+                    Assert.That(symbol.Type.ToDisplayString(), Is.EqualTo("Sample.var"));
+                    Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [int.MinValue], [int.MaxValue]), Is.EqualTo(new object?[] { 23L, 23L }));
+                }
+                else { Assert.That(AssertWideningBinding(selected), Is.EqualTo(expected)); }
+                Assert.That(File.Exists(Path.Combine(isolated, selected.Name)), Is.True);
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static string AssertWideningBinding(CodeFile file)
+        {
+            var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
+            var compilation = Compilation().AddSyntaxTrees(tree);
+            var model = compilation.GetSemanticModel(tree);
+            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single();
+            var statement = (LocalDeclarationStatementSyntax)method.Body!.Statements[0];
+            var local = (ILocalSymbol)model.GetDeclaredSymbol(statement.Declaration.Variables.Single())!;
+            var cast = statement.DescendantNodes().OfType<CastExpressionSyntax>().Single();
+            var conversion = (IConversionOperation)model.GetOperation(cast)!;
+            Assert.That(conversion.Conversion.IsNumeric && !conversion.Conversion.IsUserDefined, Is.True);
+            Assert.That(conversion.Operand.Type?.SpecialType, Is.EqualTo(SpecialType.System_Int32));
+            Assert.That(conversion.Type?.SpecialType, Is.EqualTo(SpecialType.System_Int64));
+            Assert.That(model.GetAliasInfo((IdentifierNameSyntax)statement.Declaration.Type), Is.Null);
+            Assert.That(local.Type.SpecialType, Is.EqualTo(SpecialType.System_Int64));
+            var returned = (ReturnStatementSyntax)method.Body.Statements[1];
+            Assert.That(returned.ToString(), Is.EqualTo("return result;"));
+            Assert.That(SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(returned.Expression!).Symbol, local), Is.True);
+            Assert.That(SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(cast.Expression).Symbol, model.GetDeclaredSymbol(method)!.Parameters.Single()), Is.True);
+            Assert.That(cast.Type.ToString(), Is.EqualTo("long"));
+            Assert.That(cast.OpenParenToken.IsMissing || cast.CloseParenToken.IsMissing, Is.False);
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [int.MinValue], [17], [int.MaxValue]),
+                Is.EqualTo(new object?[] { (long)int.MinValue, 17L, (long)int.MaxValue }));
+            return statement.ToString();
         }
 
         [TestCase("source-type")]
@@ -399,6 +596,27 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             }
             public CompilerBuildInputCapture Capture { get; }
             public bool IsCurrent() => true;
+        }
+
+        private sealed class WideningClock(bool differentLocalCarrier = false) : TypeProvider
+        {
+            internal InferredLocalDeclarationExpression? Declaration { get; private set; }
+            internal CastExpression? Cast { get; private set; }
+            protected override string BuildName() => "Clock";
+            protected override string BuildNamespace() => "Sample";
+            protected override string BuildRelativeFilePath() => "Clock.cs";
+            protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Public | TypeSignatureModifiers.Class;
+            protected internal override MethodProvider[] BuildMethods()
+            {
+                var value = new ParameterProvider("value", $"", typeof(int));
+                var local = new VariableExpression(typeof(long), "result");
+                Declaration = new InferredLocalDeclarationExpression(local);
+                Cast = new CastExpression(value, typeof(long));
+                var returned = differentLocalCarrier ? new VariableExpression(typeof(long), local.Declaration) : local;
+                var body = new MethodBodyStatements([new AssignmentExpression(Declaration, Cast).Terminate(), Return(returned)]);
+                var signature = new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(long), null, [value]);
+                return [new MethodProvider(signature, body, this)];
+            }
         }
 
         private sealed class Clock : TypeProvider

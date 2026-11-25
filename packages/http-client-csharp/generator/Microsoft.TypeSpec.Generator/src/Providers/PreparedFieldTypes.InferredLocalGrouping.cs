@@ -70,6 +70,63 @@ namespace Microsoft.TypeSpec.Generator.Providers
             return true;
         }
 
+        private bool CaptureInferredWideningCastGrouping(PreparedSourceFile file, HashSet<MethodProvider> methods,
+            HashSet<MethodSignature> signatures, HashSet<SourceOccurrenceId> nodes, List<PreparedSourceOccurrence> choices)
+        {
+            PreparedSourceOccurrence? root = null;
+            foreach (var candidate in file.Roots)
+            {
+                if (candidate.Id.RootRole == "type-documentation") { continue; }
+                if (root is not null) { return false; }
+                root = candidate;
+            }
+            if (root?.Producer is not MethodProvider method || method.GetType() != typeof(MethodProvider) ||
+                method.BodyStatements is not MethodBodyStatements body || body.GetType() != typeof(MethodBodyStatements) ||
+                !ContractCollections.TryCopy(body.Statements, out var statements) || statements.Length != 2 ||
+                statements[0] is not ExpressionStatement { Expression: AssignmentExpression { UseNullCoalesce: false,
+                    Variable: InferredLocalDeclarationExpression declaration, Value: CastExpression { Inner: VariableExpression operand } cast } assignment } initialized ||
+                initialized.GetType() != typeof(ExpressionStatement) || statements[1] is not ExpressionStatement { Expression: KeywordExpression
+                    { Keyword: "return", Expression: VariableExpression returned } keyword } returnedStatement ||
+                returnedStatement.GetType() != typeof(ExpressionStatement) || keyword.GetType() != typeof(KeywordExpression) ||
+                declaration.Variable is not { } local || !ReferenceEquals(local, returned) || local.GetType() != typeof(VariableExpression) ||
+                !PreparedPrimitiveCastParent.IsLong(local.Type) || !PreparedPrimitiveCastParent.IsLong(cast.Type) ||
+                !PreparedPrimitiveCastParent.IsLong(method.Signature.ReturnType) || !PocSignature(method.Signature, primitiveCastParent: true) ||
+                method.Signature.HasUnsupportedBaseContract || method.Signature.OriginalSymbol is not null ||
+                !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters) || parameters.Length != 1 ||
+                !IsActualPlainIntFormal(parameters[0], operand) || local.Declaration?.RequestedName is not { } name || !Identifier(name) || name == "var" ||
+                name == operand.Declaration.RequestedName || !HasClosedInferredLocalInputs(file))
+            { return false; }
+
+            var compilation = (CSharpCompilation)file.Compilation;
+            var source = compilation.GetSpecialType(SpecialType.System_Int32);
+            var target = compilation.GetSpecialType(SpecialType.System_Int64);
+            if (target.TypeKind != TypeKind.Struct || !SymbolEqualityComparer.Default.Equals(source.ContainingAssembly, target.ContainingAssembly) ||
+                compilation.ClassifyConversion(source, target) is not { IsImplicit: true, IsNumeric: true, IsUserDefined: false })
+            { return false; }
+
+            static PreparedSourceOccurrence? Child(PreparedSourceOccurrence? parent, int count, int index, object producer) =>
+                parent is { IsOpaque: false } && parent.Children.Length == count && parent.Children[index] is { IsOpaque: false } child &&
+                    ReferenceEquals(child.Producer, producer) ? child : null;
+            var bodyNode = root.Children.FirstOrDefault(node => ReferenceEquals(node.Producer, body));
+            var assignmentNode = Child(Child(bodyNode, 2, 0, initialized), 1, 0, assignment);
+            var declarationNode = Child(assignmentNode, 2, 0, declaration);
+            var castNode = Child(assignmentNode, 2, 1, cast);
+            var returnNode = Child(Child(bodyNode, 2, 1, returnedStatement), 1, 0, keyword);
+            if (declarationNode is null || castNode is null ||
+                Child(declarationNode, 1, 0, local) is not { Children.IsEmpty: true } ||
+                Child(returnNode, 1, 0, returned) is not { Children.IsEmpty: true } ||
+                Child(castNode, 1, 0, operand) is not { Children.IsEmpty: true })
+            { return false; }
+            methods.Add(method);
+            signatures.Add(method.Signature);
+            nodes.Add(bodyNode!.Id);
+            nodes.Add(assignmentNode!.Id);
+            nodes.Add(declarationNode.Id);
+            nodes.Add(castNode.Id);
+            choices.Add(castNode);
+            return true;
+        }
+
         // The native provider automatically prints `partial` on top-level
         // classes. Exclude actual companions, not that syntactic modifier:
         // the compiler proof has no source trees and the inventory has one owner.

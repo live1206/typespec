@@ -220,6 +220,13 @@ the stored local type alone is not evidence. This does not cover ordinary
 inferred locals in unrestricted compilations or the compact cast-trivia
 caller-line statement.
 
+Checkpoint 25 applies the same closed compiler-input and no-import guards to
+`var result = ((long)value); return result;`. The actual `int` formal, built-in
+widening conversion and returned `long` local must match. Only the cast's outer
+pair is eligible; the required `(long)` stays. The explicit local and inferred
+addition profiles remain separate. This does not cover the compact cast-trivia
+and later caller-line original.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

@@ -60,7 +60,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     CaptureWrappedIfCondition(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureStringCoalescing(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureUsedLocalInitializers(file, nativeMethods, nativeSignatures, nativeNodes, choices);
-                    requiresNoImports = CaptureInferredLocalGrouping(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    requiresNoImports = CaptureInferredLocalGrouping(file, nativeMethods, nativeSignatures, nativeNodes, choices) ||
+                        CaptureInferredWideningCastGrouping(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     if (files.Length == 1)
                     {
                         argumentCurrent = CaptureOrdinaryArguments(file, nativeMethods, nativeSignatures, nativeNodes, choices) ??

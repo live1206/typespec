@@ -266,6 +266,65 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             return observed;
         }
 
+        [TestCase("+")]
+        [TestCase("-")]
+        public async Task OriginalBareRightGroupingDoesNotAuthorizeReassociation(string operation)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-right-reassociation-");
+            try
+            {
+                string mode = operation == "+" ? "right-addition" : "right-subtraction";
+                string retained = $"x {operation} (y {operation} z)";
+                var actual = await WriteCompilerOutput(directory.FullName, mode, enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, mode, enabled: false);
+                Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                var selected = CSharpSyntaxTree.ParseText(actual.Selected.Content, path: actual.Selected.Name);
+                var expression = selected.GetRoot().DescendantNodes().OfType<ArrowExpressionClauseSyntax>().Single().Expression;
+                Assert.That(expression.ToString(), Is.EqualTo(retained));
+                var binary = (BinaryExpressionSyntax)expression;
+                var inner = (BinaryExpressionSyntax)((ParenthesizedExpressionSyntax)binary.Right).Expression;
+                Assert.That(inner.Left.ToString(), Is.EqualTo("y"));
+                Assert.That(inner.Right.ToString(), Is.EqualTo("z"));
+                string forced = $"namespace Sample; public class Clock {{ public int M(int x, int y, int z) => x {operation} y {operation} z; }}";
+                Assert.Throws<AssertionException>(() => PreparedParenthesesTests.AssertOperations(actual.Selected.Content, forced));
+                if (operation == "+")
+                {
+                    // Unchecked addition can hide reassociation. The checked
+                    // witness distinguishes the actual trees without enabling
+                    // a new checked generation or preparation profile.
+                    object?[][] arguments = [[int.MaxValue, 1, -1]];
+                    Assert.That(ExecuteArithmetic(actual.Selected, arguments, checkOverflow: true), Is.EqualTo(new object?[] { int.MaxValue }));
+                    var failure = Assert.Throws<System.Reflection.TargetInvocationException>(() =>
+                        ExecuteArithmetic(new CodeFile(forced, "Forced.cs"), arguments, checkOverflow: true));
+                    Assert.That(failure!.InnerException, Is.TypeOf<OverflowException>());
+                }
+                else
+                {
+                    object?[][] arguments = [[10, 7, 3]];
+                    Assert.That(ExecuteArithmetic(actual.Selected, arguments), Is.EqualTo(new object?[] { 6 }));
+                    Assert.That(ExecuteArithmetic(new CodeFile(forced, "Forced.cs"), arguments), Is.EqualTo(new object?[] { 0 }));
+                }
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                object?[][] finalArguments = [[10, 7, 3], [int.MinValue, 1, 1]];
+                Assert.That(ExecuteArithmetic(actual.Final, finalArguments), Is.EqualTo(ExecuteArithmetic(native.Final, finalArguments)));
+                // The inherited final simplifier reassociates the unchecked
+                // addition in both pipelines; subtraction stays right-grouped.
+                string finalSpelling = operation == "+" ? "x + y + z" : retained;
+                Assert.That(PreparedParenthesesTests.MethodExpression(native.Final.Content).ToString(), Is.EqualTo(finalSpelling));
+                Assert.That(PreparedParenthesesTests.MethodExpression(actual.Final.Content).ToString(), Is.EqualTo(finalSpelling));
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static object?[] ExecuteArithmetic(CodeFile file, object?[][] arguments, bool checkOverflow = false)
+        {
+            var compilation = CSharpCompilation.Create("RightReassociationWitness", [CSharpSyntaxTree.ParseText(file.Content, path: file.Name)],
+                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)], new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, checkOverflow: checkOverflow));
+            return PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", arguments);
+        }
+
         private static async Task<(CodeFile Selected, CodeFile Final)> WriteCompilerOutput(string directory, string mode, bool enabled)
         {
             string prefix = enabled ? "prepared" : "native";
@@ -375,6 +434,15 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                         attributes: new AttributeStatement[] { new(typeof(CallerArgumentExpressionAttribute), Literal("value")) });
                     return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(object), null, [x, y]), call, this),
                         new MethodProvider(new MethodSignature("Capture", null, MethodSignatureModifiers.Private, typeof(object), null, [captureValue, text]), (VariableExpression)text, this)];
+                }
+                if (mode is "right-addition" or "right-subtraction")
+                {
+                    var x = new ParameterProvider("x", $"", typeof(int));
+                    var y = new ParameterProvider("y", $"", typeof(int));
+                    var z = new ParameterProvider("z", $"", typeof(int));
+                    string operation = mode == "right-addition" ? "+" : "-";
+                    var body = new BinaryOperatorExpression(operation, x, new BinaryOperatorExpression(operation, y, z), AddParentheses: false);
+                    return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, [x, y, z]), body, this)];
                 }
                 if (mode == "stackalloc")
                 {

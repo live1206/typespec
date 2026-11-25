@@ -482,6 +482,62 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             finally { directory.Delete(recursive: true); }
         }
 
+        [Test]
+        public async Task OriginalLeftCoalesceRetainsThroughActualFinalReduction()
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-left-coalesce-final-");
+            try
+            {
+                var actual = await WriteCompilerOutput(directory.FullName, "left-coalesce", enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, "left-coalesce", enabled: false);
+                Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                Assert.That(AssertLeftCoalesceBindingAndRuntime(actual.Selected), Is.EqualTo("(x ?? y) ?? z"));
+                Assert.That(AssertLeftCoalesceBindingAndRuntime(native.Selected), Is.EqualTo("(x ?? y) ?? z"));
+                string forced = actual.Selected.Content.Replace("(x ?? y) ?? z", "x ?? y ?? z", StringComparison.Ordinal);
+                Assert.That(forced, Is.Not.EqualTo(actual.Selected.Content));
+                Assert.Throws<AssertionException>(() => PreparedParenthesesTests.AssertOperations(actual.Selected.Content, forced));
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                Assert.That(actual.Selected.Content, Does.Contain("Unrelated() => (42);"));
+                Assert.That(actual.Final.Content, Does.Contain("Unrelated() => 42;"));
+                Assert.That(native.Final.Content, Does.Contain("Unrelated() => 42;"));
+                string actualFinal = AssertLeftCoalesceBindingAndRuntime(actual.Final);
+                string nativeFinal = AssertLeftCoalesceBindingAndRuntime(native.Final);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(actualFinal, Is.EqualTo("(x ?? y) ?? z"));
+                    Assert.That(nativeFinal, Is.EqualTo("(x ?? y) ?? z"));
+                });
+                PreparedParenthesesTests.AssertOperations(actual.Selected.Content, actual.Final.Content);
+                PreparedParenthesesTests.AssertOperations(native.Selected.Content, native.Final.Content);
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static string AssertLeftCoalesceBindingAndRuntime(CodeFile file)
+        {
+            var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
+            var compilation = CSharpCompilation.Create("LeftCoalesceWitness", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            Assert.That(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), Is.Empty);
+            var model = compilation.GetSemanticModel(tree);
+            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == "M");
+            var expression = method.ExpressionBody!.Expression;
+            var formals = model.GetDeclaredSymbol(method)!.Parameters;
+            var names = expression.DescendantNodes().OfType<IdentifierNameSyntax>().ToArray();
+            Assert.That(names, Has.Length.EqualTo(3));
+            for (int i = 0; i < names.Length; i++)
+            {
+                Assert.That(formals[i].Type.SpecialType, Is.EqualTo(SpecialType.System_String));
+                Assert.That(SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(names[i]).Symbol, formals[i]), Is.True);
+            }
+            Assert.That(model.GetOperation(expression), Is.InstanceOf<ICoalesceOperation>());
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", ["x", "y", "z"], [null, "y", "z"], [null, null, "z"], [null, null, null]),
+                Is.EqualTo(new object?[] { "x", "y", "z", null }));
+            return expression.ToString();
+        }
+
         private static object? ObserveArithmetic(CodeFile file, object?[][] arguments)
         {
             try { return ExecuteArithmetic(file, arguments).Single(); }
@@ -810,6 +866,15 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     return mode == "nested-cae-three-sites"
                         ? [.. methods, second, BuildEntry("Third", "first", "last", "Capture")]
                         : [.. methods, second, BuildEntry("Manual", "first", "last", "Capture", manual: true)];
+                }
+                if (mode == "left-coalesce")
+                {
+                    var x = new ParameterProvider("x", $"", typeof(string));
+                    var y = new ParameterProvider("y", $"", typeof(string));
+                    var z = new ParameterProvider("z", $"", typeof(string));
+                    var body = new BinaryOperatorExpression("??", new BinaryOperatorExpression("??", x, y), z, AddParentheses: false);
+                    return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(string), null, [x, y, z]), body, this),
+                        new MethodProvider(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
                 }
                 if (mode is "right-addition" or "right-subtraction")
                 {

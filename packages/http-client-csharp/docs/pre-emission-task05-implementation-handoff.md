@@ -229,10 +229,10 @@ and later caller-line original.
 
 Checkpoint 26 authors the direct delegate target `((f))(1)`, keeping both
 expression pairs separate from the required argument list. Native selection
-retains both pairs with zero grouping choices. Both the enabled and the
-independent disabled pipeline still produce `f(1)` after legacy reduction,
-with the same binding and one invocation. Original final-spelling retention
-remains open; this checkpoint does not change legacy reduction.
+retains both pairs with zero grouping choices. At checkpoint 26, both the
+enabled and independent disabled final pipelines still produced `f(1)`, with
+the same binding and one invocation. Checkpoint 36 addresses that final
+spelling for its bounded profile below.
 
 Checkpoint 33 protects the actual omitted caller-expression string for the
 native nested `return ((x + y));` lambda through downstream Roslyn reduction.
@@ -255,6 +255,13 @@ The closed document uses one reduction partition for admitted defaults and
 caller-expression calls, then verifies each separately. Unmatched defaults
 still simplify; declining the optional profile does not revoke a supported
 caller guard. This is not a general optional-default formatting policy.
+
+Checkpoint 36 protects the exact direct delegate call `((f))(1)` through
+final reduction after binding the actual `Func<int, int>` formal and its
+`Invoke` method. This profile requires one matching delegate candidate in a
+single generated document with no custom rewriters. It composes with the
+existing default and caller guards. Unmatched calls and unrelated expressions
+still simplify. The separate cast-lambda invocation remains outside the profile.
 
 ## Remaining accepted coverage
 

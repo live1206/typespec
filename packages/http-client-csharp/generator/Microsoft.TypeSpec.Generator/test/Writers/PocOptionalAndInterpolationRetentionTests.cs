@@ -563,6 +563,54 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             finally { directory.Delete(recursive: true); }
         }
 
+        [TestCase("nested-cae-defaults-delegate", true)]
+        [TestCase("nested-cae-defaults-delegates-over-cap", false)]
+        public async Task DelegateRetentionComposesWithExistingFinalGuards(string mode, bool protectDelegate)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-cae-default-delegate-composition-");
+            try
+            {
+                var actual = await WriteCompilerOutput(directory.FullName, mode, enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, mode, enabled: false);
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                Assert.That(AssertGroupedDelegateWitness(actual.Selected, "InvokeFormal"), Is.EqualTo("((f))(1)"));
+                if (!protectDelegate) { Assert.That(AssertGroupedDelegateWitness(actual.Selected, "OtherFormal"), Is.EqualTo("((f))(1)")); }
+                string selectedCapture = AssertActualBinaryCapture(actual.Selected, explicitText: false);
+                Assert.That(selectedCapture, Does.Contain("return ((x + y));"));
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                foreach (var output in new[] { actual.Final, native.Final })
+                {
+                    Assert.That(AssertGroupedDelegateWitness(output, "InvokeFormal"), Is.EqualTo(protectDelegate ? "((f))(1)" : "f(1)"));
+                    if (!protectDelegate) { Assert.That(AssertGroupedDelegateWitness(output, "OtherFormal"), Is.EqualTo("f(1)")); }
+                    Assert.That(AssertActualBinaryCapture(output, explicitText: false), Is.EqualTo(selectedCapture));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-literal", "LiteralDefault"), Is.EqualTo("value = (1)"));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-descendant", "DescendantDefault"), Is.EqualTo("value = (1 + (2))"));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-unmatched", "UnmatchedDefault"), Is.EqualTo("value = 2"));
+                    Assert.That(output.Content, Does.Contain("Unrelated() => 42;"));
+                }
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static string AssertGroupedDelegateWitness(CodeFile file, string entryName)
+        {
+            var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
+            var compilation = CSharpCompilation.Create("DelegateCompositionWitness", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            var entry = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(method => method.Identifier.ValueText == entryName);
+            var call = (InvocationExpressionSyntax)entry.ExpressionBody!.Expression;
+            var model = compilation.GetSemanticModel(tree);
+            var formal = model.GetDeclaredSymbol(entry)!.Parameters.Single();
+            var operation = (IInvocationOperation)model.GetOperation(call)!;
+            Assert.That(SymbolEqualityComparer.Default.Equals(operation.TargetMethod, ((INamedTypeSymbol)formal.Type).DelegateInvokeMethod), Is.True);
+            int invocations = 0;
+            Func<int, int> witness = value => { invocations++; return value + 42; };
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", entryName, [witness]).Single(), Is.EqualTo(43));
+            Assert.That(invocations, Is.EqualTo(1));
+            return call.ToString();
+        }
+
         private static string AssertBindingAndRuntime(CodeFile file, string mode, string entryName = "M")
         {
             var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
@@ -629,14 +677,19 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     MethodProvider[] methods = [new(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(object), null, [x, y]), call, this),
                         new(new MethodSignature("Capture", null, MethodSignatureModifiers.Private, typeof(object), null, [captureValue, text]), (VariableExpression)text, this),
                         new(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
-                    if (mode is "nested-cae-defaults" or "nested-cae-defaults-over-cap")
+                    if (mode is "nested-cae-defaults" or "nested-cae-defaults-over-cap" or "nested-cae-defaults-delegate" or "nested-cae-defaults-delegates-over-cap")
                     {
                         MethodProvider[] composed = [.. methods,
                             BuildOptional("LiteralDefault", new ParenthesizedExpression(Literal(1))),
                             BuildOptional("DescendantDefault", new BinaryOperatorExpression("+", Literal(1), new ParenthesizedExpression(Literal(2)))),
                             BuildOptional("UnmatchedDefault", new ParenthesizedExpression(Literal(2)))];
-                        return mode == "nested-cae-defaults-over-cap"
-                            ? [.. composed, BuildOptional("ThirdExactDefault", new ParenthesizedExpression(Literal(1)))] : composed;
+                        return mode switch
+                        {
+                            "nested-cae-defaults-over-cap" => [.. composed, BuildOptional("ThirdExactDefault", new ParenthesizedExpression(Literal(1)))],
+                            "nested-cae-defaults-delegate" => [.. composed, BuildDelegate("InvokeFormal")],
+                            "nested-cae-defaults-delegates-over-cap" => [.. composed, BuildDelegate("InvokeFormal"), BuildDelegate("OtherFormal")],
+                            _ => composed
+                        };
                     }
                     if (mode is not ("nested-cae-two-sites" or "nested-cae-lookalike" or "nested-cae-three-sites")) { return methods; }
 
@@ -707,6 +760,14 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 ValueExpression defaultValue = mode == "optional-literal" ? new ParenthesizedExpression(Literal(1)) :
                     new BinaryOperatorExpression("+", Literal(1), new ParenthesizedExpression(Literal(2)));
                 return [BuildOptional("M", defaultValue), new MethodProvider(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
+            }
+
+            private MethodProvider BuildDelegate(string name)
+            {
+                var formal = new ParameterProvider("f", $"", typeof(Func<int, int>));
+                var target = new ParenthesizedExpression(new ParenthesizedExpression(formal));
+                var call = new DirectDelegateInvocationExpression(target, Literal(1));
+                return new MethodProvider(new MethodSignature(name, null, MethodSignatureModifiers.Public, typeof(int), null, [formal]), call, this);
             }
 
             private MethodProvider BuildOptional(string name, ValueExpression defaultValue)

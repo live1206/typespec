@@ -46,11 +46,18 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 AssertActualDelegateTarget(actual.Selected.Content, actual.Selected.Name);
                 Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
                 PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
-                // Both physical final pipelines still run the inherited
-                // simplifier. This is not a prepared grouping choice or proof
-                // of the original final-retention requirement.
-                AssertActualDelegateTarget(native.Final.Content, native.Final.Name, expectedTargetPairCount: 0);
-                AssertActualDelegateTarget(actual.Final.Content, actual.Final.Name, expectedTargetPairCount: 0);
+                AssertActualDelegateTarget(actual.Selected.Content, actual.Selected.Name, entryName: "Unmatched", argument: 2);
+                Assert.That(actual.Selected.Content, Does.Contain("Unrelated() => (42);"));
+                foreach (var final in new[] { native.Final, actual.Final })
+                {
+                    Assert.That(final.Content, Does.Contain("Unrelated() => 42;"));
+                    AssertActualDelegateTarget(final.Content, final.Name, expectedTargetPairCount: 0, entryName: "Unmatched", argument: 2);
+                }
+                Assert.Multiple(() =>
+                {
+                    AssertActualDelegateTarget(native.Final.Content, native.Final.Name);
+                    AssertActualDelegateTarget(actual.Final.Content, actual.Final.Name);
+                });
             }
             finally { directory.Delete(recursive: true); }
         }
@@ -114,15 +121,15 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             return (selected, new CodeFile(File.ReadAllText(Path.Combine(isolated, selected.Name)), selected.Name));
         }
 
-        private static void AssertActualDelegateTarget(string text, string name, int expectedTargetPairCount = 2)
+        private static void AssertActualDelegateTarget(string text, string name, int expectedTargetPairCount = 2, string entryName = "M", int argument = 1)
         {
             var tree = CSharpSyntaxTree.ParseText(text, path: name);
             var compilation = CSharpCompilation.Create("DelegateTarget", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
             Assert.That(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), Is.Empty);
-            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single();
+            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == entryName);
             var call = (InvocationExpressionSyntax)method.ExpressionBody!.Expression;
-            Assert.That(call.ToString(), Is.EqualTo(expectedTargetPairCount == 2 ? "((f))(1)" : "f(1)"));
+            Assert.That(call.ToString(), Is.EqualTo(expectedTargetPairCount == 2 ? $"((f))({argument})" : $"f({argument})"));
             ExpressionSyntax target = call.Expression;
             int targetPairCount = 0;
             while (target is ParenthesizedExpressionSyntax wrapper)
@@ -134,7 +141,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Assert.That(targetPairCount, Is.EqualTo(expectedTargetPairCount));
             Assert.That(target.ToString(), Is.EqualTo("f"));
             Assert.That(call.ArgumentList.OpenParenToken.IsMissing || call.ArgumentList.CloseParenToken.IsMissing, Is.False);
-            Assert.That(call.ArgumentList.Arguments.Single().Expression.ToString(), Is.EqualTo("1"));
+            Assert.That(call.ArgumentList.Arguments.Single().Expression.ToString(), Is.EqualTo(argument.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             var model = compilation.GetSemanticModel(tree);
             var formal = model.GetDeclaredSymbol(method)!.Parameters.Single();
             var invoke = (IInvocationOperation)model.GetOperation(call)!;
@@ -143,13 +150,13 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Assert.That(SymbolEqualityComparer.Default.Equals(invoke.TargetMethod, ((INamedTypeSymbol)formal.Type).DelegateInvokeMethod), Is.True);
             Assert.That(invoke.TargetMethod.ReturnType.SpecialType, Is.EqualTo(SpecialType.System_Int32));
             Assert.That(invoke.TargetMethod.Parameters.Single().Type.SpecialType, Is.EqualTo(SpecialType.System_Int32));
-            Assert.That(invoke.Arguments.Single().Value.ConstantValue.Value, Is.EqualTo(1));
+            Assert.That(invoke.Arguments.Single().Value.ConstantValue.Value, Is.EqualTo(argument));
             int count = 0;
             int observed = -1;
             Func<int, int> witness = value => { count++; observed = value; return value + 41; };
-            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [witness]).Single(), Is.EqualTo(42));
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", entryName, [witness]).Single(), Is.EqualTo(argument + 41));
             Assert.That(count, Is.EqualTo(1));
-            Assert.That(observed, Is.EqualTo(1));
+            Assert.That(observed, Is.EqualTo(argument));
         }
 
         private sealed class NativeGenerator(GeneratorContext context, InputLibrary input, OutputLibrary output) : CodeModelGenerator(context)
@@ -188,7 +195,13 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 Argument = new LiteralExpression(1);
                 Call = new DirectDelegateInvocationExpression(Outer, Argument);
                 var signature = new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, [parameter]);
-                return [new MethodProvider(signature, Call, this)];
+                var unmatchedParameter = new ParameterProvider("f", $"", typeof(Func<int, int>));
+                var unmatchedTarget = new ParenthesizedExpression(new ParenthesizedExpression(unmatchedParameter));
+                var unmatched = new DirectDelegateInvocationExpression(unmatchedTarget, new LiteralExpression(2));
+                return [new MethodProvider(signature, Call, this),
+                    new MethodProvider(new MethodSignature("Unmatched", null, MethodSignatureModifiers.Public, typeof(int), null, [unmatchedParameter]), unmatched, this),
+                    new MethodProvider(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []),
+                        new ParenthesizedExpression(new LiteralExpression(42)), this)];
             }
         }
     }

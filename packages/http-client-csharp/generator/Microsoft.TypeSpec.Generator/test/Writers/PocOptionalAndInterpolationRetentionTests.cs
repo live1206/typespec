@@ -4,6 +4,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
@@ -181,6 +182,90 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             return initializer.ToString();
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task OriginalNestedBinaryCallerExpressionRetainsAtNativeSelection(bool explicitText)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-nested-binary-cae-");
+            try
+            {
+                string mode = explicitText ? "nested-cae-explicit" : "nested-cae-omitted";
+                var actual = await WriteCompilerOutput(directory.FullName, mode, enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, mode, enabled: false);
+                Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                Assert.That(actual.Selected.Content, Does.Contain("return ((x + y));"));
+                string captured = AssertActualBinaryCapture(actual.Selected, explicitText);
+                const string nativeLambda = "() => \n        {\n            return ((x + y));\n        }";
+                Assert.That(captured, Is.EqualTo(explicitText ? "manual" : nativeLambda));
+                Assert.That(AssertActualBinaryCapture(native.Selected, explicitText), Is.EqualTo(captured));
+                if (!explicitText)
+                {
+                    const string compactLambda = "() => { return ((x + y)); }";
+                    const string compact = "namespace Sample; public class Clock { public object M(int x, int y) => Capture(" + compactLambda +
+                        "); private object Capture(System.Func<int> value, [System.Runtime.CompilerServices.CallerArgumentExpression(\"value\")] string text = \"\") => text; }";
+                    Assert.That(AssertActualBinaryCapture(new CodeFile(compact, "Compact.cs"), explicitText: false), Is.EqualTo(compactLambda));
+                    Assert.That(captured, Is.Not.EqualTo(compactLambda), "Ordinary native formatting is visible to the caller-expression argument");
+                }
+                const string before = "return ((x + y));";
+                const string after = "return x + y;";
+                string forced = actual.Selected.Content.Replace(before, after, StringComparison.Ordinal);
+                Assert.That(forced, Is.Not.EqualTo(actual.Selected.Content));
+                string counterfactual = AssertActualBinaryCapture(new CodeFile(forced, actual.Selected.Name), explicitText);
+                if (explicitText) { Assert.That(counterfactual, Is.EqualTo(captured)); }
+                else { Assert.That(counterfactual, Is.Not.EqualTo(captured)); }
+
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                string nativeFinal = AssertActualBinaryCapture(native.Final, explicitText);
+                string actualFinal = AssertActualBinaryCapture(actual.Final, explicitText);
+                Assert.That(actualFinal, Is.EqualTo(nativeFinal));
+                // The independent disabled pipeline also removes the pairs
+                // and changes the implicit constant. Native selection does neither.
+                Assert.That(native.Final.Content, Does.Contain(after).And.Not.Contain(before));
+                Assert.That(actual.Final.Content, Does.Contain(after).And.Not.Contain(before));
+                Assert.That(nativeFinal, Is.EqualTo(explicitText ? "manual" : nativeLambda.Replace(before, after, StringComparison.Ordinal)));
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static string AssertActualBinaryCapture(CodeFile file, bool explicitText)
+        {
+            var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
+            var compilation = CSharpCompilation.Create("NestedBinaryCaptureWitness", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            Assert.That(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), Is.Empty);
+            var syntax = tree.GetRoot();
+            var model = compilation.GetSemanticModel(tree);
+            var capture = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == "Capture");
+            var entry = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == "M");
+            var call = (InvocationExpressionSyntax)entry.ExpressionBody!.Expression;
+            var target = model.GetDeclaredSymbol(capture)!;
+            var invocation = (IInvocationOperation)model.GetOperation(call)!;
+            Assert.That(SymbolEqualityComparer.Default.Equals(invocation.TargetMethod, target), Is.True);
+            var attribute = target.Parameters[1].GetAttributes().Single();
+            Assert.That(attribute.AttributeClass?.ToDisplayString(), Is.EqualTo(typeof(CallerArgumentExpressionAttribute).FullName));
+            Assert.That(attribute.ConstructorArguments.Single().Value, Is.EqualTo(target.Parameters[0].Name));
+            var lambda = (LambdaExpressionSyntax)call.ArgumentList.Arguments[0].Expression;
+            var binary = lambda.DescendantNodes().OfType<BinaryExpressionSyntax>().Single();
+            var addition = (IBinaryOperation)model.GetOperation(binary)!;
+            Assert.That(addition.OperatorKind, Is.EqualTo(BinaryOperatorKind.Add));
+            Assert.That(addition.OperatorMethod, Is.Null);
+            Assert.That(addition.Type?.SpecialType, Is.EqualTo(SpecialType.System_Int32));
+            var parameters = model.GetDeclaredSymbol(entry)!.Parameters;
+            Assert.That(SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(binary.Left).Symbol, parameters[0]), Is.True);
+            Assert.That(SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(binary.Right).Symbol, parameters[1]), Is.True);
+            var text = invocation.Arguments.Single(argument => argument.Parameter?.Ordinal == 1);
+            Assert.That(text.IsImplicit, Is.EqualTo(!explicitText));
+            Assert.That(text.ArgumentKind, Is.EqualTo(explicitText ? ArgumentKind.Explicit : ArgumentKind.DefaultValue));
+            Assert.That(text.Value.ConstantValue.HasValue, Is.True);
+            var observed = (string)text.Value.ConstantValue.Value!;
+            Assert.That(observed, Is.EqualTo(explicitText ? "manual" : lambda.ToString()));
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [3, 4], [int.MinValue, -1]),
+                Is.EqualTo(new object?[] { observed, observed }));
+            return observed;
+        }
+
         private static async Task<(CodeFile Selected, CodeFile Final)> WriteCompilerOutput(string directory, string mode, bool enabled)
         {
             string prefix = enabled ? "prepared" : "native";
@@ -278,6 +363,19 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Public | TypeSignatureModifiers.Class;
             protected internal override MethodProvider[] BuildMethods()
             {
+                if (mode is "nested-cae-explicit" or "nested-cae-omitted")
+                {
+                    var x = new ParameterProvider("x", $"", typeof(int));
+                    var y = new ParameterProvider("y", $"", typeof(int));
+                    var grouped = new ParenthesizedExpression(new BinaryOperatorExpression("+", x, y));
+                    var lambda = new FuncExpression(Array.Empty<CodeWriterDeclaration?>(), Return(grouped));
+                    var call = new InvokeMethodExpression(null, "Capture", mode == "nested-cae-explicit" ? [lambda, Literal("manual")] : new ValueExpression[] { lambda });
+                    var captureValue = new ParameterProvider("value", $"", typeof(Func<int>));
+                    var text = new ParameterProvider("text", $"", typeof(string), defaultValue: Literal(""),
+                        attributes: new AttributeStatement[] { new(typeof(CallerArgumentExpressionAttribute), Literal("value")) });
+                    return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(object), null, [x, y]), call, this),
+                        new MethodProvider(new MethodSignature("Capture", null, MethodSignatureModifiers.Private, typeof(object), null, [captureValue, text]), (VariableExpression)text, this)];
+                }
                 if (mode == "stackalloc")
                 {
                     var declaration = new DeclarationExpression(typeof(Span<byte>), "value", out var local);

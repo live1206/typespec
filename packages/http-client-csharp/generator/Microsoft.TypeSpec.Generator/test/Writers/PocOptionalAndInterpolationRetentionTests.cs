@@ -318,6 +318,48 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             finally { directory.Delete(recursive: true); }
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task OriginalFloatingOrCheckedRightGroupingSurvivesActualFinal(bool checkedArithmetic)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-observable-reassociation-");
+            try
+            {
+                string mode = checkedArithmetic ? "checked-right-addition" : "floating-right-addition";
+                string retained = checkedArithmetic ? "checked(x + (y + z))" : "x + (y + z)";
+                var actual = await WriteCompilerOutput(directory.FullName, mode, enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, mode, enabled: false);
+                Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                Assert.That(PreparedParenthesesTests.MethodExpression(actual.Selected.Content).ToString(), Is.EqualTo(retained));
+                Assert.That(PreparedParenthesesTests.MethodExpression(native.Selected.Content).ToString(), Is.EqualTo(retained));
+                object?[][] arguments = checkedArithmetic ? [[int.MinValue, int.MaxValue, 1]] : [[1e20, -1e20, 3.0]];
+                object retainedValue = checkedArithmetic ? nameof(OverflowException) : 0.0;
+                Assert.That(ObserveArithmetic(actual.Selected, arguments), Is.EqualTo(retainedValue));
+                Assert.That(ObserveArithmetic(native.Selected, arguments), Is.EqualTo(retainedValue));
+                string wronglyAssociated = checkedArithmetic ? "checked(x + y + z)" : "x + y + z";
+                string forced = actual.Selected.Content.Replace(retained, wronglyAssociated, StringComparison.Ordinal);
+                Assert.That(forced, Is.Not.EqualTo(actual.Selected.Content));
+                Assert.Throws<AssertionException>(() => PreparedParenthesesTests.AssertOperations(actual.Selected.Content, forced));
+                Assert.That(ObserveArithmetic(new CodeFile(forced, actual.Selected.Name), arguments), Is.EqualTo(checkedArithmetic ? 0 : 3.0));
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                TestContext.WriteLine($"OBSERVABLE-REASSOCIATION {mode}: disabled final `{PreparedParenthesesTests.MethodExpression(native.Final.Content)}`, enabled final `{PreparedParenthesesTests.MethodExpression(actual.Final.Content)}`");
+                Assert.That(PreparedParenthesesTests.MethodExpression(native.Final.Content).ToString(), Is.EqualTo(retained));
+                Assert.That(PreparedParenthesesTests.MethodExpression(actual.Final.Content).ToString(), Is.EqualTo(retained));
+                Assert.That(ObserveArithmetic(actual.Final, arguments), Is.EqualTo(retainedValue));
+                Assert.That(ObserveArithmetic(native.Final, arguments), Is.EqualTo(retainedValue));
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static object? ObserveArithmetic(CodeFile file, object?[][] arguments)
+        {
+            try { return ExecuteArithmetic(file, arguments).Single(); }
+            catch (System.Reflection.TargetInvocationException exception) when (exception.InnerException is OverflowException)
+            { return nameof(OverflowException); }
+        }
+
         private static object?[] ExecuteArithmetic(CodeFile file, object?[][] arguments, bool checkOverflow = false)
         {
             var compilation = CSharpCompilation.Create("RightReassociationWitness", [CSharpSyntaxTree.ParseText(file.Content, path: file.Name)],
@@ -443,6 +485,17 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     string operation = mode == "right-addition" ? "+" : "-";
                     var body = new BinaryOperatorExpression(operation, x, new BinaryOperatorExpression(operation, y, z), AddParentheses: false);
                     return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, [x, y, z]), body, this)];
+                }
+                if (mode is "floating-right-addition" or "checked-right-addition")
+                {
+                    bool checkedArithmetic = mode == "checked-right-addition";
+                    CSharpType arithmeticType = checkedArithmetic ? typeof(int) : typeof(double);
+                    var x = new ParameterProvider("x", $"", arithmeticType);
+                    var y = new ParameterProvider("y", $"", arithmeticType);
+                    var z = new ParameterProvider("z", $"", arithmeticType);
+                    var addition = new BinaryOperatorExpression("+", x, new BinaryOperatorExpression("+", y, z), AddParentheses: false);
+                    ValueExpression body = checkedArithmetic ? new CheckedExpression(addition) : addition;
+                    return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, arithmeticType, null, [x, y, z]), body, this)];
                 }
                 if (mode == "stackalloc")
                 {

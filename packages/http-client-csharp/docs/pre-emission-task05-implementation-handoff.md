@@ -263,6 +263,13 @@ single generated document with no custom rewriters. It composes with the
 existing default and caller guards. Unmatched calls and unrelated expressions
 still simplify. The separate cast-lambda invocation remains outside the profile.
 
+Checkpoint 37 retains the exact `(stackalloc byte[8])` initializer through
+final reduction in a safe, bound `Span<byte>` local followed by a return of
+its length. The one admitted initializer composes with the existing guards
+in the same closed document. Other sizes still follow ordinary reduction.
+This does not change allocation behavior or authorize general stackalloc
+formatting.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

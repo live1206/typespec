@@ -12,7 +12,7 @@ using Microsoft.CodeAnalysis.Simplification;
 
 namespace Microsoft.TypeSpec.Generator
 {
-    // One disjoint partition for admitted caller captures, exact defaults and direct delegate targets.
+    // One disjoint partition for admitted caller captures and exact retained expressions.
     // Unsupported shapes keep their existing reduction policy.
     internal static class ScopedGeneratedReduction
     {
@@ -25,6 +25,7 @@ namespace Microsoft.TypeSpec.Generator
             var callers = new List<InvocationExpressionSyntax>();
             var defaults = new List<EqualsValueClauseSyntax>();
             var delegates = new List<InvocationExpressionSyntax>();
+            var stackAllocations = new List<ParenthesizedExpressionSyntax>();
             foreach (var node in root.DescendantNodes())
             {
                 if (node is InvocationExpressionSyntax call)
@@ -39,12 +40,14 @@ namespace Microsoft.TypeSpec.Generator
                 }
                 else if (defaults.Count < 3 && node is EqualsValueClauseSyntax clause && GetExpectedDefault(clause) is not null)
                 { defaults.Add(clause); }
+                else if (stackAllocations.Count < 2 && node is ParenthesizedExpressionSyntax initializer && StackAllocationReduction.IsCandidate(initializer))
+                { stackAllocations.Add(initializer); }
             }
             bool hasDefaults = defaults.Count is 1 or 2;
-            if (callers.Count == 0 && !hasDefaults && delegates.Count != 1 || await document.GetSemanticModelAsync() is not { } model ||
+            if (callers.Count == 0 && !hasDefaults && delegates.Count != 1 && stackAllocations.Count != 1 || await document.GetSemanticModelAsync() is not { } model ||
                 !model.Compilation.SyntaxTrees.Take(2).SequenceEqual(new[] { model.SyntaxTree }))
             { return await Simplifier.ReduceAsync(document); }
-            bool additionalAnnotations = (callers.Count == 2 || hasDefaults || delegates.Count == 1) &&
+            bool additionalAnnotations = (callers.Count == 2 || hasDefaults || delegates.Count == 1 || stackAllocations.Count == 1) &&
                 root.GetAnnotatedNodesAndTokens(Simplifier.Annotation).Any(item => !ReferenceEquals(item.AsNode(), root));
             if (callers.Count == 2 && (callers[0].FullSpan.OverlapsWith(callers[1].FullSpan) || additionalAnnotations))
             { return await Simplifier.ReduceAsync(document); }
@@ -79,6 +82,11 @@ namespace Microsoft.TypeSpec.Generator
             {
                 sites.Add(delegates[0], new(new SyntaxAnnotation(), (node, finalModel) => node is InvocationExpressionSyntax finalCall &&
                     DirectDelegateTargetReduction.TryBind(finalCall, finalModel, out var finalIdentity) && delegateIdentity == finalIdentity));
+            }
+            if (!additionalAnnotations && stackAllocations.Count == 1 && StackAllocationReduction.TryBind(stackAllocations[0], model, out var stackIdentity))
+            {
+                sites.Add(stackAllocations[0], new(new SyntaxAnnotation(), (node, finalModel) => node is ParenthesizedExpressionSyntax finalInitializer &&
+                    StackAllocationReduction.TryBind(finalInitializer, finalModel, out var finalIdentity) && stackIdentity == finalIdentity));
             }
             if (sites.Count == 0) { return await Simplifier.ReduceAsync(document); }
 

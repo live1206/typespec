@@ -139,15 +139,23 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
                 string final = AssertStackAllocationBindingAndRuntime(actual.Final);
                 string nativeFinal = AssertStackAllocationBindingAndRuntime(native.Final);
-                // The inherited final simplifier removes the pair from both
-                // outputs, independently of native prepared selection.
-                Assert.That(nativeFinal, Is.EqualTo("stackalloc byte[8]"));
-                Assert.That(final, Is.EqualTo(nativeFinal));
+                Assert.That(AssertStackAllocationBindingAndRuntime(actual.Selected, "UnmatchedStack", size: 4), Is.EqualTo("(stackalloc byte[4])"));
+                Assert.That(actual.Selected.Content, Does.Contain("Unrelated() => (42);"));
+                foreach (var output in new[] { actual.Final, native.Final })
+                {
+                    Assert.That(AssertStackAllocationBindingAndRuntime(output, "UnmatchedStack", size: 4), Is.EqualTo("stackalloc byte[4]"));
+                    Assert.That(output.Content, Does.Contain("Unrelated() => 42;"));
+                }
+                Assert.Multiple(() =>
+                {
+                    Assert.That(nativeFinal, Is.EqualTo(retained));
+                    Assert.That(final, Is.EqualTo(retained));
+                });
             }
             finally { directory.Delete(recursive: true); }
         }
 
-        private static string AssertStackAllocationBindingAndRuntime(CodeFile file)
+        private static string AssertStackAllocationBindingAndRuntime(CodeFile file, string entryName = "M", int size = 8)
         {
             var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
             var compilation = CSharpCompilation.Create("StackAllocationWitness", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
@@ -155,7 +163,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Assert.That(compilation.Options.AllowUnsafe, Is.False);
             Assert.That(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), Is.Empty);
             var model = compilation.GetSemanticModel(tree);
-            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single();
+            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == entryName);
             var declaration = (LocalDeclarationStatementSyntax)method.Body!.Statements[0];
             var variable = declaration.Declaration.Variables.Single();
             var initializer = variable.Initializer!.Value;
@@ -164,7 +172,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             var rank = array.RankSpecifiers.Single();
             Assert.That(allocation.StackAllocKeyword.IsMissing || rank.OpenBracketToken.IsMissing || rank.CloseBracketToken.IsMissing, Is.False);
             Assert.That(model.GetTypeInfo(array.ElementType).Type?.SpecialType, Is.EqualTo(SpecialType.System_Byte));
-            Assert.That(model.GetConstantValue(rank.Sizes.Single()).Value, Is.EqualTo(8));
+            Assert.That(model.GetConstantValue(rank.Sizes.Single()).Value, Is.EqualTo(size));
             var local = (ILocalSymbol)model.GetDeclaredSymbol(variable)!;
             var span = (INamedTypeSymbol)local.Type;
             var coreSpan = compilation.GetSpecialType(SpecialType.System_Object).ContainingAssembly.GetTypeByMetadataName("System.Span`1");
@@ -172,12 +180,14 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Assert.That(SymbolEqualityComparer.Default.Equals(span.OriginalDefinition, coreSpan), Is.True);
             Assert.That(span.TypeArguments.Single().SpecialType, Is.EqualTo(SpecialType.System_Byte));
             Assert.That(SymbolEqualityComparer.Default.Equals(model.GetTypeInfo(initializer).ConvertedType, local.Type), Is.True);
+            Assert.That(model.GetConversion(initializer).IsIdentity, Is.True);
+            Assert.That(model.GetConversion(allocation).IsIdentity, Is.True);
             var length = (MemberAccessExpressionSyntax)((ReturnStatementSyntax)method.Body.Statements[1]).Expression!;
             var property = ((IPropertyReferenceOperation)model.GetOperation(length)!).Property;
             Assert.That(property.Name, Is.EqualTo("Length"));
             Assert.That(SymbolEqualityComparer.Default.Equals(property.ContainingType, span), Is.True);
             Assert.That(SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(length.Expression).Symbol, local), Is.True);
-            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [Array.Empty<object?>()]).Single(), Is.EqualTo(8));
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", entryName, [Array.Empty<object?>()]).Single(), Is.EqualTo(size));
             return initializer.ToString();
         }
 
@@ -593,6 +603,43 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             finally { directory.Delete(recursive: true); }
         }
 
+        [TestCase("nested-cae-defaults-delegate-stackalloc", true)]
+        [TestCase("nested-cae-defaults-delegate-stackalloc-over-cap", false)]
+        public async Task StackAllocationRetentionComposesWithExistingFinalGuards(string mode, bool protectAllocation)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-stackalloc-composition-");
+            try
+            {
+                var actual = await WriteCompilerOutput(directory.FullName, mode, enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, mode, enabled: false);
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                Assert.That(AssertStackAllocationBindingAndRuntime(actual.Selected, "Allocate"), Is.EqualTo("(stackalloc byte[8])"));
+                if (!protectAllocation)
+                {
+                    Assert.That(AssertStackAllocationBindingAndRuntime(actual.Selected, "AllocateAgain"), Is.EqualTo("(stackalloc byte[8])"));
+                }
+                string selectedCapture = AssertActualBinaryCapture(actual.Selected, explicitText: false);
+                Assert.That(selectedCapture, Does.Contain("return ((x + y));"));
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                foreach (var output in new[] { actual.Final, native.Final })
+                {
+                    Assert.That(AssertStackAllocationBindingAndRuntime(output, "Allocate"), Is.EqualTo(protectAllocation ? "(stackalloc byte[8])" : "stackalloc byte[8]"));
+                    if (!protectAllocation)
+                    {
+                        Assert.That(AssertStackAllocationBindingAndRuntime(output, "AllocateAgain"), Is.EqualTo("stackalloc byte[8]"));
+                    }
+                    Assert.That(AssertGroupedDelegateWitness(output, "InvokeFormal"), Is.EqualTo("((f))(1)"));
+                    Assert.That(AssertActualBinaryCapture(output, explicitText: false), Is.EqualTo(selectedCapture));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-literal", "LiteralDefault"), Is.EqualTo("value = (1)"));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-descendant", "DescendantDefault"), Is.EqualTo("value = (1 + (2))"));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-unmatched", "UnmatchedDefault"), Is.EqualTo("value = 2"));
+                    Assert.That(output.Content, Does.Contain("Unrelated() => 42;"));
+                }
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
         private static string AssertGroupedDelegateWitness(CodeFile file, string entryName)
         {
             var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
@@ -677,7 +724,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     MethodProvider[] methods = [new(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(object), null, [x, y]), call, this),
                         new(new MethodSignature("Capture", null, MethodSignatureModifiers.Private, typeof(object), null, [captureValue, text]), (VariableExpression)text, this),
                         new(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
-                    if (mode is "nested-cae-defaults" or "nested-cae-defaults-over-cap" or "nested-cae-defaults-delegate" or "nested-cae-defaults-delegates-over-cap")
+                    if (mode.StartsWith("nested-cae-defaults", StringComparison.Ordinal))
                     {
                         MethodProvider[] composed = [.. methods,
                             BuildOptional("LiteralDefault", new ParenthesizedExpression(Literal(1))),
@@ -688,6 +735,8 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                             "nested-cae-defaults-over-cap" => [.. composed, BuildOptional("ThirdExactDefault", new ParenthesizedExpression(Literal(1)))],
                             "nested-cae-defaults-delegate" => [.. composed, BuildDelegate("InvokeFormal")],
                             "nested-cae-defaults-delegates-over-cap" => [.. composed, BuildDelegate("InvokeFormal"), BuildDelegate("OtherFormal")],
+                            "nested-cae-defaults-delegate-stackalloc" => [.. composed, BuildDelegate("InvokeFormal"), BuildStackAllocation("Allocate", 8)],
+                            "nested-cae-defaults-delegate-stackalloc-over-cap" => [.. composed, BuildDelegate("InvokeFormal"), BuildStackAllocation("Allocate", 8), BuildStackAllocation("AllocateAgain", 8)],
                             _ => composed
                         };
                     }
@@ -736,11 +785,8 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 }
                 if (mode == "stackalloc")
                 {
-                    var declaration = new DeclarationExpression(typeof(Span<byte>), "value", out var local);
-                    var array = new NewArrayExpression(typeof(byte), Size: Literal(8), IsStackAlloc: true);
-                    var initialized = new AssignmentExpression(declaration, new ParenthesizedExpression(array)).Terminate();
-                    var body = new MethodBodyStatements([initialized, Return(new MemberExpression(local, "Length"))]);
-                    return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, []), body, this)];
+                    return [BuildStackAllocation("M", 8), BuildStackAllocation("UnmatchedStack", 4),
+                        new MethodProvider(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
                 }
                 if (mode == "conditional-access")
                 {
@@ -760,6 +806,15 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 ValueExpression defaultValue = mode == "optional-literal" ? new ParenthesizedExpression(Literal(1)) :
                     new BinaryOperatorExpression("+", Literal(1), new ParenthesizedExpression(Literal(2)));
                 return [BuildOptional("M", defaultValue), new MethodProvider(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
+            }
+
+            private MethodProvider BuildStackAllocation(string name, int size)
+            {
+                var declaration = new DeclarationExpression(typeof(Span<byte>), "value", out var local);
+                var array = new NewArrayExpression(typeof(byte), Size: Literal(size), IsStackAlloc: true);
+                var initialized = new AssignmentExpression(declaration, new ParenthesizedExpression(array)).Terminate();
+                var body = new MethodBodyStatements([initialized, Return(new MemberExpression(local, "Length"))]);
+                return new MethodProvider(new MethodSignature(name, null, MethodSignatureModifiers.Public, typeof(int), null, []), body, this);
             }
 
             private MethodProvider BuildDelegate(string name)

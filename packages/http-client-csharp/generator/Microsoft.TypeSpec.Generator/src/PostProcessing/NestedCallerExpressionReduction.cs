@@ -2,69 +2,19 @@
 // Licensed under the MIT License.
 
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
-using Microsoft.CodeAnalysis.Simplification;
 
 namespace Microsoft.TypeSpec.Generator
 {
-    // This profile protects up to two structured nested binary caller expressions in
-    // a closed generated document. It is not a general CAE or formatter policy.
+    // Exact shape and binding for the nested binary caller-expression profile.
+    // This is not a general CAE or formatter policy.
     internal static class NestedCallerExpressionReduction
     {
-        internal static async Task<Document> ReduceAsync(Document document)
-        {
-            if (document.Project.DocumentIds.Count != 1 || await document.GetSyntaxRootAsync() is not { } root ||
-                !root.HasAnnotation(Simplifier.Annotation))
-            { return await Simplifier.ReduceAsync(document); }
-
-            var candidates = root.DescendantNodes().OfType<InvocationExpressionSyntax>()
-                .Where(call => TryGetShape(call, out _, out _, out _)).Take(3).ToArray();
-            if (candidates.Length is 0 or > 2 || await document.GetSemanticModelAsync() is not { } model ||
-                !model.Compilation.SyntaxTrees.Take(2).SequenceEqual(new[] { model.SyntaxTree }))
-            { return await Simplifier.ReduceAsync(document); }
-            if (candidates.Length == 2 && (candidates[0].FullSpan.OverlapsWith(candidates[1].FullSpan) ||
-                root.GetAnnotatedNodesAndTokens(Simplifier.Annotation).Any(item => !ReferenceEquals(item.AsNode(), root))))
-            { return await Simplifier.ReduceAsync(document); }
-
-            var sites = new Dictionary<SyntaxNode, CaptureSite>(ReferenceEqualityComparer.Instance);
-            var protectedAncestors = new HashSet<SyntaxNode>(ReferenceEqualityComparer.Instance);
-            foreach (var call in candidates)
-            {
-                // Do not filter an unaudited shape into the one-site profile.
-                if (!TryBind(call, model, out string? entry, out string? target, out string? captured) ||
-                    candidates.Length == 2 && entry is null)
-                { return await Simplifier.ReduceAsync(document); }
-                sites.Add(call, new(new SyntaxAnnotation(), entry, target, captured));
-                foreach (var ancestor in call.AncestorsAndSelf()) { protectedAncestors.Add(ancestor); }
-            }
-
-            // The complement is shared: a sibling of one site can contain the
-            // other. Annotate only roots outside the union of protected paths.
-            var disjoint = sites.Keys.Concat(protectedAncestors.Where(node => !sites.ContainsKey(node))
-                .SelectMany(node => node.ChildNodes().Where(child => !protectedAncestors.Contains(child))));
-            var partitioned = root.ReplaceNodes(disjoint, (original, node) => sites.TryGetValue(original, out var site)
-                ? node.WithAdditionalAnnotations(site.Tracking) : node.WithAdditionalAnnotations(Simplifier.Annotation))
-                .WithoutAnnotations(Simplifier.Annotation);
-            var reduced = await Simplifier.ReduceAsync(document.WithSyntaxRoot(partitioned));
-            if (await reduced.GetSyntaxRootAsync() is not { } finalRoot || await reduced.GetSemanticModelAsync() is not { } finalModel)
-            { throw new InvalidOperationException("Unable to preserve the implicit caller expression during generated document reduction."); }
-            foreach (var (original, site) in sites)
-            {
-                var tracked = finalRoot.GetAnnotatedNodes(site.Tracking).Take(2).ToArray();
-                if (tracked.Length != 1 || tracked[0] is not InvocationExpressionSyntax finalCall ||
-                    !string.Equals(original.ToFullString(), finalCall.ToFullString(), StringComparison.Ordinal) ||
-                    !TryBind(finalCall, finalModel, out string? finalEntry, out string? finalTarget, out string? finalCapture) ||
-                    site.Entry != finalEntry || site.Target != finalTarget || site.Captured != finalCapture)
-                { throw new InvalidOperationException("Unable to preserve the implicit caller expression during generated document reduction."); }
-            }
-            return reduced;
-        }
+        internal static bool IsCandidate(InvocationExpressionSyntax call) => TryGetShape(call, out _, out _, out _);
 
         private static bool TryGetShape(InvocationExpressionSyntax call, out MethodDeclarationSyntax entry,
             out ParenthesizedLambdaExpressionSyntax lambda, out BinaryExpressionSyntax addition)
@@ -87,7 +37,7 @@ namespace Microsoft.TypeSpec.Generator
             return true;
         }
 
-        private static bool TryBind(InvocationExpressionSyntax call, SemanticModel model, out string? entryId, out string? targetId, out string? captured)
+        internal static bool TryBind(InvocationExpressionSyntax call, SemanticModel model, out string? entryId, out string? targetId, out string? captured)
         {
             entryId = targetId = captured = null;
             if (!TryGetShape(call, out var method, out var lambda, out var addition) || call.ContainsDiagnostics ||
@@ -123,7 +73,5 @@ namespace Microsoft.TypeSpec.Generator
             targetId = target.GetDocumentationCommentId();
             return targetId is not null;
         }
-
-        private sealed record CaptureSite(SyntaxAnnotation Tracking, string? Entry, string? Target, string? Captured);
     }
 }

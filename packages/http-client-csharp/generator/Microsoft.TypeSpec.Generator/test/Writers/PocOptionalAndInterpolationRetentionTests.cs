@@ -47,14 +47,13 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 string actualFinal = AssertBindingAndRuntime(actual.Final, mode);
                 TestContext.WriteLine($"OPTIONAL-INTERPOLATION {mode}: independent native final `{nativeFinal}`, candidate final `{actualFinal}`");
                 Assert.That(actualFinal, Is.EqualTo(nativeFinal));
-                // The baseline final simplifier removes the optional-default
-                // pairs but leaves the interpolation's required pair.
-                Assert.That(nativeFinal, Is.EqualTo(mode switch
+                if (mode != "interpolation")
                 {
-                    "optional-literal" => "value = 1",
-                    "optional-descendant" => "value = 1 + 2",
-                    _ => expected
-                }));
+                    Assert.That(actual.Selected.Content, Does.Contain("Unrelated() => (42);"));
+                    Assert.That(actual.Final.Content, Does.Contain("Unrelated() => 42;"));
+                    Assert.That(native.Final.Content, Does.Contain("Unrelated() => 42;"));
+                }
+                Assert.That(nativeFinal, Is.EqualTo(expected), "The exact optional default and its descendants must survive final reduction");
             }
             finally { directory.Delete(recursive: true); }
         }
@@ -527,13 +526,50 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             return (selected, new CodeFile(File.ReadAllText(Path.Combine(isolated, selected.Name)), selected.Name));
         }
 
-        private static string AssertBindingAndRuntime(CodeFile file, string mode)
+        [TestCase("nested-cae-defaults", true)]
+        [TestCase("nested-cae-defaults-over-cap", false)]
+        public async Task OptionalDefaultReductionComposesWithExistingCallerCapture(string mode, bool protectDefaults)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-cae-default-composition-");
+            try
+            {
+                var actual = await WriteCompilerOutput(directory.FullName, mode, enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, mode, enabled: false);
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                Assert.That(AssertBindingAndRuntime(actual.Selected, "optional-literal", "LiteralDefault"), Is.EqualTo("value = (1)"));
+                Assert.That(AssertBindingAndRuntime(actual.Selected, "optional-descendant", "DescendantDefault"), Is.EqualTo("value = (1 + (2))"));
+                Assert.That(AssertBindingAndRuntime(actual.Selected, "optional-unmatched", "UnmatchedDefault"), Is.EqualTo("value = (2)"));
+                string selectedCapture = AssertActualBinaryCapture(actual.Selected, explicitText: false);
+                Assert.That(selectedCapture, Does.Contain("return ((x + y));"));
+                if (!protectDefaults)
+                {
+                    Assert.That(AssertBindingAndRuntime(actual.Selected, "optional-literal", "ThirdExactDefault"), Is.EqualTo("value = (1)"));
+                }
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                foreach (var output in new[] { actual.Final, native.Final })
+                {
+                    Assert.That(AssertActualBinaryCapture(output, explicitText: false), Is.EqualTo(selectedCapture));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-literal", "LiteralDefault"), Is.EqualTo(protectDefaults ? "value = (1)" : "value = 1"));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-descendant", "DescendantDefault"), Is.EqualTo(protectDefaults ? "value = (1 + (2))" : "value = 1 + 2"));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-unmatched", "UnmatchedDefault"), Is.EqualTo("value = 2"));
+                    Assert.That(output.Content, Does.Contain("Unrelated() => 42;"));
+                    if (!protectDefaults)
+                    {
+                        Assert.That(AssertBindingAndRuntime(output, "optional-literal", "ThirdExactDefault"), Is.EqualTo("value = 1"));
+                    }
+                }
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static string AssertBindingAndRuntime(CodeFile file, string mode, string entryName = "M")
         {
             var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
             var compilation = CSharpCompilation.Create("OptionalInterpolationWitness", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
             Assert.That(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), Is.Empty);
-            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single();
+            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == entryName);
             var model = compilation.GetSemanticModel(tree);
             var parameter = model.GetDeclaredSymbol(method)!.Parameters.Single();
             if (mode == "interpolation")
@@ -548,10 +584,10 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     Is.EqualTo(new object?[] { "value:1", "value:2" }));
                 return hole.ToString();
             }
-            int expected = mode == "optional-literal" ? 1 : 3;
+            int expected = mode == "optional-literal" ? 1 : mode == "optional-unmatched" ? 2 : 3;
             Assert.That(parameter.HasExplicitDefaultValue, Is.True);
             Assert.That(parameter.ExplicitDefaultValue, Is.EqualTo(expected));
-            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [Type.Missing], [17]), Is.EqualTo(new object?[] { expected, 17 }));
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", entryName, [Type.Missing], [17]), Is.EqualTo(new object?[] { expected, 17 }));
             var syntax = method.ParameterList.Parameters.Single();
             return syntax.Identifier.Text + " " + syntax.Default!.ToString();
         }
@@ -593,6 +629,15 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     MethodProvider[] methods = [new(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(object), null, [x, y]), call, this),
                         new(new MethodSignature("Capture", null, MethodSignatureModifiers.Private, typeof(object), null, [captureValue, text]), (VariableExpression)text, this),
                         new(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
+                    if (mode is "nested-cae-defaults" or "nested-cae-defaults-over-cap")
+                    {
+                        MethodProvider[] composed = [.. methods,
+                            BuildOptional("LiteralDefault", new ParenthesizedExpression(Literal(1))),
+                            BuildOptional("DescendantDefault", new BinaryOperatorExpression("+", Literal(1), new ParenthesizedExpression(Literal(2)))),
+                            BuildOptional("UnmatchedDefault", new ParenthesizedExpression(Literal(2)))];
+                        return mode == "nested-cae-defaults-over-cap"
+                            ? [.. composed, BuildOptional("ThirdExactDefault", new ParenthesizedExpression(Literal(1)))] : composed;
+                    }
                     if (mode is not ("nested-cae-two-sites" or "nested-cae-lookalike" or "nested-cae-three-sites")) { return methods; }
 
                     MethodProvider BuildEntry(string method, string leftName, string rightName, string target, bool manual = false)
@@ -661,8 +706,13 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 }
                 ValueExpression defaultValue = mode == "optional-literal" ? new ParenthesizedExpression(Literal(1)) :
                     new BinaryOperatorExpression("+", Literal(1), new ParenthesizedExpression(Literal(2)));
+                return [BuildOptional("M", defaultValue), new MethodProvider(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
+            }
+
+            private MethodProvider BuildOptional(string name, ValueExpression defaultValue)
+            {
                 var value = new ParameterProvider("value", $"", typeof(int), defaultValue: defaultValue);
-                return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, [value]), (VariableExpression)value, this)];
+                return new MethodProvider(new MethodSignature(name, null, MethodSignatureModifiers.Public, typeof(int), null, [value]), (VariableExpression)value, this);
             }
         }
     }

@@ -249,6 +249,13 @@ caller text and unrelated reductions remain unaffected. A third matching shape
 or a syntactic match that fails the binding checks keeps the inherited path;
 this is not general multiple-site or multiple-document protection.
 
+Checkpoint 35 protects the two exact optional `int` defaults `(1)` and
+`(1 + (2))` through final reduction. The bound defaults remain 1 and 3.
+The closed document uses one reduction partition for admitted defaults and
+caller-expression calls, then verifies each separately. Unmatched defaults
+still simplify; declining the optional profile does not revoke a supported
+caller guard. This is not a general optional-default formatting policy.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

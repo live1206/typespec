@@ -227,6 +227,13 @@ pair is eligible; the required `(long)` stays. The explicit local and inferred
 addition profiles remain separate. This does not cover the compact cast-trivia
 and later caller-line original.
 
+Checkpoint 26 authors the direct delegate target `((f))(1)`, keeping both
+expression pairs separate from the required argument list. Native selection
+retains both pairs with zero grouping choices. Both the enabled and the
+independent disabled pipeline still produce `f(1)` after legacy reduction,
+with the same binding and one invocation. Original final-spelling retention
+remains open; this checkpoint does not change legacy reduction.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

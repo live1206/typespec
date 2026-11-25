@@ -26,6 +26,7 @@ namespace Microsoft.TypeSpec.Generator
             var defaults = new List<EqualsValueClauseSyntax>();
             var delegates = new List<InvocationExpressionSyntax>();
             var stackAllocations = new List<ParenthesizedExpressionSyntax>();
+            var rightAdditions = new List<BinaryExpressionSyntax>();
             foreach (var node in root.DescendantNodes())
             {
                 if (node is InvocationExpressionSyntax call)
@@ -42,12 +43,15 @@ namespace Microsoft.TypeSpec.Generator
                 { defaults.Add(clause); }
                 else if (stackAllocations.Count < 2 && node is ParenthesizedExpressionSyntax initializer && StackAllocationReduction.IsCandidate(initializer))
                 { stackAllocations.Add(initializer); }
+                else if (rightAdditions.Count < 2 && node is BinaryExpressionSyntax addition && RightAdditionReduction.IsCandidate(addition))
+                { rightAdditions.Add(addition); }
             }
             bool hasDefaults = defaults.Count is 1 or 2;
-            if (callers.Count == 0 && !hasDefaults && delegates.Count != 1 && stackAllocations.Count != 1 || await document.GetSemanticModelAsync() is not { } model ||
+            if ((callers.Count == 0 && !hasDefaults && delegates.Count != 1 && stackAllocations.Count != 1 && rightAdditions.Count != 1) ||
+                await document.GetSemanticModelAsync() is not { } model ||
                 !model.Compilation.SyntaxTrees.Take(2).SequenceEqual(new[] { model.SyntaxTree }))
             { return await Simplifier.ReduceAsync(document); }
-            bool additionalAnnotations = (callers.Count == 2 || hasDefaults || delegates.Count == 1 || stackAllocations.Count == 1) &&
+            bool additionalAnnotations = (callers.Count == 2 || hasDefaults || delegates.Count == 1 || stackAllocations.Count == 1 || rightAdditions.Count == 1) &&
                 root.GetAnnotatedNodesAndTokens(Simplifier.Annotation).Any(item => !ReferenceEquals(item.AsNode(), root));
             if (callers.Count == 2 && (callers[0].FullSpan.OverlapsWith(callers[1].FullSpan) || additionalAnnotations))
             { return await Simplifier.ReduceAsync(document); }
@@ -87,6 +91,11 @@ namespace Microsoft.TypeSpec.Generator
             {
                 sites.Add(stackAllocations[0], new(new SyntaxAnnotation(), (node, finalModel) => node is ParenthesizedExpressionSyntax finalInitializer &&
                     StackAllocationReduction.TryBind(finalInitializer, finalModel, out var finalIdentity) && stackIdentity == finalIdentity));
+            }
+            if (!additionalAnnotations && rightAdditions.Count == 1 && RightAdditionReduction.TryBind(rightAdditions[0], model, out string? additionIdentity))
+            {
+                sites.Add(rightAdditions[0], new(new SyntaxAnnotation(), (node, finalModel) => node is BinaryExpressionSyntax finalAddition &&
+                    RightAdditionReduction.TryBind(finalAddition, finalModel, out string? finalIdentity) && additionIdentity == finalIdentity));
             }
             if (sites.Count == 0) { return await Simplifier.ReduceAsync(document); }
 

@@ -270,6 +270,13 @@ in the same closed document. Other sizes still follow ordinary reduction.
 This does not change allocation behavior or authorize general stackalloc
 formatting.
 
+Checkpoint 38 retains the original unchecked `x + (y + z)` through final
+reduction when both additions are built-in `int` operations on the three
+actual formals in declared order. Both physical final files preserve the
+selected operation tree. The one admitted site composes with the existing
+closed-document guards. This is not a general arithmetic policy; the checked
+and floating-point tests remain independent controls.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

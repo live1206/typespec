@@ -404,7 +404,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
                 Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
                 var selected = CSharpSyntaxTree.ParseText(actual.Selected.Content, path: actual.Selected.Name);
-                var expression = selected.GetRoot().DescendantNodes().OfType<ArrowExpressionClauseSyntax>().Single().Expression;
+                var expression = selected.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(method => method.Identifier.ValueText == "M").ExpressionBody!.Expression;
                 Assert.That(expression.ToString(), Is.EqualTo(retained));
                 var binary = (BinaryExpressionSyntax)expression;
                 var inner = (BinaryExpressionSyntax)((ParenthesizedExpressionSyntax)binary.Right).Expression;
@@ -433,11 +433,16 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
                 object?[][] finalArguments = [[10, 7, 3], [int.MinValue, 1, 1]];
                 Assert.That(ExecuteArithmetic(actual.Final, finalArguments), Is.EqualTo(ExecuteArithmetic(native.Final, finalArguments)));
-                // The inherited final simplifier reassociates the unchecked
-                // addition in both pipelines; subtraction stays right-grouped.
-                string finalSpelling = operation == "+" ? "x + y + z" : retained;
-                Assert.That(PreparedParenthesesTests.MethodExpression(native.Final.Content).ToString(), Is.EqualTo(finalSpelling));
-                Assert.That(PreparedParenthesesTests.MethodExpression(actual.Final.Content).ToString(), Is.EqualTo(finalSpelling));
+                Assert.That(actual.Selected.Content, Does.Contain("Unrelated() => (42);"));
+                Assert.That(native.Final.Content, Does.Contain("Unrelated() => 42;"));
+                Assert.That(actual.Final.Content, Does.Contain("Unrelated() => 42;"));
+                Assert.Multiple(() =>
+                {
+                    Assert.That(PreparedParenthesesTests.MethodExpression(native.Final.Content).ToString(), Is.EqualTo(retained));
+                    Assert.That(PreparedParenthesesTests.MethodExpression(actual.Final.Content).ToString(), Is.EqualTo(retained));
+                });
+                PreparedParenthesesTests.AssertOperations(actual.Selected.Content, actual.Final.Content);
+                PreparedParenthesesTests.AssertOperations(native.Selected.Content, native.Final.Content);
             }
             finally { directory.Delete(recursive: true); }
         }
@@ -484,11 +489,11 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             { return nameof(OverflowException); }
         }
 
-        private static object?[] ExecuteArithmetic(CodeFile file, object?[][] arguments, bool checkOverflow = false)
+        private static object?[] ExecuteArithmetic(CodeFile file, object?[][] arguments, bool checkOverflow = false, string entryName = "M")
         {
             var compilation = CSharpCompilation.Create("RightReassociationWitness", [CSharpSyntaxTree.ParseText(file.Content, path: file.Name)],
                 [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)], new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, checkOverflow: checkOverflow));
-            return PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", arguments);
+            return PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", entryName, arguments);
         }
 
         private static async Task<(CodeFile Selected, CodeFile Final)> WriteCompilerOutput(string directory, string mode, bool enabled, bool disableRoslynReduce = false)
@@ -640,6 +645,46 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             finally { directory.Delete(recursive: true); }
         }
 
+        [TestCase("nested-cae-defaults-delegate-stackalloc-addition")]
+        [TestCase("nested-cae-defaults-delegate-stackalloc-addition-reversed")]
+        [TestCase("nested-cae-defaults-delegate-stackalloc-addition-over-cap")]
+        public async Task RightAdditionRetentionComposesWithExistingFinalGuards(string mode)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-right-addition-composition-");
+            try
+            {
+                bool reversed = mode.EndsWith("reversed", StringComparison.Ordinal);
+                bool overCap = mode.EndsWith("over-cap", StringComparison.Ordinal);
+                var actual = await WriteCompilerOutput(directory.FullName, mode, enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, mode, enabled: false);
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                Assert.That(ArithmeticSpelling(actual.Selected, "AddRight"), Is.EqualTo(reversed ? "x + (z + y)" : "x + (y + z)"));
+                if (overCap) { Assert.That(ArithmeticSpelling(actual.Selected, "AddAgain"), Is.EqualTo("x + (y + z)")); }
+                string selectedCapture = AssertActualBinaryCapture(actual.Selected, explicitText: false);
+                Assert.That(selectedCapture, Does.Contain("return ((x + y));"));
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                foreach (var output in new[] { actual.Final, native.Final })
+                {
+                    Assert.That(ArithmeticSpelling(output, "AddRight"), Is.EqualTo(reversed ? "x + z + y" : overCap ? "x + y + z" : "x + (y + z)"));
+                    if (overCap) { Assert.That(ArithmeticSpelling(output, "AddAgain"), Is.EqualTo("x + y + z")); }
+                    Assert.That(ExecuteArithmetic(output, [[3, 5, 7]], entryName: "AddRight"), Is.EqualTo(new object?[] { 15 }));
+                    Assert.That(AssertStackAllocationBindingAndRuntime(output, "Allocate"), Is.EqualTo("(stackalloc byte[8])"));
+                    Assert.That(AssertGroupedDelegateWitness(output, "InvokeFormal"), Is.EqualTo("((f))(1)"));
+                    Assert.That(AssertActualBinaryCapture(output, explicitText: false), Is.EqualTo(selectedCapture));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-literal", "LiteralDefault"), Is.EqualTo("value = (1)"));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-descendant", "DescendantDefault"), Is.EqualTo("value = (1 + (2))"));
+                    Assert.That(AssertBindingAndRuntime(output, "optional-unmatched", "UnmatchedDefault"), Is.EqualTo("value = 2"));
+                    Assert.That(output.Content, Does.Contain("Unrelated() => 42;"));
+                }
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static string ArithmeticSpelling(CodeFile file, string entryName) => CSharpSyntaxTree.ParseText(file.Content, path: file.Name)
+            .GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(method => method.Identifier.ValueText == entryName)
+            .ExpressionBody!.Expression.ToString();
+
         private static string AssertGroupedDelegateWitness(CodeFile file, string entryName)
         {
             var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
@@ -737,6 +782,9 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                             "nested-cae-defaults-delegates-over-cap" => [.. composed, BuildDelegate("InvokeFormal"), BuildDelegate("OtherFormal")],
                             "nested-cae-defaults-delegate-stackalloc" => [.. composed, BuildDelegate("InvokeFormal"), BuildStackAllocation("Allocate", 8)],
                             "nested-cae-defaults-delegate-stackalloc-over-cap" => [.. composed, BuildDelegate("InvokeFormal"), BuildStackAllocation("Allocate", 8), BuildStackAllocation("AllocateAgain", 8)],
+                            "nested-cae-defaults-delegate-stackalloc-addition" => [.. composed, BuildDelegate("InvokeFormal"), BuildStackAllocation("Allocate", 8), BuildRightAddition("AddRight")],
+                            "nested-cae-defaults-delegate-stackalloc-addition-reversed" => [.. composed, BuildDelegate("InvokeFormal"), BuildStackAllocation("Allocate", 8), BuildRightAddition("AddRight", reversed: true)],
+                            "nested-cae-defaults-delegate-stackalloc-addition-over-cap" => [.. composed, BuildDelegate("InvokeFormal"), BuildStackAllocation("Allocate", 8), BuildRightAddition("AddRight"), BuildRightAddition("AddAgain")],
                             _ => composed
                         };
                     }
@@ -770,7 +818,8 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     var z = new ParameterProvider("z", $"", typeof(int));
                     string operation = mode == "right-addition" ? "+" : "-";
                     var body = new BinaryOperatorExpression(operation, x, new BinaryOperatorExpression(operation, y, z), AddParentheses: false);
-                    return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, [x, y, z]), body, this)];
+                    return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, [x, y, z]), body, this),
+                        new MethodProvider(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
                 }
                 if (mode is "floating-right-addition" or "checked-right-addition")
                 {
@@ -806,6 +855,15 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 ValueExpression defaultValue = mode == "optional-literal" ? new ParenthesizedExpression(Literal(1)) :
                     new BinaryOperatorExpression("+", Literal(1), new ParenthesizedExpression(Literal(2)));
                 return [BuildOptional("M", defaultValue), new MethodProvider(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
+            }
+
+            private MethodProvider BuildRightAddition(string name, bool reversed = false)
+            {
+                var x = new ParameterProvider("x", $"", typeof(int));
+                var y = new ParameterProvider("y", $"", typeof(int));
+                var z = new ParameterProvider("z", $"", typeof(int));
+                var addition = new BinaryOperatorExpression("+", x, new BinaryOperatorExpression("+", reversed ? z : y, reversed ? y : z), AddParentheses: false);
+                return new MethodProvider(new MethodSignature(name, null, MethodSignatureModifiers.Public, typeof(int), null, [x, y, z]), addition, this);
             }
 
             private MethodProvider BuildStackAllocation(string name, int size)

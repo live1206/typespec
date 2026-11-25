@@ -210,6 +210,16 @@ qualified type spelling is unchanged; neither absent raw name metadata nor
 an empty native name inventory grants type shortening. Actual competing
 source or generated owners retain native grouping.
 
+Checkpoint 24 authors `var value = ((x + y));` and `return value;` without
+changing the explicit-type local writer. Only the exact native initializer in
+a closed compiler-build profile can select `var value = x + y;`: one unsplit
+owner, no captured source trees, a single canonical core-library reference,
+no lookup competitors, and no written imports. Each optional pair is a
+separate occurrence. A source type or alias named `var` can change binding;
+the stored local type alone is not evidence. This does not cover ordinary
+inferred locals in unrestricted compilations or the compact cast-trivia
+caller-line statement.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

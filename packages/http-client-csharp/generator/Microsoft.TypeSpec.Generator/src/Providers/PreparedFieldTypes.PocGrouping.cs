@@ -45,6 +45,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 var choices = new List<PreparedSourceOccurrence>();
                 Func<bool>? argumentCurrent = null;
                 (SourceOccurrenceId Member, SourceOccurrenceId Receiver)? qualifiedMember = null;
+                bool requiresNoImports = false;
                 if (binaryCatalogKnown)
                 {
                     CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
@@ -59,6 +60,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     CaptureWrappedIfCondition(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureStringCoalescing(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     CaptureUsedLocalInitializers(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    requiresNoImports = CaptureInferredLocalGrouping(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     if (files.Length == 1)
                     {
                         argumentCurrent = CaptureOrdinaryArguments(file, nativeMethods, nativeSignatures, nativeNodes, choices) ??
@@ -105,6 +107,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 {
                     file.UsesNativeWrittenIdentity = true;
                     _nativePocFiles.Add(file);
+                    if (requiresNoImports) { _nativePocFileRequiringNoImports = file; }
                 }
                 foreach (var choice in choices)
                 { _pocGrouping.Add(choice.Id, (file, choice, envelope, finalData)); }
@@ -1026,7 +1029,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
                 CastExpression or MethodBodyStatements or IfStatement or LiteralExpression or AssignmentExpression or DeclarationExpression or
                     InvokeMethodExpression or AttributeStatement or ScopedApi or TernaryConditionalExpression or CheckedExpression or FuncExpression or NewInstanceExpression or TypedDefaultExpression or ParenthesizedExpression or
-                    AuthoredBinaryTriviaExpression or AuthoredBinaryLineExpression or WhereExpression =>
+                    AuthoredBinaryTriviaExpression or AuthoredBinaryLineExpression or InferredLocalDeclarationExpression or WhereExpression =>
                     nativeNodes.Contains(node.Id),
                 KeywordExpression keyword => keyword.GetType() == typeof(KeywordExpression) &&
                     (keyword.Keyword is "return" or "default" || (keyword.Keyword is "null" or "checked" or "struct") && nativeNodes.Contains(node.Id)),

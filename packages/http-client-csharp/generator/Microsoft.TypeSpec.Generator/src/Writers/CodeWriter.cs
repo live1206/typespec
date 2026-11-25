@@ -1094,6 +1094,7 @@ namespace Microsoft.TypeSpec.Generator
             {
                 var generator = CodeModelGenerator.Instance;
                 _sourcePreparation?.ObserveNativePocHeader(generator);
+                if (_usingNamespaces.Count != 0) { _sourcePreparation?.ObserveNativePocImports(_sourceFile); }
                 string licenseString = generator.LicenseHeader;
                 if (!string.IsNullOrEmpty(licenseString))
                 {

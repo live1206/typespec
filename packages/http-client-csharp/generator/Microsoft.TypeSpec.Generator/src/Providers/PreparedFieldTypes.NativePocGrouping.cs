@@ -16,6 +16,12 @@ namespace Microsoft.TypeSpec.Generator.Providers
         private readonly Dictionary<TypeProvider, CodeFile> _nativeWrittenFiles = new(ReferenceEqualityComparer.Instance);
         private bool _nativePocInvalid;
         private string? _nativePocOutputDirectory;
+        private PreparedSourceFile? _nativePocFileRequiringNoImports;
+
+        internal void ObserveNativePocImports(PreparedSourceFile? file)
+        {
+            if (file is not null && ReferenceEquals(file, _nativePocFileRequiringNoImports)) { file.Invalidate(); }
+        }
         private bool HasNativePocPlans => _nativePocFiles.Count != 0;
         private bool HasLegacyPocPlans => _pocGrouping.Values.Any(choice => !choice.File.UsesNativeWrittenIdentity);
         private bool HasLegacyPocUses => _pocUsedByFile.Values.Any(use => !use.File.UsesNativeWrittenIdentity);
@@ -61,7 +67,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
         }
 
         private bool NativePocDataIsCurrent(PreparedSourceFile file) =>
-            _nativePocFiles.Contains(file) && CachedPocFormals(file) && NativePocContextDataIsCurrent() && file.IsCurrent();
+            _nativePocFiles.Contains(file) && CachedPocFormals(file) && NativePocContextDataIsCurrent() && file.IsCurrent() &&
+            (!ReferenceEquals(file, _nativePocFileRequiringNoImports) || InferredLocalOwnerIsUnsplit(file));
 
         private bool ObserveNativePocSource(PreparedSourceFile file)
         {

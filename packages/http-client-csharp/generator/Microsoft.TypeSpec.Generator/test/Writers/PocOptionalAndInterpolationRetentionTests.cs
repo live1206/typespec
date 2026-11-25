@@ -57,6 +57,68 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             finally { directory.Delete(recursive: true); }
         }
 
+        [Test]
+        public async Task OriginalConditionalAccessPairPreservesUngatedLengthAccess()
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-conditional-access-");
+            try
+            {
+                var actual = await WriteCompilerOutput(directory.FullName, "conditional-access", enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, "conditional-access", enabled: false);
+                Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                Assert.That(AssertConditionalAccessBindingAndRuntime(actual.Selected), Is.EqualTo("(value?.Trim()).Length"));
+                Assert.That(AssertConditionalAccessBindingAndRuntime(native.Selected), Is.EqualTo("(value?.Trim()).Length"));
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                string final = AssertConditionalAccessBindingAndRuntime(actual.Final);
+                string nativeFinal = AssertConditionalAccessBindingAndRuntime(native.Final);
+                TestContext.WriteLine($"CONDITIONAL-ACCESS independent native final `{nativeFinal}`, candidate final `{final}`");
+                Assert.That(nativeFinal, Is.EqualTo("(value?.Trim()).Length"));
+                Assert.That(final, Is.EqualTo(nativeFinal));
+
+                const string forced = "namespace Sample; public class Clock { public int M(string value) => value?.Trim().Length; }";
+                var tree = CSharpSyntaxTree.ParseText(forced, path: "Forced.cs");
+                var compilation = ConditionalAccessCompilation(tree);
+                var access = tree.GetRoot().DescendantNodes().OfType<ConditionalAccessExpressionSyntax>().Single();
+                var conditionalType = (INamedTypeSymbol)compilation.GetSemanticModel(tree).GetTypeInfo(access).Type!;
+                Assert.That(conditionalType.OriginalDefinition.SpecialType, Is.EqualTo(SpecialType.System_Nullable_T));
+                Assert.That(conditionalType.TypeArguments.Single().SpecialType, Is.EqualTo(SpecialType.System_Int32));
+                Assert.That(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+                    .Select(diagnostic => diagnostic.Id), Is.EqualTo(new[] { "CS0266" }));
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static CSharpCompilation ConditionalAccessCompilation(SyntaxTree tree) => CSharpCompilation.Create("ConditionalAccessWitness", [tree],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)], new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        private static string AssertConditionalAccessBindingAndRuntime(CodeFile file)
+        {
+            var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
+            var compilation = ConditionalAccessCompilation(tree);
+            var model = compilation.GetSemanticModel(tree);
+            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single();
+            var length = (MemberAccessExpressionSyntax)method.ExpressionBody!.Expression;
+            var grouped = (ParenthesizedExpressionSyntax)length.Expression;
+            var access = (ConditionalAccessExpressionSyntax)grouped.Expression;
+            var call = (InvocationExpressionSyntax)access.WhenNotNull;
+            var property = ((IPropertyReferenceOperation)model.GetOperation(length)!).Property;
+            var invocation = ((IInvocationOperation)model.GetOperation(call)!).TargetMethod;
+            Assert.That(property.Name, Is.EqualTo("Length"));
+            Assert.That(property.ContainingType.SpecialType, Is.EqualTo(SpecialType.System_String));
+            Assert.That(property.Type.SpecialType, Is.EqualTo(SpecialType.System_Int32));
+            Assert.That(invocation.Name, Is.EqualTo("Trim"));
+            Assert.That(invocation.Parameters, Is.Empty);
+            Assert.That(invocation.ContainingType.SpecialType, Is.EqualTo(SpecialType.System_String));
+            Assert.That(SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(access.Expression).Symbol,
+                model.GetDeclaredSymbol(method)!.Parameters.Single()), Is.True);
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [["  abc  "]]), Is.EqualTo(new object?[] { 3 }));
+            var failure = Assert.Throws<System.Reflection.TargetInvocationException>(() => PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [[null]]));
+            Assert.That(failure!.InnerException, Is.TypeOf<NullReferenceException>());
+            return length.ToString();
+        }
+
         private static async Task<(CodeFile Selected, CodeFile Final)> WriteCompilerOutput(string directory, string mode, bool enabled)
         {
             string prefix = enabled ? "prepared" : "native";
@@ -69,16 +131,20 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             var owner = new Clock(mode);
             CodeModelGenerator.Instance = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
             CodeFile? selected = null;
+            int preparationObservations = 0;
+            int rawObservations = 0;
             var pipeline = new CSharpGen
             {
                 PocPreparationObserved = prepared =>
                 {
+                    preparationObservations++;
                     Assert.That(prepared?.PocGroupingCount ?? 0, Is.Zero);
                     if (enabled) { Assert.That(prepared, Is.Not.Null); }
                     else { Assert.That(prepared, Is.Null); }
                 },
                 PocRawFileObserved = (prepared, provider, file) =>
                 {
+                    rawObservations++;
                     Assert.That(provider, Is.SameAs(owner));
                     Assert.That(prepared?.PocGroupingUses ?? 0, Is.Zero);
                     Assert.That(file.PreparedGroupingCount, Is.Zero);
@@ -90,6 +156,8 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             };
             var result = await pipeline.ExecuteForCompilerBuildAsync(isolated, new Session(original));
             Assert.That(result.UsedCapturedResidualInputs, Is.EqualTo(enabled));
+            Assert.That(preparationObservations, Is.EqualTo(1));
+            Assert.That(rawObservations, Is.EqualTo(1));
             Assert.That(selected, Is.Not.Null);
             Assert.That(selected!.Name, Is.EqualTo("Clock.cs"));
             return (selected, new CodeFile(File.ReadAllText(Path.Combine(isolated, selected.Name)), selected.Name));
@@ -148,6 +216,14 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Public | TypeSignatureModifiers.Class;
             protected internal override MethodProvider[] BuildMethods()
             {
+                if (mode == "conditional-access")
+                {
+                    var receiver = new ParameterProvider("value", $"", typeof(string));
+                    var target = new NullConditionalExpression((VariableExpression)receiver);
+                    var trim = new InvokeMethodExpression(target, "Trim", Array.Empty<ValueExpression>());
+                    var length = new MemberExpression(new ParenthesizedExpression(trim), "Length");
+                    return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, [receiver]), length, this)];
+                }
                 if (mode == "interpolation")
                 {
                     var flag = new ParameterProvider("flag", $"", typeof(bool));

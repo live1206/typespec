@@ -273,7 +273,73 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             finally { directory.Delete(recursive: true); }
         }
 
-        private static string AssertActualBinaryCapture(CodeFile file, bool explicitText, bool hasCaptureAttribute = true)
+        [Test]
+        public async Task DownstreamReductionPreservesBothImplicitCapturesInOneDocument()
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-two-nested-binary-cae-");
+            try
+            {
+                var actual = await WriteCompilerOutput(directory.FullName, "nested-cae-two-sites", enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, "nested-cae-two-sites", enabled: false);
+                Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                var methods = new[] { "M", "Second" };
+                string[] expected = ["() => \n        {\n            return ((x + y));\n        }", "() => \n        {\n            return ((left + right));\n        }"];
+                Assert.That(methods.Select(method => AssertActualBinaryCapture(actual.Selected, explicitText: false, entryName: method)).ToArray(), Is.EqualTo(expected));
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                Assert.That(native.Final.Content, Does.Contain("Unrelated() => 42;"));
+                Assert.That(actual.Final.Content, Does.Contain("Unrelated() => 42;"));
+                var nativeCaptures = methods.Select(method => AssertActualBinaryCapture(native.Final, explicitText: false, entryName: method)).ToArray();
+                var actualCaptures = methods.Select(method => AssertActualBinaryCapture(actual.Final, explicitText: false, entryName: method)).ToArray();
+                Assert.That(actualCaptures, Is.EqualTo(nativeCaptures));
+                Assert.That(actualCaptures, Is.EqualTo(expected), "Both actual implicit caller-expression values must survive downstream reduction");
+                Assert.That(AssertActualBinaryCapture(actual.Selected, explicitText: true, entryName: "Manual"), Is.EqualTo("manual"));
+                Assert.That(actual.Selected.Content, Does.Contain("return ((first + last));"));
+                foreach (var final in new[] { actual.Final, native.Final })
+                {
+                    Assert.That(final.Content, Does.Contain("return first + last;").And.Not.Contain("return ((first + last));"));
+                    Assert.That(AssertActualBinaryCapture(final, explicitText: true, entryName: "Manual"), Is.EqualTo("manual"));
+                }
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        [TestCase("nested-cae-lookalike")]
+        [TestCase("nested-cae-three-sites")]
+        public async Task UnsupportedCallerExpressionCombinationsKeepOrdinaryReduction(string mode)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-cae-unsupported-combination-");
+            try
+            {
+                var actual = await WriteCompilerOutput(directory.FullName, mode, enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, mode, enabled: false);
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                Assert.That(actual.Final.Content, Is.EqualTo(native.Final.Content));
+                const string before = "return ((x + y));";
+                const string after = "return x + y;";
+                string selected = AssertActualBinaryCapture(actual.Selected, explicitText: false);
+                Assert.That(selected, Does.Contain(before));
+                foreach (var final in new[] { actual.Final, native.Final })
+                {
+                    Assert.That(AssertActualBinaryCapture(final, explicitText: false), Is.EqualTo(selected.Replace(before, after, StringComparison.Ordinal)));
+                    Assert.That(final.Content, Does.Contain("Unrelated() => 42;"));
+                    if (mode == "nested-cae-lookalike")
+                    {
+                        Assert.That(AssertActualBinaryCapture(final, explicitText: false, hasCaptureAttribute: false, entryName: "Second", captureName: "Plain"), Is.Empty);
+                        Assert.That(final.Content, Does.Contain("return left + right;"));
+                    }
+                    else
+                    {
+                        Assert.That(AssertActualBinaryCapture(final, explicitText: false, entryName: "Second"), Does.Contain("return left + right;"));
+                        Assert.That(AssertActualBinaryCapture(final, explicitText: false, entryName: "Third"), Does.Contain("return first + last;"));
+                    }
+                }
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static string AssertActualBinaryCapture(CodeFile file, bool explicitText, bool hasCaptureAttribute = true, string entryName = "M", string captureName = "Capture")
         {
             var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
             var compilation = CSharpCompilation.Create("NestedBinaryCaptureWitness", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
@@ -281,8 +347,8 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Assert.That(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), Is.Empty);
             var syntax = tree.GetRoot();
             var model = compilation.GetSemanticModel(tree);
-            var capture = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == "Capture");
-            var entry = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == "M");
+            var capture = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == captureName);
+            var entry = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == entryName);
             var call = (InvocationExpressionSyntax)entry.ExpressionBody!.Expression;
             var target = model.GetDeclaredSymbol(capture)!;
             var invocation = (IInvocationOperation)model.GetOperation(call)!;
@@ -310,7 +376,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             Assert.That(text.Value.ConstantValue.HasValue, Is.True);
             var observed = (string)text.Value.ConstantValue.Value!;
             Assert.That(observed, Is.EqualTo(explicitText ? "manual" : hasCaptureAttribute ? lambda.ToString() : ""));
-            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [3, 4], [int.MinValue, -1]),
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", entryName, [3, 4], [int.MinValue, -1]),
                 Is.EqualTo(new object?[] { observed, observed }));
             return observed;
         }
@@ -524,9 +590,31 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                     var captureValue = new ParameterProvider("value", $"", typeof(Func<int>));
                     var text = new ParameterProvider("text", $"", typeof(string), defaultValue: Literal(""),
                         attributes: mode == "nested-cae-no-attribute" ? [] : new AttributeStatement[] { new(typeof(CallerArgumentExpressionAttribute), Literal("value")) });
-                    return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(object), null, [x, y]), call, this),
-                        new MethodProvider(new MethodSignature("Capture", null, MethodSignatureModifiers.Private, typeof(object), null, [captureValue, text]), (VariableExpression)text, this),
-                        new MethodProvider(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
+                    MethodProvider[] methods = [new(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(object), null, [x, y]), call, this),
+                        new(new MethodSignature("Capture", null, MethodSignatureModifiers.Private, typeof(object), null, [captureValue, text]), (VariableExpression)text, this),
+                        new(new MethodSignature("Unrelated", null, MethodSignatureModifiers.Public, typeof(int), null, []), new ParenthesizedExpression(Literal(42)), this)];
+                    if (mode is not ("nested-cae-two-sites" or "nested-cae-lookalike" or "nested-cae-three-sites")) { return methods; }
+
+                    MethodProvider BuildEntry(string method, string leftName, string rightName, string target, bool manual = false)
+                    {
+                        var left = new ParameterProvider(leftName, $"", typeof(int));
+                        var right = new ParameterProvider(rightName, $"", typeof(int));
+                        var nested = new FuncExpression(Array.Empty<CodeWriterDeclaration?>(),
+                            Return(new ParenthesizedExpression(new BinaryOperatorExpression("+", left, right))));
+                        var invocation = new InvokeMethodExpression(null, target, manual ? [nested, Literal("manual")] : new ValueExpression[] { nested });
+                        return new MethodProvider(new MethodSignature(method, null, MethodSignatureModifiers.Public, typeof(object), null, [left, right]), invocation, this);
+                    }
+                    if (mode == "nested-cae-lookalike")
+                    {
+                        var plainValue = new ParameterProvider("value", $"", typeof(Func<int>));
+                        var plainText = new ParameterProvider("text", $"", typeof(string), defaultValue: Literal(""));
+                        var plain = new MethodProvider(new MethodSignature("Plain", null, MethodSignatureModifiers.Private, typeof(object), null, [plainValue, plainText]), (VariableExpression)plainText, this);
+                        return [.. methods, plain, BuildEntry("Second", "left", "right", "Plain")];
+                    }
+                    var second = BuildEntry("Second", "left", "right", "Capture");
+                    return mode == "nested-cae-three-sites"
+                        ? [.. methods, second, BuildEntry("Third", "first", "last", "Capture")]
+                        : [.. methods, second, BuildEntry("Manual", "first", "last", "Capture", manual: true)];
                 }
                 if (mode is "right-addition" or "right-subtraction")
                 {

@@ -242,6 +242,13 @@ reductions remain enabled. The explicit `"manual"` case and the real reduction
 switch retain their previous behavior. This is not a general caller-expression
 or final-trivia policy, and does not recreate the compact source lambda.
 
+Checkpoint 34 extends this downstream guard to two matching calls in the same
+closed document. Both calls must pass the existing binding checks, and their
+captured strings are verified separately after one reduction pass. Explicit
+caller text and unrelated reductions remain unaffected. A third matching shape
+or a syntactic match that fails the binding checks keeps the inherited path;
+this is not general multiple-site or multiple-document protection.
+
 ## Remaining accepted coverage
 
 - Left/right binary operands, nested grouping chains and outer-cast cases.

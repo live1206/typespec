@@ -15,6 +15,7 @@ using Microsoft.TypeSpec.Generator.Input;
 using Microsoft.TypeSpec.Generator.Primitives;
 using Microsoft.TypeSpec.Generator.Providers;
 using Microsoft.TypeSpec.Generator.SourceInput;
+using Microsoft.TypeSpec.Generator.Statements;
 using Microsoft.TypeSpec.Generator.Tests.TestHelpers;
 using NUnit.Framework;
 using static Microsoft.TypeSpec.Generator.Snippets.Snippet;
@@ -119,6 +120,67 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             return length.ToString();
         }
 
+        [Test]
+        public async Task OriginalStackAllocationRetainsItsInitializerPairAtNativeSelection()
+        {
+            const string retained = "(stackalloc byte[8])";
+            const string source = "namespace Sample { public class Clock { public int M() { System.Span<byte> value = (stackalloc byte[8]); return value.Length; } } }";
+            Assert.That(AssertStackAllocationBindingAndRuntime(new CodeFile(source, "Clock.cs")), Is.EqualTo(retained));
+            var directory = Directory.CreateTempSubdirectory("task05-stackalloc-retention-");
+            try
+            {
+                var actual = await WriteCompilerOutput(directory.FullName, "stackalloc", enabled: true);
+                var native = await WriteCompilerOutput(directory.FullName, "stackalloc", enabled: false);
+                Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                Assert.That(AssertStackAllocationBindingAndRuntime(actual.Selected), Is.EqualTo(retained));
+                Assert.That(AssertStackAllocationBindingAndRuntime(native.Selected), Is.EqualTo(retained));
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                string final = AssertStackAllocationBindingAndRuntime(actual.Final);
+                string nativeFinal = AssertStackAllocationBindingAndRuntime(native.Final);
+                // The inherited final simplifier removes the pair from both
+                // outputs, independently of native prepared selection.
+                Assert.That(nativeFinal, Is.EqualTo("stackalloc byte[8]"));
+                Assert.That(final, Is.EqualTo(nativeFinal));
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static string AssertStackAllocationBindingAndRuntime(CodeFile file)
+        {
+            var tree = CSharpSyntaxTree.ParseText(file.Content, path: file.Name);
+            var compilation = CSharpCompilation.Create("StackAllocationWitness", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            Assert.That(compilation.Options.AllowUnsafe, Is.False);
+            Assert.That(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), Is.Empty);
+            var model = compilation.GetSemanticModel(tree);
+            var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single();
+            var declaration = (LocalDeclarationStatementSyntax)method.Body!.Statements[0];
+            var variable = declaration.Declaration.Variables.Single();
+            var initializer = variable.Initializer!.Value;
+            var allocation = initializer.DescendantNodesAndSelf().OfType<StackAllocArrayCreationExpressionSyntax>().Single();
+            var array = (ArrayTypeSyntax)allocation.Type;
+            var rank = array.RankSpecifiers.Single();
+            Assert.That(allocation.StackAllocKeyword.IsMissing || rank.OpenBracketToken.IsMissing || rank.CloseBracketToken.IsMissing, Is.False);
+            Assert.That(model.GetTypeInfo(array.ElementType).Type?.SpecialType, Is.EqualTo(SpecialType.System_Byte));
+            Assert.That(model.GetConstantValue(rank.Sizes.Single()).Value, Is.EqualTo(8));
+            var local = (ILocalSymbol)model.GetDeclaredSymbol(variable)!;
+            var span = (INamedTypeSymbol)local.Type;
+            var coreSpan = compilation.GetSpecialType(SpecialType.System_Object).ContainingAssembly.GetTypeByMetadataName("System.Span`1");
+            Assert.That(coreSpan, Is.Not.Null);
+            Assert.That(SymbolEqualityComparer.Default.Equals(span.OriginalDefinition, coreSpan), Is.True);
+            Assert.That(span.TypeArguments.Single().SpecialType, Is.EqualTo(SpecialType.System_Byte));
+            Assert.That(SymbolEqualityComparer.Default.Equals(model.GetTypeInfo(initializer).ConvertedType, local.Type), Is.True);
+            var length = (MemberAccessExpressionSyntax)((ReturnStatementSyntax)method.Body.Statements[1]).Expression!;
+            var property = ((IPropertyReferenceOperation)model.GetOperation(length)!).Property;
+            Assert.That(property.Name, Is.EqualTo("Length"));
+            Assert.That(SymbolEqualityComparer.Default.Equals(property.ContainingType, span), Is.True);
+            Assert.That(SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(length.Expression).Symbol, local), Is.True);
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [Array.Empty<object?>()]).Single(), Is.EqualTo(8));
+            return initializer.ToString();
+        }
+
         private static async Task<(CodeFile Selected, CodeFile Final)> WriteCompilerOutput(string directory, string mode, bool enabled)
         {
             string prefix = enabled ? "prepared" : "native";
@@ -216,6 +278,14 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Public | TypeSignatureModifiers.Class;
             protected internal override MethodProvider[] BuildMethods()
             {
+                if (mode == "stackalloc")
+                {
+                    var declaration = new DeclarationExpression(typeof(Span<byte>), "value", out var local);
+                    var array = new NewArrayExpression(typeof(byte), Size: Literal(8), IsStackAlloc: true);
+                    var initialized = new AssignmentExpression(declaration, new ParenthesizedExpression(array)).Terminate();
+                    var body = new MethodBodyStatements([initialized, Return(new MemberExpression(local, "Length"))]);
+                    return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, []), body, this)];
+                }
                 if (mode == "conditional-access")
                 {
                     var receiver = new ParameterProvider("value", $"", typeof(string));

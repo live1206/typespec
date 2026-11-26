@@ -14,13 +14,25 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             _nameAlternatives.Count(alternative => alternative.Channel == PreparedNameChannel.Body);
 
         internal CodeFile(string content, string name, string? qualifiedContent = null, SourceConsumptionReceipt? sourceConsumption = null,
-            ImmutableArray<PreparedNameAlternative> nameAlternatives = default)
+            ImmutableArray<PreparedNameAlternative> nameAlternatives = default, int preparedGroupingCount = 0)
         {
             Name = name;
             Content = content;
             QualifiedContent = qualifiedContent;
             SourceConsumption = sourceConsumption;
             _nameAlternatives = nameAlternatives;
+            PreparedGroupingCount = preparedGroupingCount;
+        }
+
+        internal int PreparedGroupingCount { get; }
+
+        internal CodeFile SelectPreparedForms(bool fieldAllowed, bool bodyAllowed, bool groupingAllowed)
+        {
+            if (PreparedGroupingCount == 0) { return SelectPreparedNames(fieldAllowed, bodyAllowed); }
+            // This profile has disjoint grouping-only/name-only files. Unknown
+            // or actual mixed alternatives retain; no composition is inferred.
+            return groupingAllowed && !_nameAlternatives.IsDefault && _nameAlternatives.IsEmpty
+                ? this : WithoutPreparedNames();
         }
 
         public string Name { get; }

@@ -24,10 +24,14 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         private readonly ImmutableArray<ParameterState> _states;
         private readonly ImmutableArray<(object Producer, StructuredSourceShape Shape)> _region;
         private readonly InvokeMethodExpression? _ownedBlockInvocation;
+        private readonly PreparedEqualityRegion? _equalityRegion;
+        internal bool HasDirectEqualityRegion => _equalityRegion is not null;
+        internal PreparedOrdinaryArgumentGrouping? OrdinaryArgumentGrouping { get; }
         private int _stale;
 
         private PreparedMethodParameterFrame(MethodProvider method, object body, ImmutableArray<ParameterState> states,
-            ImmutableArray<(object Producer, StructuredSourceShape Shape)> region, InvokeMethodExpression? ownedBlockInvocation)
+            ImmutableArray<(object Producer, StructuredSourceShape Shape)> region, InvokeMethodExpression? ownedBlockInvocation,
+            PreparedEqualityRegion? equalityRegion, PreparedOrdinaryArgumentGrouping? ordinaryArgumentGrouping)
         {
             _method = method;
             _revision = method.DeclarationRevision;
@@ -38,24 +42,60 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             _states = states;
             _region = region;
             _ownedBlockInvocation = ownedBlockInvocation;
+            _equalityRegion = equalityRegion;
+            OrdinaryArgumentGrouping = ordinaryArgumentGrouping;
         }
 
-        internal static PreparedMethodParameterFrame? TryCapture(MethodProvider method, object body)
+        internal static PreparedMethodParameterFrame? TryCapture(MethodProvider method, object body) =>
+            TryCaptureCore(method, body, sourceCapture: false);
+
+        internal static PreparedMethodParameterFrame? TryCaptureForSource(MethodProvider method, object body) =>
+            TryCaptureCore(method, body, sourceCapture: true);
+
+        private static PreparedMethodParameterFrame? TryCaptureCore(MethodProvider method, object body, bool sourceCapture)
         {
             if (!ReferenceEquals((object?)method.BodyStatements ?? method.BodyExpression, body) ||
                 !ContractCollections.TryCopy(method.Signature.Parameters, out var parameters)) { return null; }
             var ownedBlockInvocation = PreparedUnusedDefaultLocalCallBlock.GetInvocation(method);
+            bool binaryParentRoles = sourceCapture && PreparedBinaryParentRoles.TryGetNewRoot(method, body, out _);
+            if (binaryParentRoles && parameters.Any(parameter => parameter is null || !parameter.HasCachedEmittedDeclarationState)) { return null; }
+            var coalesce = sourceCapture && !binaryParentRoles ? PreparedStringCoalesce.TryGet(method, body, parameters) : null;
+            var usedLocal = sourceCapture && !binaryParentRoles && coalesce is null && ownedBlockInvocation is null
+                ? PreparedUsedLocalInitializer.TryGet(method, body, parameters) : null;
+            var argumentGrouping = sourceCapture && !binaryParentRoles && coalesce is null && usedLocal is null && ownedBlockInvocation is null
+                ? PreparedOrdinaryArgumentGrouping.TryGet(method, body, parameters) : null;
+            var castParent = sourceCapture && !binaryParentRoles && coalesce is null && usedLocal is null && argumentGrouping is null && ownedBlockInvocation is null
+                ? PreparedPrimitiveCastParent.TryGet(method, body, parameters) : null;
+            // Do not admit expression wrappers to the general frame grammar.
+            // Recognize only the authored direct return edge, with no new cold
+            // parameter-name observations before the native writer sees it.
+            var returnWrapper = sourceCapture && body.GetType() == typeof(ExpressionStatement) && body is ExpressionStatement
+                { Expression: KeywordExpression { Keyword: "return", Expression: ParenthesizedExpression
+                    { Operand: CastExpression { Inner: VariableExpression } } wrapper } keyword } && keyword.GetType() == typeof(KeywordExpression)
+                ? wrapper : null;
+            if (returnWrapper is not null && (parameters.Length != 1 || parameters[0]?.HasCachedEmittedDeclarationState != true)) { return null; }
             var region = ImmutableArray.CreateBuilder<(object, StructuredSourceShape)>();
             if (!CaptureRegion(body, region, new HashSet<object>(ReferenceEqualityComparer.Instance), 0,
                 allowThis: PreparedGeneratedMethodGroup.HasOwningRootCallProfile(method),
-                allowDeclarations: ownedBlockInvocation is not null)) { return null; }
+                allowDeclarations: ownedBlockInvocation is not null, binaryParentRoles: binaryParentRoles, coalesce: coalesce, usedLocal: usedLocal, argumentGrouping: argumentGrouping, castParent: castParent,
+                returnWrapper: returnWrapper)) { return null; }
+            var capturedRegion = region.ToImmutable();
+            // Binary regions are a new source-capture family. Do not introduce
+            // parameter-spelling callbacks where the old grammar returned no frame.
+            // Explicit frame capture keeps its original observation order; source
+            // capture admits the new family only with actual native cached spellings.
+            if (sourceCapture && capturedRegion.Any(entry => entry.Item1 is BinaryOperatorExpression) &&
+                parameters.Any(parameter => parameter is null || !parameter.HasCachedEmittedDeclarationState)) { return null; }
+            // Capture before parameter spelling observations: an uncached name
+            // can invoke ambient culture code and mutate this retained region.
+            var equalityRegion = ownedBlockInvocation is null ? PreparedEqualityRegion.TryCapture(body, capturedRegion) : null;
             var states = ImmutableArray.CreateBuilder<ParameterState>();
             foreach (var parameter in parameters)
             {
                 if (parameter is null || !DeclaredTypeSnapshot.TryCapture(parameter.Type, out var type)) { return null; }
                 states.Add(new(parameter, parameter.DeclarationRevision, parameter.Type, type!, parameter.EmittedDeclarationState, parameter.CachedVariableExpression));
             }
-            return new(method, body, states.ToImmutable(), region.ToImmutable(), ownedBlockInvocation);
+            return new(method, body, states.ToImmutable(), capturedRegion, ownedBlockInvocation, equalityRegion, argumentGrouping);
         }
 
         // Block ownership never lends method-parameter types through locals.
@@ -95,6 +135,9 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             return _method.EnclosingType.CachedType;
         }
 
+        internal bool HasCachedParameterEmittedStates =>
+            _states.All(state => state.Parameter.HasCachedEmittedDeclarationState);
+
         internal bool IsCurrent()
         {
             if (System.Threading.Volatile.Read(ref _stale) != 0) { return false; }
@@ -103,27 +146,31 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 ReferenceEquals(_signature.Parameters, _parameters) && ContractCollections.TryCopy(_parameters, out var parameters) &&
                 parameters.Length == _states.Length && parameters.Where((p, i) => !ReferenceEquals(p, _states[i].Parameter)).Any() == false &&
                 _signatureShape.Matches(StructuredSourceShape.Capture(_signature, true)) && _states.All(s => s.IsCurrent()) &&
-                _region.All(r => r.Shape.Matches(StructuredSourceShape.Capture(r.Producer, true))) &&
+                (_equalityRegion?.MatchesCurrent() == true ||
+                    _region.All(r => r.Shape.Matches(StructuredSourceShape.Capture(r.Producer, true)))) &&
                 (_ownedBlockInvocation is null || ReferenceEquals(PreparedUnusedDefaultLocalCallBlock.GetInvocation(_method), _ownedBlockInvocation));
             if (!current) { System.Threading.Interlocked.Exchange(ref _stale, 1); }
             return current;
         }
 
-        private static bool CaptureRegion(object producer, ImmutableArray<(object, StructuredSourceShape)>.Builder region, HashSet<object> ancestors, int depth, bool returnPosition = false, bool allowThis = false, bool allowDeclarations = false)
+        private static bool CaptureRegion(object producer, ImmutableArray<(object, StructuredSourceShape)>.Builder region, HashSet<object> ancestors, int depth, bool returnPosition = false, bool allowThis = false, bool allowDeclarations = false, bool binaryParentRoles = false, PreparedStringCoalesce? coalesce = null, PreparedUsedLocalInitializer? usedLocal = null, PreparedOrdinaryArgumentGrouping? argumentGrouping = null, PreparedPrimitiveCastParent? castParent = null, ParenthesizedExpression? returnWrapper = null)
         {
-            if (depth >= 32 || !ancestors.Add(producer) || !Allowed(producer, returnPosition, allowThis, allowDeclarations)) { return false; }
+            if (depth >= 32 || (binaryParentRoles || coalesce.HasValue || usedLocal.HasValue || argumentGrouping.HasValue || castParent.HasValue || returnWrapper is not null) &&
+                region.Count >= PreparedBinaryParentRoles.MaximumOccurrences || !ancestors.Add(producer) ||
+                !ReferenceEquals(producer, returnWrapper) && argumentGrouping?.ContainsAddition(producer) != true && usedLocal?.Contains(producer) != true && castParent?.Contains(producer) != true &&
+                !Allowed(producer, returnPosition, allowThis, allowDeclarations, binaryParentRoles, coalesce)) { return false; }
             var shape = StructuredSourceShape.Capture(producer, true);
             if (shape.Opaque) { return false; }
             region.Add((producer, shape));
             foreach (var child in shape.Children)
             {
-                if (!CaptureRegion(child.Producer, region, ancestors, depth + 1, producer.GetType() == typeof(ExpressionStatement), allowThis, allowDeclarations)) { return false; }
+                if (!CaptureRegion(child.Producer, region, ancestors, depth + 1, producer.GetType() == typeof(ExpressionStatement), allowThis, allowDeclarations, binaryParentRoles, coalesce, usedLocal, argumentGrouping, castParent, returnWrapper)) { return false; }
             }
             ancestors.Remove(producer);
             return true;
         }
 
-        private static bool Allowed(object producer, bool returnPosition, bool allowThis, bool allowDeclarations) => producer switch
+        private static bool Allowed(object producer, bool returnPosition, bool allowThis, bool allowDeclarations, bool binaryParentRoles, PreparedStringCoalesce? coalesce) => producer switch
         {
             ScopedApi wrapper => PreparedCallProofs.IsTransparentWrapper(wrapper),
             FuncExpression closure => ContractCollections.TryCopy(closure.Parameters, out var parameters) && parameters.Length == 0,
@@ -131,6 +178,9 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 (keyword.Expression is null && (keyword.Keyword is "null" or "default" || allowThis && keyword.Keyword == "this") ||
                     returnPosition && keyword.Keyword == "return" && keyword.Expression is not null),
             MemberExpression member => member.GetType() == typeof(MemberExpression) && member.Declaration is null,
+            BinaryOperatorExpression binary => coalesce?.Contains(binary) == true ||
+                binaryParentRoles && PreparedBinaryParentRoles.IsBinaryOperator(binary.Operator) ||
+                binary.Operator == "==" && binary.Left?.GetType() == typeof(VariableExpression) && binary.Right?.GetType() == typeof(VariableExpression),
             _ => allowDeclarations && (producer.GetType() == typeof(DeclarationExpression) || producer.GetType() == typeof(AssignmentExpression)) ||
                 producer.GetType() == typeof(MethodBodyStatements) || producer.GetType() == typeof(ExpressionStatement) ||
                 producer.GetType() == typeof(IfStatement) || producer.GetType() == typeof(IfElseStatement) ||

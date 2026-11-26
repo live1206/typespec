@@ -33,7 +33,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             Func<CSharpType, PreparedGeneratedMethodGroup?>? resolveGeneratedGroup = null,
             Func<ParameterProvider, string, CSharpType?>? resolveDirectParameter = null,
             Func<ITypeSymbol, string, CSharpType?, PreparedReducedExtensionGroup?>? resolveReducedGroup = null,
-            Func<InvokeMethodExpression, CSharpType?>? resolveOwningType = null)
+            Func<InvokeMethodExpression, CSharpType?>? resolveOwningType = null, bool allowNativeIntAddition = false)
         {
             var result = new PreparedCallProofs();
             if (call is InvokeMethodExpression reducedCall && resolveType is not null && environmentCurrent is not null &&
@@ -181,7 +181,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 {
                     var candidate = generatedCandidates[index];
                     if (HasBoundedApplicability(candidate.Declaration.Contract, arguments, csharp, resolveType, occurrence, children,
-                        bindings[index]?.FormalTypes ?? candidate.FormalTypes)) { witnessIndex = index; break; }
+                        bindings[index]?.FormalTypes ?? candidate.FormalTypes, allowNativeIntAddition: allowNativeIntAddition)) { witnessIndex = index; break; }
                 }
                 if (witnessIndex < 0 || !BoundCurrent()) { return result; }
                 var generatedWitness = generatedCandidates[witnessIndex];
@@ -466,7 +466,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
         private static bool HasBoundedApplicability(DeclaredCallableContract contract, ImmutableArray<ValueExpression> arguments, CSharpCompilation compilation,
             Func<CSharpType, INamedTypeSymbol?> resolveType, SourceOccurrenceId occurrence, ImmutableArray<PreparedSourceOccurrence> children,
-            ImmutableArray<ITypeSymbol> generatedFormalTypes = default, ValueExpression? reducedReceiver = null)
+            ImmutableArray<ITypeSymbol> generatedFormalTypes = default, ValueExpression? reducedReceiver = null, bool allowNativeIntAddition = false)
         {
             if (arguments.Length > contract.Parameters.Length) { return false; }
             bool sawNamed = false;
@@ -516,7 +516,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                     if (!HasBoundedLambdaConversion(closure, target, compilation, resolveType, MatchValueOccurrence(argumentOccurrence, closure))) { return false; }
                     continue;
                 }
-                var sourceType = ResolveBoundedValueType(value, compilation, resolveType, valueOccurrence: argumentOccurrence);
+                var sourceType = ResolveBoundedValueType(value, compilation, resolveType, valueOccurrence: argumentOccurrence) ??
+                    (allowNativeIntAddition ? PreparedOrdinaryArgumentGrouping.ResolveAddition(value, argumentOccurrence, compilation) : null);
                 if (sourceType is null || sourceType.TypeKind == TypeKind.Dynamic) { return false; }
                 var conversion = compilation.ClassifyCommonConversion(sourceType, target);
                 if (!conversion.IsImplicit || conversion.IsUserDefined) { return false; }

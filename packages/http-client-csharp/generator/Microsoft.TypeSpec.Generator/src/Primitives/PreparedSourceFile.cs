@@ -21,6 +21,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
         internal string FilePath { get; }
         internal ImmutableArray<PreparedSourceOccurrence> Roots => _roots;
         internal bool IsInvalid => System.Threading.Volatile.Read(ref _invalid) != 0;
+        internal bool UsesNativeWrittenIdentity { get; set; }
         internal PreparedSourceObservations? Observations { get; private set; }
         private readonly Compilation _compilation;
         private readonly bool _disableXmlDocs;
@@ -63,10 +64,12 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             // Unconsumed terminators can escape the prefixed line comments.
             for (var index = 0; index < header.Length; index++)
             {
-                if (header[index] is '\u0085' or '\u2028' or '\u2029') { return false; }
+                if (header[index] is '\u0085' or '\u2028' or '\u2029')
+                { return false; }
                 if (header[index] == '\r')
                 {
-                    if (index + 1 >= header.Length || header[index + 1] != '\n') { return false; }
+                    if (index + 1 >= header.Length || header[index + 1] != '\n')
+                    { return false; }
                     index++;
                 }
             }
@@ -75,7 +78,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
         private void CaptureOwner(TypeProvider owner, string path, HashSet<TypeProvider> ancestors, List<PreparedSourceOccurrence> capturedRoots)
         {
-            if (!ancestors.Add(owner) || _byOwner.ContainsKey(owner)) { Invalidate(); return; }
+            if (!ancestors.Add(owner) || _byOwner.ContainsKey(owner))
+            { Invalidate(); return; }
             var roots = new Dictionary<(string, int), PreparedSourceOccurrence>();
             _byOwner.Add(owner, roots);
             _owners.Add(new OwnerSnapshot(owner));
@@ -92,7 +96,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             Add("type-documentation", 0, owner, false);
             if (ContractCollections.TryCopy(owner.CachedWriteAttributes, out var attributes))
             { for (int i = 0; i < attributes.Length; i++) { Add("type-attribute", i, attributes[i], true); } }
-            if (owner.CachedWhereClause is { } where) { Add("type-constraint", 0, where, true); }
+            if (owner.CachedWhereClause is { } where)
+            { Add("type-constraint", 0, where, true); }
             bool writesMembers = owner.CachedDeclarationModifiers?.HasFlag(TypeSignatureModifiers.Interface) != true;
             bool writesOnlyFields = owner.CachedDeclarationModifiers?.HasFlag(TypeSignatureModifiers.Enum) == true;
             if (writesMembers && ContractCollections.TryCopy(owner.CachedFields, out var fields))
@@ -110,14 +115,21 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
         internal void FinalizeObservations()
         {
-            if (_started || Observations is not null) { Invalidate(); return; }
+            if (_started || Observations is not null)
+            { Invalidate(); return; }
             Observations = new PreparedSourceObservations(Roots, () => IsCurrent() && _callEnvironmentCurrent?.Invoke() == true);
         }
 
         internal bool IsCurrent()
         {
-            if (IsInvalid) { return false; }
-            if (_owners.All(o => o.IsCurrent()) && _roots.All(r => r.IsCurrent())) { return true; }
+            if (IsInvalid)
+            { return false; }
+            // Cursor and generic source walks run before per-use permission.
+            // New-role walks must never manufacture a missing native spelling.
+            if (UsesNativeWrittenIdentity && !_roots.All(root => root.HasCachedParameterEmittedStates))
+            { return false; }
+            if (_owners.All(o => o.IsCurrent(UsesNativeWrittenIdentity)) && _roots.All(r => r.IsCurrent()))
+            { return true; }
             Invalidate();
             return false;
         }
@@ -126,7 +138,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
         internal Cursor Start()
         {
-            if (_started) { Invalidate(); }
+            if (_started)
+            { Invalidate(); }
             _started = true;
             return new Cursor(this);
         }
@@ -158,13 +171,17 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 _next = 0;
                 _expected = Boundaries(root).ToImmutableArray();
                 _current = root;
-                if (!root.EmissionBoundary) { _consumed.Add(root.Id); }
+                if (!root.EmissionBoundary)
+                { _consumed.Add(root.Id); }
                 bool opaqueRoot = root.IsOpaque && !root.EmissionBoundary;
-                if (opaqueRoot) { _opaqueDepth++; }
+                if (opaqueRoot)
+                { _opaqueDepth++; }
                 return new Scope(() =>
                 {
-                    if (opaqueRoot) { _opaqueDepth--; }
-                    if (_next != _expected.Length || !_file.IsCurrent()) { _file.Invalidate(); }
+                    if (opaqueRoot)
+                    { _opaqueDepth--; }
+                    if (_next != _expected.Length || !_file.IsCurrent())
+                    { _file.Invalidate(); }
                     _current = null;
                     _inRoot = false;
                 });
@@ -172,38 +189,48 @@ namespace Microsoft.TypeSpec.Generator.Primitives
 
             private static IEnumerable<PreparedSourceOccurrence> Boundaries(PreparedSourceOccurrence root)
             {
-                if (root.EmissionBoundary) { yield return root; }
-                if (root.IsOpaque) { yield break; }
+                if (root.EmissionBoundary)
+                { yield return root; }
+                if (root.IsOpaque)
+                { yield break; }
                 foreach (var child in root.Children)
                 {
-                    foreach (var boundary in Boundaries(child)) { yield return boundary; }
+                    foreach (var boundary in Boundaries(child))
+                    { yield return boundary; }
                 }
             }
 
             internal IDisposable Enter(object producer)
             {
-                if (_opaqueDepth > 0) { return EmptyScope.Instance; }
-                if (!_inRoot) { return EmptyScope.Instance; } // non-executable writer scaffolding is not a source root
+                if (_opaqueDepth > 0)
+                { return EmptyScope.Instance; }
+                if (!_inRoot)
+                { return EmptyScope.Instance; } // non-executable writer scaffolding is not a source root
                 if (!_file.IsCurrent() || _next >= _expected.Length || !ReferenceEquals(_expected[_next].Producer, producer))
                 { _file.Invalidate(); return EmptyScope.Instance; }
                 var occurrence = _expected[_next++];
                 var previous = _current;
                 _current = occurrence;
                 _consumed.Add(occurrence.Id);
-                if (occurrence.IsOpaque) { _opaqueDepth++; }
+                if (occurrence.IsOpaque)
+                { _opaqueDepth++; }
                 var end = _next + (occurrence.IsOpaque ? 0 : occurrence.Children.Sum(c => Boundaries(c).Count()));
                 return new Scope(() =>
                 {
-                    if (occurrence.IsOpaque) { _opaqueDepth--; }
-                    if (_next != end || !_file.IsCurrent()) { _file.Invalidate(); }
+                    if (occurrence.IsOpaque)
+                    { _opaqueDepth--; }
+                    if (_next != end || !_file.IsCurrent())
+                    { _file.Invalidate(); }
                     _current = previous;
                 });
             }
 
             internal bool Complete()
             {
-                if (_inRoot || !_file.IsCurrent()) { _file.Invalidate(); }
-                if (_nextRoot != _file._roots.Length || _rootsSeen.Count != _file._roots.Length) { _file.Invalidate(); }
+                if (_inRoot || !_file.IsCurrent())
+                { _file.Invalidate(); }
+                if (_nextRoot != _file._roots.Length || _rootsSeen.Count != _file._roots.Length)
+                { _file.Invalidate(); }
                 return !_file.IsInvalid;
             }
         }
@@ -240,8 +267,12 @@ namespace Microsoft.TypeSpec.Generator.Primitives
             private readonly bool _hasFields, _hasProperties, _hasMethods, _hasConstructors, _hasNested, _hasAttributes;
             internal OwnerSnapshot(TypeProvider owner)
             {
-                _owner = owner; _revision = owner.DeclarationRevision; _type = owner.CachedType; _typeRevision = _type?.IdentityVersion;
-                if (_type is not null) { DeclaredTypeSnapshot.TryCapture(_type, out _typeSnapshot); }
+                _owner = owner;
+                _revision = owner.DeclarationRevision;
+                _type = owner.CachedType;
+                _typeRevision = _type?.IdentityVersion;
+                if (_type is not null)
+                { DeclaredTypeSnapshot.TryCapture(_type, out _typeSnapshot); }
                 _hasFields = ContractCollections.TryCopy(owner.CachedFields, out _fields);
                 _hasProperties = ContractCollections.TryCopy(owner.CachedProperties, out _properties);
                 _hasMethods = ContractCollections.TryCopy(owner.CachedMethods, out _methods);
@@ -253,7 +284,18 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 _modifiers = owner.CachedDeclarationModifiers;
                 _path = owner.CachedRelativeFilePath;
             }
-            internal bool IsCurrent() => _owner.DeclarationRevision == _revision && ReferenceEquals(_owner.CachedType, _type) && _type?.IdentityVersion == _typeRevision && _typeSnapshot?.IsCurrent() == true &&
+            internal bool HasCapturedNestedTypes => _hasNested;
+
+            internal bool IsCurrent(bool nativeWrittenIdentity = false) =>
+                _owner.DeclarationRevision == _revision && CachedDeclarationIsCurrent(nativeWrittenIdentity);
+
+            // Body-only MethodProvider.Update also bumps the owner epoch. Its
+            // file checks that epoch and AST; other files require the shared
+            // declaration data, not this unrelated body's mutation history.
+            internal bool IsNativeWrittenContextCurrent() => CachedDeclarationIsCurrent(nativeWrittenIdentity: true);
+
+            private bool CachedDeclarationIsCurrent(bool nativeWrittenIdentity) =>
+                ReferenceEquals(_owner.CachedType, _type) && _type?.IdentityVersion == _typeRevision && _typeSnapshot?.IsCurrent() == true &&
                 (!_hasFields || ContractCollections.SameReferences(_owner.CachedFields, _fields)) &&
                 (!_hasProperties || ContractCollections.SameReferences(_owner.CachedProperties, _properties)) &&
                 (!_hasMethods || ContractCollections.SameReferences(_owner.CachedMethods, _methods)) &&
@@ -261,7 +303,8 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 (!_hasNested || ContractCollections.SameReferences(_owner.CachedNestedTypes, _nested)) &&
                 (!_hasSerializations || ContractCollections.SameReferences(_owner.CachedSerializationProviders, _serializations)) &&
                 (!_hasAttributes || ContractCollections.SameReferences(_owner.CachedWriteAttributes, _attributes)) &&
-                ReferenceEquals(_where, _owner.CachedWhereClause) && _modifiers == _owner.CachedDeclarationModifiers && _path == _owner.CachedRelativeFilePath;
+                ReferenceEquals(_where, _owner.CachedWhereClause) && _modifiers == _owner.CachedDeclarationModifiers &&
+                (nativeWrittenIdentity || _path == _owner.CachedRelativeFilePath);
         }
     }
 }

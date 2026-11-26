@@ -100,6 +100,26 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                     s.Value(n.Operator); s.Value(n.AddParentheses); s.Child("left", n.Left); s.Child("right", n.Right); s.IntrinsicTokens = false; s.IntrinsicLayoutKnown = false; break;
                 case UnaryOperatorExpression n:
                     s.Value(n.Operator); s.Value(n.OperandOnTheLeft); s.Child("operand", n.Operand); s.IntrinsicTokens = false; s.IntrinsicLayoutKnown = false; break;
+                case CheckedExpression n: s.Child("operand", n.Operand); break;
+                case ParenthesizedExpression n: s.Child("operand", n.Operand); break;
+                case DirectDelegateInvocationExpression n: s.Child("target", n.Target); s.Child("argument", n.Argument); break;
+                case ParameterlessCastDelegateInvocationExpression n: s.Child("target", n.Target); break;
+                case InferredLocalDeclarationExpression n: s.Child("variable", n.Variable); break;
+                case AuthoredBareIntCastExpression n: s.Child("operand", n.Operand); break;
+                case AuthoredCompactCastLineExpression n:
+                    s.Value(n.CrLf); s.Value(n.After); s.Child("operand", n.Operand); s.IntrinsicTokens = false; s.IntrinsicLineBreaks = true;
+                    // The current known-layout fact assumes LF; this node can write CRLF.
+                    s.IntrinsicLayoutKnown = false; break;
+                case AuthoredCompactCastTriviaExpression n:
+                    s.Value(n.Before); s.Child("operand", n.Operand); s.IntrinsicTokens = false; break;
+                case AuthoredCompactLocalAdditionExpression n:
+                    s.Child("left", n.Local); s.Child("right", n.Call); s.IntrinsicTokens = false; break;
+                case AuthoredBinaryTriviaExpression n:
+                    s.Value(n.Before); s.Child("operand", n.Operand); s.IntrinsicTokens = false; break;
+                case AuthoredBinaryLineExpression n:
+                    s.Value(n.CrLf); s.Value(n.After); s.Child("operand", n.Operand);
+                    s.IntrinsicTokens = false; s.IntrinsicLineBreaks = true; break;
+                case TypedDefaultExpression n: s.Type(n.Type); break;
                 case CastExpression n: s.Type(n.Type); s.Child("value", n.Inner); break;
                 case AsExpression n: s.Type(n.Type); s.Child("value", n.Inner); break;
                 case NullConditionalExpression n: s.Child("value", n.Inner); break;
@@ -147,6 +167,9 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 case CatchExpression n: s.Child("exception", n.Exception); s.FlattenedBody(n.SourceBody); s.IntrinsicLineBreaks = true; break;
                 case FinallyExpression n: s.Nodes("body", n.SourceBody); s.IntrinsicLineBreaks = true; break;
                 case MethodBodyStatements n when n.GetType() == typeof(MethodBodyStatements): s.Nodes("statement", n.Statements); break;
+                case AuthoredCompactCastLocalStatement n:
+                    s.Child("declaration", n.Declaration); s.Child("initializer", n.Initializer); s.Child("return", n.Return);
+                    s.IntrinsicTokens = false; s.IntrinsicLineBreaks = true; break;
                 case ExpressionStatement n when n.GetType() == typeof(ExpressionStatement): s.Child("expression", n.Expression); s.IntrinsicLineBreaks = true; break;
                 case YieldReturnStatement n when n.GetType() == typeof(YieldReturnStatement): s.Child("value", n.Value); s.IntrinsicLineBreaks = true; break;
                 case YieldBreakStatement n when n.GetType() == typeof(YieldBreakStatement): s.IntrinsicLineBreaks = true; break;

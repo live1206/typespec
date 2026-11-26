@@ -42,7 +42,9 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 }
             }
             var content = writer.ToString();
-            return new CodeFile(content, _provider.RelativeFilePath, writer.QualifiedContent, writer.CompleteSourceFile(), writer.NameAlternatives);
+            var result = new CodeFile(content, _provider.RelativeFilePath, writer.QualifiedContent, writer.CompleteSourceFile(), writer.NameAlternatives, writer.PreparedGroupingCount);
+            if (GetType() == typeof(TypeProviderWriter)) { PreparedFieldTypes?.ObserveNativeWrittenFile(_provider, result); }
+            return result;
         }
 
         private bool IsPublicContext(TypeProvider provider)

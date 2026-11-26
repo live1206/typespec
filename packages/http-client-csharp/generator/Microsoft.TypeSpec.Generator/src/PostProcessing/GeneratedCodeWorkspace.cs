@@ -107,6 +107,15 @@ namespace Microsoft.TypeSpec.Generator
 
         public async IAsyncEnumerable<(string Name, string Text)> GetGeneratedFilesAsync()
         {
+            var generator = CodeModelGenerator.Instance;
+            if (PlainFiles.Count == 0 && generator.Rewriters.Count == 0 && !generator.Configuration.DisableRoslynReduce &&
+                await ReducedReceiverCaptureReduction.TryReduceAsync(_project) is { } reducedPair)
+            {
+                LoggingHelpers.LogElapsedTime("Roslyn document processing complete");
+                foreach (var file in reducedPair) { yield return file; }
+                yield break;
+            }
+
             List<Task<Document>> documents = new List<Task<Document>>();
             var memberRemover = new MemberRemoverRewriter();
             foreach (Document document in _project.Documents)
@@ -155,7 +164,9 @@ namespace Microsoft.TypeSpec.Generator
 
             if (!CodeModelGenerator.Instance.Configuration.DisableRoslynReduce)
             {
-                document = await Simplifier.ReduceAsync(document);
+                document = CodeModelGenerator.Instance.Rewriters.Count == 0
+                    ? await ScopedGeneratedReduction.ReduceAsync(document)
+                    : await Simplifier.ReduceAsync(document);
             }
 
             // Reformat if any custom rewriters have been applied

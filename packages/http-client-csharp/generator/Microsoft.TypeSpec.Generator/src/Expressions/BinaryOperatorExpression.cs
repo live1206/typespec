@@ -7,13 +7,16 @@ namespace Microsoft.TypeSpec.Generator.Expressions
     {
         internal override void WriteCore(CodeWriter writer)
         {
-            writer.AppendRawIf("(", AddParentheses);
+            bool omit = AddParentheses && writer.TryBeginPocGrouping(this);
+            if (omit) { writer.AppendPocGroupingDelimiter('('); writer.PocAfterGroupingOpening(); }
+            else { writer.AppendRawIf("(", AddParentheses); }
             Left.Write(writer);
             writer.AppendRawIf(" ", !Left.IsEmptyExpression());
             writer.AppendRaw(Operator);
             writer.AppendRawIf(" ", !Right.IsEmptyExpression());
             Right.Write(writer);
-            writer.AppendRawIf(")", AddParentheses);
+            if (omit) { writer.AppendPocGroupingDelimiter(')'); }
+            else { writer.AppendRawIf(")", AddParentheses); }
         }
     }
 }

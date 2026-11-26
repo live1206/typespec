@@ -762,6 +762,41 @@ namespace Microsoft.TypeSpec.Generator
             return WriteLine();
         }
 
+        // Both payloads just received the same explicitly authored newline.
+        // The continuation chooses column zero rather than automatic indentation;
+        // the ordinary child still owns its write and source visits.
+        internal void WriteAuthoredBinaryAtColumnZero(BinaryOperatorExpression operand)
+        {
+            if (!_atBeginningOfLine) { throw new InvalidOperationException("Expected the authored binary line boundary"); }
+            _atBeginningOfLine = false;
+            operand.Write(this);
+        }
+
+        internal void WriteAuthoredIntCastAtColumnZero(AuthoredBareIntCastExpression operand)
+        {
+            if (!_atBeginningOfLine) { throw new InvalidOperationException("Expected the authored cast line boundary"); }
+            _atBeginningOfLine = false;
+            operand.Write(this);
+        }
+
+        // The newline, inner close, and its trailing block-comment trivia
+        // are one unit. Both spans end midline, so automatic indentation can
+        // resume with the existing shared state for the outer close.
+        internal void AppendAuthoredBinaryTail(string ending, string trailingComment, bool omitClose)
+        {
+            var qualified = ending + ")" + trailingComment;
+            if (omitClose) { AppendRaw((ending + trailingComment).AsSpan(), qualified.AsSpan()); }
+            else { AppendRaw(qualified); }
+        }
+
+        // Both streams end midline after the shared authored comment.
+        internal void AppendAuthoredCompactCastTail(string ending, string trailingComment, bool omitClose)
+        {
+            var qualified = ending + ")" + trailingComment;
+            if (omitClose) { AppendRaw((ending + trailingComment).AsSpan(), qualified.AsSpan()); }
+            else { AppendRaw(qualified); }
+        }
+
         public CodeWriter AppendRaw(string str) => AppendRaw(str.AsSpan());
 
         private CodeWriter AppendRawChar(char c)
@@ -1072,7 +1107,11 @@ namespace Microsoft.TypeSpec.Generator
                 .ThenBy(ns => ns, StringComparer.Ordinal);
             if (header)
             {
-                string licenseString = CodeModelGenerator.Instance.LicenseHeader;
+                var generator = CodeModelGenerator.Instance;
+                _sourcePreparation?.ObserveNativePocHeader(generator);
+                if (_usingNamespaces.Count != 0) { _sourcePreparation?.ObserveNativePocImports(_sourceFile); }
+                _sourcePreparation?.ObserveCompactCallerLineImports(_sourceFile, _usingNamespaces);
+                string licenseString = generator.LicenseHeader;
                 if (!string.IsNullOrEmpty(licenseString))
                 {
                     // split license string into lines on new line

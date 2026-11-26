@@ -34,6 +34,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
             HashSet<string> namespacePrefixes, bool callLookupClosed)
         {
             if (!ContractCollections.TryCopy(sourceRoots, out _sourceRootSnapshot)) { return; }
+            _pocBinaryWriteSetComplete = callLookupClosed;
             _sourceRootList = sourceRoots;
             _sourceConfiguration = CodeModelGenerator.Instance.Configuration;
             _sourceDisableXmlDocs = _sourceConfiguration.DisableXmlDocs;
@@ -138,23 +139,9 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         private static bool CaptureFileWarnings(TypeProvider owner, ImmutableArray<Func<bool>>.Builder checks)
         {
-            var root = owner.CachedDisabledFileWarnings;
-            var envelope = root is null ? null : PreparedSuppressionEnvelope.TryCapture(root);
-            if (root is not null && envelope is null) { return false; }
-            if (root is null && (owner.HasFileWarningInput || !DefaultEmissionMethod(owner, "BuildDisabledFileWarnings"))) { return false; }
-            checks.Add(() =>
-            {
-                var current = owner.CachedDisabledFileWarnings;
-                if (current is null) { return root is null && !owner.HasFileWarningInput; }
-                // The default empty list can be materialized by the actual writer.
-                // Observe it without invoking the getter or its builder here.
-                if (root is null)
-                {
-                    root = current;
-                    envelope = PreparedSuppressionEnvelope.TryCapture(current);
-                }
-                return ReferenceEquals(current, root) && envelope?.IsCurrent == true;
-            });
+            var facts = PreparedNativeFileWarningFacts.TryCapture(owner);
+            if (facts is null) { return false; }
+            checks.Add(facts.IsCurrent);
             return true;
         }
 
@@ -238,7 +225,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
             ObserveSourceSnapshot();
             if (_sourceDisposed || _sourceFiles.Values.Any(f => f.IsInvalid) || _callLookupScopes.Any(s => !s.IsCurrent()))
             {
-                InvalidateSourceFiles();
+                InvalidateSourceFiles(includeNativeWrittenFiles: false);
                 return false;
             }
             if (_callEmissionInvalid || !_callEmissionKnown || _callEmissionChecks.Any(check => !check()))
@@ -271,10 +258,14 @@ namespace Microsoft.TypeSpec.Generator.Providers
             foreach (var file in _sourceFiles.Values) { file.IsCurrent(); }
         }
 
-        private void InvalidateSourceFiles()
+        private void InvalidateSourceFiles(bool includeNativeWrittenFiles = true)
         {
             _sourceDisposed = true;
-            foreach (var file in _sourceFiles.Values) { file.Invalidate(); }
+            if (includeNativeWrittenFiles) { _nativePocInvalid = true; }
+            foreach (var file in _sourceFiles.Values)
+            {
+                if (includeNativeWrittenFiles || !file.UsesNativeWrittenIdentity) { file.Invalidate(); }
+            }
         }
     }
 }

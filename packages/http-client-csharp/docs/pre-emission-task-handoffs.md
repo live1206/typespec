@@ -5,8 +5,92 @@ the [shared implementation guide](./pre-emission-implementation-guide.md), then
 the owning task's handoff and authoritative issue comment.
 
 Tasks01-03 are integrated at baseline 674e6ca. Task04's existing handoff is copied
-here from its planning branch; Tasks05-19 below are planning documents, not claims
-that their implementation, missing facts or validation already exist.
+here from its planning branch. The handoffs below define task plans, not claims
+of full implementation or validation. Task05 has a bounded
+[first-checkpoint implementation](./pre-emission-task05-checkpoint.md) whose
+final-currentness and suppression-admission corrections passed fresh canonical
+validation and complete stable independent review. This bounded checkpoint is
+accepted; broader Task05 work and SDK adoption remain open.
+The [second checkpoint](./pre-emission-task05-checkpoint2.md) adds finite binary
+child-grouping choices with native child spellings. Its approved native-written
+file/source freshness trial and reproduced review corrections pass local focused
+regressions and fresh broader validation, with two Windows-only controls not
+executed here. Complete stable independent review found no remaining findings;
+this bounded checkpoint is accepted. Broader Task05 work and SDK adoption remain
+open.
+
+The [third checkpoint](./pre-emission-task05-checkpoint3.md) adds direct native
+built-in `int` cast grouping with unchanged child spellings. Focused regressions
+and all prior outcomes pass after the unsupported-metadata correction, as does
+fresh broader validation. Renewed complete stable independent review found no
+remaining findings; this bounded checkpoint is accepted. Current WSL is the agreed validation domain.
+
+The [fourth checkpoint](./pre-emission-task05-checkpoint4.md) prepares native `if`
+condition equality in a closed Boolean method profile, retaining the statement's
+required delimiters. Focused cases and all prior outcomes pass after the
+reproduced host- and provider-callback corrections. Fresh broader validation passes;
+complete stable independent review found no remaining findings. This bounded
+checkpoint is accepted; broader Task05 coverage remains open.
+
+The [fifth checkpoint](./pre-emission-task05-checkpoint5.md) prepares only the
+right-child pair in a direct native string coalescing body, without reassociation.
+Focused and fresh broad validation pass; complete independent review found no
+verified findings. This bounded checkpoint is accepted.
+
+The [sixth checkpoint](./pre-emission-task05-checkpoint6.md) prepares the pair in
+a closed used-local `int` initializer. Focused and fresh broad validation pass;
+complete independent review found no verified findings. This bounded checkpoint
+is accepted.
+
+The [seventh checkpoint](./pre-emission-task05-checkpoint7.md) prepares a closed
+native argument, shared sibling list and explicit caller-expression override.
+Focused and fresh broad validation pass after scoped metadata and formal-shadowing
+corrections. Complete independent review found no outstanding findings. This
+bounded checkpoint is accepted.
+
+The [eighth checkpoint](./pre-emission-task05-checkpoint8.md) prepares the cast
+pair in three exact native primitive parent roles. Focused and fresh broad
+validation pass; complete independent review found no verified findings. This
+bounded checkpoint is accepted.
+
+The [ninth checkpoint](./pre-emission-task05-checkpoint9.md) prepares the cast
+pair in an exact widening assignment and a bound identity-cast argument. Focused
+and fresh broad validation pass; complete independent review found no verified
+findings. This bounded checkpoint is accepted.
+
+The [tenth checkpoint](./pre-emission-task05-checkpoint10.md) prepares four
+exact metadata cast return forms. Focused and fresh broad validation pass;
+complete independent review found no verified findings. This bounded checkpoint
+is accepted.
+
+The [eleventh checkpoint](./pre-emission-task05-checkpoint11.md) prepares the
+outer pair of a direct qualified source Number cast. Focused validation passes
+with the native missing-target failure preserved. Fresh broad validation also
+passes; complete independent review found no outstanding findings. This bounded
+checkpoint is accepted.
+
+The [twelfth checkpoint](./pre-emission-task05-checkpoint12.md) prepares native
+lambda cast pairs only when the exact selected method or constructor has an
+explicit caller-expression override. Focused validation passes after preserving
+the native malformed-formal failure. Fresh broad validation also passes, and
+complete independent review found no verified production findings. This bounded
+checkpoint is accepted.
+
+The [thirteenth checkpoint](./pre-emission-task05-checkpoint13.md) verifies
+native delimiters and barrier retentions and prepares the independent cast pair
+in a checked-binary expression. Focused and fresh broad validation pass;
+complete independent review found no verified findings. This bounded checkpoint
+is accepted.
+
+The [fourteenth checkpoint](./pre-emission-task05-checkpoint14.md) separates
+required checked delimiters from the removable cast pair. Focused and broad
+validation pass, and complete independent review found no verified production
+findings. This bounded internal profile is accepted.
+
+The [fifteenth checkpoint](./pre-emission-task05-checkpoint15.md) prepares an
+exact nullable generic typed-default cast. Focused and broad validation pass,
+and complete independent review found no verified production findings. This
+bounded internal profile is accepted.
 
 | Task | Implementation handoff                                                                                | Authoritative contract                                                               |
 | ---- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |

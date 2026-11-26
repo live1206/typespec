@@ -16,6 +16,13 @@ namespace Microsoft.TypeSpec.Generator
 {
     internal sealed class CSharpGen
     {
+        // Instance-owned observation points for pre-legacy pipeline regression
+        // tests. Default null; never a source of simplification authority.
+        internal Action<PreparedFieldTypes?>? PocPreparationObserved { get; init; }
+        internal Action<PreparedFieldTypes?, TypeProvider, CodeFile>? PocRawFileObserved { get; init; }
+        internal Action<CodeFile>? PocSelectedFileObserved { get; init; }
+        internal Action<CodeFile, bool>? PocGroupingDecisionObserved { get; init; }
+
         private const string ConfigurationFileName = "Configuration.json";
         private const string CodeModelFileName = "tspCodeModel.json";
 
@@ -130,7 +137,8 @@ namespace Microsoft.TypeSpec.Generator
                 // This one finalized-provider lifetime owns both field spellings and non-emitting
                 // executable occurrence snapshots. The standard writer consumes them in its one pass.
                 using var preparedFields = PreparedFieldTypes.CreateForGeneration(
-                    CodeModelGenerator.Instance, output.TypeProviders, referenceMapSession.ShouldWriteProvider);
+                    CodeModelGenerator.Instance, output.TypeProviders, referenceMapSession.ShouldWriteProvider, outputPath);
+                PocPreparationObserved?.Invoke(preparedFields);
 
                 // Keep the existing streaming path when preparation is disabled.
                 // With prepared spellings, stage every file until the complete
@@ -146,9 +154,11 @@ namespace Microsoft.TypeSpec.Generator
                         var writer = CodeModelGenerator.Instance.GetWriter(provider);
                         writer.PreparedFieldTypes = fields;
                         var file = writer.Write();
+                        PocRawFileObserved?.Invoke(fields, provider, file);
                         fields?.ObserveSnapshot();
                         if (stagedFiles is null)
                         {
+                            PocSelectedFileObserved?.Invoke(file);
                             generateFilesTasks.Add(generatedCodeWorkspace.AddGeneratedFile(file));
                         }
                         else
@@ -171,13 +181,28 @@ namespace Microsoft.TypeSpec.Generator
                     // captured qualified variants if the opt-out became active.
                     var fieldsCanCommit = preparedFields is not null && preparedFields.CanCommit() && PreparedFieldTypes.IsPolicyEnabled(generator);
                     var hasBodyNames = stagedFiles.Any(file => file.PreparedBodyNameCount != 0);
+                    var hasGrouping = stagedFiles.Any(file => file.PreparedGroupingCount != 0);
+                    var hasLegacyGrouping = stagedFiles.Any(file => file.PreparedGroupingCount != 0 && preparedFields?.IsNativePocFile(file) != true);
+                    var hasNativeGrouping = stagedFiles.Any(file => file.PreparedGroupingCount != 0 && preparedFields?.IsNativePocFile(file) == true);
                     var bodyChoices = stagedFiles.Select(file => (File: file,
-                        BodyAllowed: hasBodyNames && preparedFields?.CanCommitBodyNames(file) == true)).ToArray();
+                        BodyAllowed: hasBodyNames && preparedFields?.CanCommitBodyNames(file) == true,
+                        GroupingAllowed: file.PreparedGroupingCount != 0 && preparedFields?.CanCommitPocGrouping(file) == true)).ToArray();
+                    if (PocGroupingDecisionObserved is { } observeDecision)
+                    {
+                        foreach (var choice in bodyChoices)
+                        { observeDecision(choice.File, choice.GroupingAllowed); }
+                    }
+                    if (hasLegacyGrouping && fieldsCanCommit)
+                    {
+                        fieldsCanCommit = preparedFields!.FieldDataIsCurrentWithoutCallbacks() &&
+                            preparedFields.CanCommit() && PreparedFieldTypes.IsPolicyEnabled(generator);
+                    }
                     // Preserve the established field-only path when no body name
                     // was actually emitted; unused new facts add no veto/callbacks.
-                    var sharedCanCommit = hasBodyNames
+                    var sharedCanCommit = hasBodyNames || hasLegacyGrouping
                         ? preparedFields is not null && preparedFields.CanCommitSharedSnapshot() && PreparedFieldTypes.IsPolicyEnabled(generator)
                         : fieldsCanCommit;
+                    bool residualReady = true;
                     if (compilerBuild is not null)
                     {
                         var residualWorkspace = await compilerBuild.TryCreateResidualWorkspaceAsync(generator);
@@ -185,18 +210,35 @@ namespace Microsoft.TypeSpec.Generator
                         {
                             generatedCodeWorkspace = residualWorkspace;
                         }
-                        sharedCanCommit &= residualWorkspace is not null;
+                        residualReady = residualWorkspace is not null;
+                        sharedCanCommit &= residualReady;
                     }
-                    if (hasBodyNames)
+                    // New source callbacks precede the legacy final checks, so
+                    // they cannot create a new unvalidated legacy callback window.
+                    var nativeGroupingCanCommit = hasNativeGrouping && residualReady &&
+                        preparedFields?.CanCommitNativePocGrouping(generator, output, stagedFiles) == true;
+                    if (hasBodyNames || hasLegacyGrouping)
                     {
                         sharedCanCommit &= preparedFields is not null && preparedFields.CanCommitSharedSnapshot() && PreparedFieldTypes.IsPolicyEnabled(generator);
                     }
-                    foreach (var (file, bodyAllowed) in bodyChoices)
+                    if (hasLegacyGrouping)
                     {
-                        // Both variants were emitted during the same writer pass;
-                        // never rerun callbacks if the prepared proof changed.
-                        generateFilesTasks.Add(generatedCodeWorkspace.AddGeneratedFile(
-                            file.SelectPreparedNames(sharedCanCommit && fieldsCanCommit, sharedCanCommit && (!hasBodyNames || bodyAllowed))));
+                        sharedCanCommit &= preparedFields?.SharedSelectionDataIsCurrentWithoutCallbacks(referenceMapSession, generator, output) == true;
+                    }
+                    // No host/write-policy callbacks between this data-only
+                    // veto pass and selection. Materialize every selected file
+                    // before observation/workspace publication can run anything.
+                    var selectedFiles = bodyChoices.Select(choice => choice.File.SelectPreparedForms(
+                        sharedCanCommit && fieldsCanCommit && (!hasGrouping || preparedFields?.FieldDataIsCurrentWithoutCallbacks() == true) &&
+                            (!hasNativeGrouping || preparedFields?.SharedSelectionDataIsCurrentWithoutCallbacks(referenceMapSession, generator, output) == true),
+                        sharedCanCommit && (!hasBodyNames || choice.BodyAllowed),
+                        choice.GroupingAllowed && (preparedFields?.IsNativePocFile(choice.File) == true
+                            ? nativeGroupingCanCommit && preparedFields.SealNativePocGroupingWithoutCallbacks(choice.File, generator, output, stagedFiles)
+                            : sharedCanCommit && preparedFields?.SealPocGroupingWithoutCallbacks(choice.File) == true))).ToArray();
+                    foreach (var selected in selectedFiles)
+                    {
+                        PocSelectedFileObserved?.Invoke(selected);
+                        generateFilesTasks.Add(generatedCodeWorkspace.AddGeneratedFile(selected));
                     }
                 }
 

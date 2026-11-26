@@ -103,6 +103,7 @@ namespace Microsoft.TypeSpec.Generator.Primitives
                 case CheckedExpression n: s.Child("operand", n.Operand); break;
                 case ParenthesizedExpression n: s.Child("operand", n.Operand); break;
                 case DirectDelegateInvocationExpression n: s.Child("target", n.Target); s.Child("argument", n.Argument); break;
+                case ParameterlessCastDelegateInvocationExpression n: s.Child("target", n.Target); break;
                 case InferredLocalDeclarationExpression n: s.Child("variable", n.Variable); break;
                 case AuthoredBinaryTriviaExpression n:
                     s.Value(n.Before); s.Child("operand", n.Operand); s.IntrinsicTokens = false; break;

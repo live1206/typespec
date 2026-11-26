@@ -33,6 +33,135 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
         }
 
         [Test]
+        public void OriginalDirectCastLambdaBindsAndInvokesTheConstructedDelegate()
+        {
+            const string expression = "((System.Func<int>)(()=>3))()";
+            const string source = "namespace Sample { public class Clock { public int M()=>" + expression + "; } }";
+            AssertCastLambdaTarget(source, "Clock.cs", expression);
+        }
+
+        [Test]
+        public async Task NativeDirectCastLambdaWritesEachBoundaryWithoutGroupingPermission()
+        {
+            const string expression = "((global::System.Func<int>)(() => 3))()";
+            var directory = Directory.CreateTempSubdirectory("task05-direct-cast-lambda-");
+            try
+            {
+                var actual = await WriteCastLambdaCompilerOutput(directory.FullName, enabled: true);
+                var native = await WriteCastLambdaCompilerOutput(directory.FullName, enabled: false);
+                Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                AssertCastLambdaTarget(actual.Selected.Content, actual.Selected.Name, expression);
+                AssertCastLambdaTarget(native.Selected.Content, native.Selected.Name, expression);
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                PreparedParenthesesTests.AssertOperations(native.Final.Content, actual.Final.Content);
+                // Both final pipelines shorten the type name independently
+                // of prepared grouping. The delimiter structure still holds.
+                const string finalExpression = "((Func<int>)(() => 3))()";
+                AssertCastLambdaTarget(native.Final.Content, native.Final.Name, finalExpression);
+                AssertCastLambdaTarget(actual.Final.Content, actual.Final.Name, finalExpression);
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static async Task<(CodeFile Selected, CodeFile Final)> WriteCastLambdaCompilerOutput(string directory, bool enabled)
+        {
+            string prefix = enabled ? "prepared" : "native";
+            string original = Directory.CreateDirectory(Path.Combine(directory, prefix + "-original")).FullName;
+            string isolated = Directory.CreateDirectory(Path.Combine(directory, prefix + "-isolated")).FullName;
+            string configuration = "{\"package-name\":\"Sample\",\"enable-pre-emission-simplification\":" + (enabled ? "true" : "false") +
+                ",\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}";
+            var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original, configuration: configuration,
+                compilation: () => Task.FromResult<Compilation>(CSharpCompilation.Create("CastLambdaInputs")));
+            var owner = new CastLambdaClock();
+            CodeModelGenerator.Instance = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
+            CodeFile? selected = null;
+            int observations = 0;
+            int writes = 0;
+            List<object> visits = [];
+            object[]? expected = null;
+            var pipeline = new CSharpGen
+            {
+                PocPreparationObserved = prepared =>
+                {
+                    observations++;
+                    if (!enabled) { Assert.That(prepared, Is.Null); return; }
+                    Assert.That(prepared, Is.Not.Null);
+                    Assert.That(prepared!.PocGroupingCount, Is.Zero);
+                    var call = prepared.GetSourceFile(owner)!.Roots.SelectMany(root => root.DescendantsAndSelf())
+                        .Single(node => ReferenceEquals(node.Producer, owner.Call));
+                    var cast = call.Children.Single();
+                    var operand = cast.Children.Single();
+                    var lambda = operand.Children.Single();
+                    var literal = lambda.Children.Single();
+                    var nodes = new[] { call, cast, operand, lambda, literal };
+                    expected = [owner.Call, owner.Call.Target, owner.Call.Target.Inner, owner.Lambda, owner.Lambda.Inner];
+                    Assert.That(nodes.All(node => !node.IsOpaque), Is.True);
+                    Assert.That(nodes.Select(node => node.Id).Distinct().Count(), Is.EqualTo(expected.Length));
+                    Assert.That(cast.Id.EdgePath, Is.EqualTo(call.Id.EdgePath + "/target"));
+                    Assert.That(operand.Id.EdgePath, Is.EqualTo(cast.Id.EdgePath + "/value"));
+                    Assert.That(lambda.Id.EdgePath, Is.EqualTo(operand.Id.EdgePath + "/operand"));
+                    for (int i = 0; i < expected.Length; i++) { Assert.That(nodes[i].Producer, Is.SameAs(expected[i])); }
+                    prepared.PocNativeWriteObserver = node =>
+                    {
+                        if (Array.Exists(expected, producer => ReferenceEquals(producer, node))) { visits.Add(node); }
+                    };
+                },
+                PocRawFileObserved = (prepared, provider, file) =>
+                {
+                    writes++;
+                    Assert.That(provider, Is.SameAs(owner));
+                    Assert.That(prepared?.PocGroupingUses ?? 0, Is.Zero);
+                    Assert.That(file.PreparedGroupingCount, Is.Zero);
+                    if (enabled) { Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True); }
+                    Assert.That(file.SelectPreparedForms(false, false, false).Content, Is.EqualTo(file.Content));
+                },
+                PocSelectedFileObserved = file => selected = file
+            };
+            var result = await pipeline.ExecuteForCompilerBuildAsync(isolated, new Session(original));
+            Assert.That(result.UsedCapturedResidualInputs, Is.EqualTo(enabled));
+            Assert.That(observations, Is.EqualTo(1));
+            Assert.That(writes, Is.EqualTo(1));
+            if (enabled)
+            {
+                Assert.That(expected, Is.Not.Null);
+                Assert.That(visits, Has.Count.EqualTo(expected!.Length));
+                for (int i = 0; i < expected.Length; i++) { Assert.That(visits[i], Is.SameAs(expected[i])); }
+            }
+            Assert.That(selected, Is.Not.Null);
+            Assert.That(selected!.Name, Is.EqualTo("Clock.cs"));
+            return (selected, new CodeFile(File.ReadAllText(Path.Combine(isolated, selected.Name)), selected.Name));
+        }
+
+        private static void AssertCastLambdaTarget(string source, string name, string expression)
+        {
+            var tree = CSharpSyntaxTree.ParseText(source, path: name);
+            var compilation = CSharpCompilation.Create("DirectCastLambda", [tree], [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            Assert.That(compilation.GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), Is.Empty);
+            var call = tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>().Single();
+            Assert.That(call.ToString(), Is.EqualTo(expression));
+            Assert.That(call.ArgumentList.ToString(), Is.EqualTo("()"));
+            var target = (ParenthesizedExpressionSyntax)call.Expression;
+            var cast = (CastExpressionSyntax)target.Expression;
+            Assert.That(cast.OpenParenToken.IsMissing || cast.CloseParenToken.IsMissing, Is.False);
+            var operand = (ParenthesizedExpressionSyntax)cast.Expression;
+            var lambda = (ParenthesizedLambdaExpressionSyntax)operand.Expression;
+            Assert.That(lambda.ParameterList.ToString(), Is.EqualTo("()"));
+            var model = compilation.GetSemanticModel(tree);
+            var delegateType = (INamedTypeSymbol)model.GetTypeInfo(cast.Type).Type!;
+            var core = compilation.GetSpecialType(SpecialType.System_Object).ContainingAssembly;
+            Assert.That(SymbolEqualityComparer.Default.Equals(delegateType.OriginalDefinition, core.GetTypeByMetadataName("System.Func`1")), Is.True);
+            Assert.That(delegateType.TypeArguments.Single().SpecialType, Is.EqualTo(SpecialType.System_Int32));
+            Assert.That(model.GetConversion(lambda).IsAnonymousFunction, Is.True);
+            var invocation = (IInvocationOperation)model.GetOperation(call)!;
+            Assert.That(invocation.TargetMethod.MethodKind, Is.EqualTo(MethodKind.DelegateInvoke));
+            Assert.That(SymbolEqualityComparer.Default.Equals(invocation.TargetMethod, delegateType.DelegateInvokeMethod), Is.True);
+            Assert.That(invocation.Arguments, Is.Empty);
+            Assert.That(PreparedGeneratedRuntime.Invoke(compilation, "Sample.Clock", "M", [Array.Empty<object?>()]).Single(), Is.EqualTo(3));
+        }
+
+        [Test]
         public async Task NativeDelegateTargetRetainsItsPairsWithoutGroupingPermission()
         {
             var directory = Directory.CreateTempSubdirectory("task05-direct-delegate-");
@@ -173,6 +302,23 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 [new CapturedCompilerReference(_core, _coreHash, [], false)], false, false,
                 new CSharpParseOptions(LanguageVersion.CSharp12), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary), null);
             public bool IsCurrent() => true;
+        }
+
+        private sealed class CastLambdaClock : TypeProvider
+        {
+            internal ParameterlessCastDelegateInvocationExpression Call { get; private set; } = null!;
+            internal FuncExpression Lambda { get; private set; } = null!;
+            protected override string BuildName() => "Clock";
+            protected override string BuildNamespace() => "Sample";
+            protected override string BuildRelativeFilePath() => "Clock.cs";
+            protected override TypeSignatureModifiers BuildDeclarationModifiers() => TypeSignatureModifiers.Public | TypeSignatureModifiers.Class;
+            protected internal override MethodProvider[] BuildMethods()
+            {
+                Lambda = new FuncExpression(Array.Empty<CodeWriterDeclaration?>(), new LiteralExpression(3));
+                var target = new CastExpression(new ParenthesizedExpression(Lambda), typeof(Func<int>));
+                Call = new ParameterlessCastDelegateInvocationExpression(target);
+                return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, []), Call, this)];
+            }
         }
 
         private sealed class Clock : TypeProvider

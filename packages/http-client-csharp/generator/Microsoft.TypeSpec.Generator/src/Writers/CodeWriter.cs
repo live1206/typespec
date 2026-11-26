@@ -772,6 +772,13 @@ namespace Microsoft.TypeSpec.Generator
             operand.Write(this);
         }
 
+        internal void WriteAuthoredIntCastAtColumnZero(AuthoredBareIntCastExpression operand)
+        {
+            if (!_atBeginningOfLine) { throw new InvalidOperationException("Expected the authored cast line boundary"); }
+            _atBeginningOfLine = false;
+            operand.Write(this);
+        }
+
         // The newline, inner close, and its trailing block-comment trivia
         // are one unit. Both spans end midline, so automatic indentation can
         // resume with the existing shared state for the outer close.

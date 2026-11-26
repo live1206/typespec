@@ -789,6 +789,14 @@ namespace Microsoft.TypeSpec.Generator
             else { AppendRaw(qualified); }
         }
 
+        // Both streams end midline after the shared authored comment.
+        internal void AppendAuthoredCompactCastTail(string ending, string trailingComment, bool omitClose)
+        {
+            var qualified = ending + ")" + trailingComment;
+            if (omitClose) { AppendRaw((ending + trailingComment).AsSpan(), qualified.AsSpan()); }
+            else { AppendRaw(qualified); }
+        }
+
         public CodeWriter AppendRaw(string str) => AppendRaw(str.AsSpan());
 
         private CodeWriter AppendRawChar(char c)
@@ -1102,6 +1110,7 @@ namespace Microsoft.TypeSpec.Generator
                 var generator = CodeModelGenerator.Instance;
                 _sourcePreparation?.ObserveNativePocHeader(generator);
                 if (_usingNamespaces.Count != 0) { _sourcePreparation?.ObserveNativePocImports(_sourceFile); }
+                _sourcePreparation?.ObserveCompactCallerLineImports(_sourceFile, _usingNamespaces);
                 string licenseString = generator.LicenseHeader;
                 if (!string.IsNullOrEmpty(licenseString))
                 {

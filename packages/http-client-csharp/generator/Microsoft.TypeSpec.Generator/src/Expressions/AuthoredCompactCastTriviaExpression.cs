@@ -22,9 +22,13 @@ namespace Microsoft.TypeSpec.Generator.Expressions
 
         internal override void WriteCore(CodeWriter writer)
         {
-            writer.AppendRaw("(" + Before);
+            bool omit = writer.TryBeginPocGrouping(this);
+            if (omit) { writer.AppendPocGroupingDelimiter('('); writer.PocAfterGroupingOpening(); }
+            else { writer.AppendRaw("("); }
+            writer.AppendRaw(Before);
             Operand.Write(writer);
-            writer.AppendRaw(")");
+            if (omit) { writer.AppendPocGroupingDelimiter(')'); }
+            else { writer.AppendRaw(")"); }
         }
     }
 }

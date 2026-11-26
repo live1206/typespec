@@ -118,7 +118,102 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             finally { directory.Delete(recursive: true); }
         }
 
-        private static async Task<(CodeFile Selected, CodeFile Final)> WriteCompilerCase(string directory, string marker, bool enabled, string? compactEnding = null)
+        [TestCase("\n")]
+        [TestCase("\r\n")]
+        public async Task ClosedCompactCastOmitsOnlyItsAuthoredPairs(string ending)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-compact-cast-pairs-");
+            try
+            {
+                var actual = await WriteCompilerCase(directory.FullName, marker: null, enabled: true, compactEnding: ending, observePairs: true);
+                var native = await WriteCompilerCase(directory.FullName, marker: null, enabled: false, compactEnding: ending);
+                Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
+                Assert.That(actual.Final.Name, Is.EqualTo(native.Final.Name));
+                var nativeSelected = Tree(native.Selected);
+                var actualSelected = Tree(actual.Selected);
+                var actualFinal = Tree(actual.Final);
+                var nativeFinal = Tree(native.Final);
+                foreach (var tree in new[] { nativeSelected, actualSelected })
+                {
+                    var root = (CompilationUnitSyntax)tree.GetRoot();
+                    Assert.That(root.Usings.Select(directive => directive.ToString()),
+                        Is.EqualTo(new[] { "using System.Runtime.CompilerServices;" }));
+                }
+                int callerLine = GeneratedCallerLine(nativeSelected);
+                foreach (var tree in new[] { actualSelected, actualFinal, nativeFinal })
+                {
+                    Assert.That(GeneratedCallerLine(tree), Is.EqualTo(callerLine));
+                    Assert.That(Endings(tree), Is.EqualTo(Endings(nativeSelected)));
+                    Assert.That(SignificantTrivia(tree), Is.EqualTo(SignificantTrivia(nativeSelected)));
+                }
+                AssertBindingAndRuntime(actualSelected, callerLine, declaringType: "Sample.Clock");
+                PreparedParenthesesTests.AssertOperations(native.Selected.Content, actual.Selected.Content);
+                AssertFinalAfterIdentityCastReduction(actual.Selected, actual.Final);
+                AssertFinalAfterIdentityCastReduction(native.Selected, native.Final);
+
+                string retained = "var result=(/*a*/(" + ending + "(int)value" + ending + ")/*b*/);return result+Line();";
+                string shortened = "var result=/*a*/" + ending + "(int)value" + ending + "/*b*/;return result+Line();";
+                Assert.That(native.Selected.Content, Does.Contain(retained));
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content.Replace(retained, shortened, StringComparison.Ordinal)));
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        [TestCase("\n", "restore")]
+        [TestCase("\r\n", "restore")]
+        [TestCase("\r\n", "unexpected-import")]
+        [TestCase("\r\n", "other-default")]
+        [TestCase("\r\n", "before-selection")]
+        [TestCase("\r\n", "after-selection")]
+        public async Task CompactCastRetainsOrRequiresDiscardWhenItsProofExpires(string ending, string mode)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-compact-cast-pair-guards-");
+            try
+            {
+                var actual = await WriteCompilerCase(directory.FullName, marker: null, enabled: true, compactEnding: ending,
+                    observePairs: mode != "other-default", mode: mode);
+                var native = await WriteCompilerCase(directory.FullName, marker: null, enabled: false, compactEnding: ending,
+                    mode: mode == "other-default" ? mode : null);
+                Assert.That(actual.Selected.Name, Is.EqualTo(native.Selected.Name));
+                if (mode == "after-selection")
+                {
+                    Assert.That(actual.Selected.Content, Does.Contain("var result=/*a*/" + ending + "(int)value" + ending + "/*b*/;"));
+                    return; // Compiler result above must require discard, regardless of written isolated files.
+                }
+                Assert.That(actual.Selected.Content, Is.EqualTo(native.Selected.Content));
+                var selected = Tree(native.Selected);
+                var final = Tree(actual.Final);
+                Assert.That(GeneratedCallerLine(final), Is.EqualTo(GeneratedCallerLine(selected)));
+                Assert.That(SignificantTrivia(final), Is.EqualTo(SignificantTrivia(selected)));
+                Assert.That(Endings(final), Is.EqualTo(Endings(selected)));
+                AssertFinalAfterIdentityCastReduction(actual.Selected, actual.Final);
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        [TestCase("null-initializer", "AuthoredCompactCastLocalStatement.WriteCore")]
+        [TestCase("null-line-wrapper", "AuthoredCompactCastTriviaExpression.WriteCore")]
+        [TestCase("null-cast", "CodeWriter.WriteAuthoredIntCastAtColumnZero")]
+        [TestCase("null-operand", "AuthoredBareIntCastExpression.WriteCore")]
+        [TestCase("null-declaration", "AuthoredCompactCastLocalStatement.WriteCore")]
+        [TestCase("null-local", "InferredLocalDeclarationExpression.WriteCore")]
+        public void MalformedCompactCastKeepsItsNativeWriteFailure(string mode, string writer)
+        {
+            var directory = Directory.CreateTempSubdirectory("task05-malformed-compact-");
+            try
+            {
+                var native = Assert.ThrowsAsync<NullReferenceException>(() => WriteCompilerCase(directory.FullName, marker: null,
+                    enabled: false, compactEnding: "\n", mode: mode));
+                Assert.That(native!.StackTrace, Does.Contain(writer));
+                var prepared = Assert.ThrowsAsync<NullReferenceException>(() => WriteCompilerCase(directory.FullName, marker: null,
+                    enabled: true, compactEnding: "\n", mode: mode));
+                Assert.That(prepared!.StackTrace, Does.Contain(writer));
+            }
+            finally { directory.Delete(recursive: true); }
+        }
+
+        private static async Task<(CodeFile Selected, CodeFile Final)> WriteCompilerCase(string directory, string? marker, bool enabled,
+            string? compactEnding = null, bool observePairs = false, string? mode = null)
         {
             string original = Directory.CreateDirectory(Path.Combine(directory, enabled ? "prepared-original" : "native-original")).FullName;
             string isolated = Directory.CreateDirectory(Path.Combine(directory, enabled ? "prepared-isolated" : "native-isolated")).FullName;
@@ -126,26 +221,47 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 ",\"disable-xml-docs\":true,\"unreferenced-types-handling\":\"keepAll\"}";
             var mock = await MockHelpers.LoadMockGeneratorAsync(outputPath: original, configuration: config,
                 compilation: () => Task.FromResult<Compilation>(CSharpCompilation.Create("NativeCallerLineInputs")));
-            var owner = new Clock(compactEnding);
+            var owner = new Clock(compactEnding, mode == "other-default" ? 1 : 0, mode);
+            bool expire = mode is "before-selection" or "after-selection";
+            string? copiedCore = expire ? Path.Combine(directory, "captured-core.dll") : null;
+            if (copiedCore is not null) { File.Copy(typeof(object).Assembly.Location, copiedCore); }
             CodeModelGenerator.Instance = new NativeGenerator(new GeneratorContext(mock.Object.Configuration), mock.Object.InputLibrary, new TestOutputLibrary(owner));
             CodeFile? selected = null;
             int captures = 0;
             int castVisits = 0;
             int operandVisits = 0;
+            int mutationCount = 0;
+            void ExpireReference()
+            {
+                using var append = File.Open(copiedCore!, FileMode.Append);
+                append.WriteByte(0);
+                mutationCount++;
+            }
             var pipeline = new CSharpGen
             {
                 PocPreparationObserved = prepared =>
                 {
                     if (prepared is null) { return; }
                     captures++;
-                    Assert.That(prepared.PocGroupingCount, Is.Zero);
-                    if (compactEnding is not null)
+                    Assert.That(prepared.PocGroupingCount, Is.EqualTo(observePairs ? 2 : 0));
+                    if (compactEnding is not null && mode is not ("null-initializer" or "null-line-wrapper"))
                     {
                         var authoredLine = prepared.GetSourceFile(owner)!.Roots.SelectMany(root => root.DescendantsAndSelf())
                             .Single(node => node.Producer is AuthoredCompactCastLineExpression);
                         Assert.That(authoredLine.IsOpaque, Is.False);
                         Assert.That(authoredLine.IntrinsicSource.LineEndings, Is.EqualTo(SourceFactState.Unavailable));
                         Assert.That(authoredLine.IntrinsicSource.IntrinsicLineEnding, Is.Null);
+                    }
+                    if (mode == "restore")
+                    {
+                        prepared.PocAfterOpening = () =>
+                        {
+                            var declaration = owner.CastOperand!.Declaration;
+                            string previous = declaration.RequestedName;
+                            declaration.Update("other");
+                            declaration.Update(previous);
+                            mutationCount++;
+                        };
                     }
                     prepared.PocNativeWriteObserver = node =>
                     {
@@ -156,18 +272,48 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 PocRawFileObserved = (prepared, provider, file) =>
                 {
                     Assert.That(provider, Is.SameAs(owner));
-                    Assert.That(prepared?.PocGroupingUses ?? 0, Is.Zero);
-                    Assert.That(file.PreparedGroupingCount, Is.Zero);
+                    if (!observePairs)
+                    {
+                        Assert.That(prepared?.PocGroupingUses ?? 0, Is.Zero);
+                        Assert.That(file.PreparedGroupingCount, Is.Zero);
+                    }
                     if (enabled && compactEnding is not null)
                     {
-                        Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.True);
-                        Assert.That(file.SelectPreparedForms(false, false, false).Content, Is.EqualTo(file.Content));
+                        Assert.That(file.SourceConsumption?.WasCurrentAtEndOfWrite, Is.EqualTo(mode != "restore"));
+                        string fallback = file.SelectPreparedForms(false, false, false).Content;
+                        if (observePairs)
+                        {
+                            int uses = mode == "restore" ? 1 : 2;
+                            Assert.That(prepared!.PocGroupingUses, Is.EqualTo(uses));
+                            Assert.That(file.PreparedGroupingCount, Is.EqualTo(uses));
+                            if (mode == "unexpected-import")
+                            {
+                                // Exercise the file-local observation without changing the emitted test inputs.
+                                prepared.ObserveCompactCallerLineImports(prepared.GetSourceFile(owner), ["System.Runtime.CompilerServices", "System"]);
+                                mutationCount++;
+                            }
+                            Assert.That(fallback, Does.Contain("var result=(/*a*/(" + compactEnding + "(int)value" + compactEnding + ")/*b*/);"));
+                        }
+                        else { Assert.That(fallback, Is.EqualTo(file.Content)); }
                     }
                 },
-                PocSelectedFileObserved = file => selected = file
+                PocGroupingDecisionObserved = (_, allowed) =>
+                {
+                    if (mode == "before-selection")
+                    {
+                        Assert.That(allowed, Is.True);
+                        ExpireReference();
+                    }
+                },
+                PocSelectedFileObserved = file =>
+                {
+                    selected = file;
+                    if (mode == "after-selection") { ExpireReference(); }
+                }
             };
-            var result = await pipeline.ExecuteForCompilerBuildAsync(isolated, new Session(original, marker));
-            Assert.That(result.UsedCapturedResidualInputs, Is.EqualTo(enabled));
+            var result = await pipeline.ExecuteForCompilerBuildAsync(isolated, new Session(original, marker, copiedCore));
+            Assert.That(result.UsedCapturedResidualInputs, Is.EqualTo(enabled && !expire));
+            Assert.That(mutationCount, Is.EqualTo(mode is "restore" or "unexpected-import" or "before-selection" or "after-selection" ? 1 : 0));
             Assert.That(captures, Is.EqualTo(enabled ? 1 : 0));
             Assert.That(castVisits, Is.EqualTo(enabled ? 1 : 0));
             Assert.That(operandVisits, Is.EqualTo(enabled ? 1 : 0));
@@ -203,7 +349,10 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             var model = compilation.GetSemanticModel(tree);
             var declaration = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(node => node.Identifier.ValueText == "Line");
             var symbol = model.GetDeclaredSymbol(declaration)!;
-            Assert.That(symbol.Parameters.Single().GetAttributes().Single().AttributeClass?.ToDisplayString(), Is.EqualTo(typeof(CallerLineNumberAttribute).FullName));
+            var attribute = symbol.Parameters.Single().GetAttributes().Single();
+            var canonical = compilation.GetSpecialType(SpecialType.System_Object).ContainingAssembly.GetTypeByMetadataName(typeof(CallerLineNumberAttribute).FullName!);
+            Assert.That(canonical, Is.Not.Null);
+            Assert.That(SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, canonical), Is.True);
             var call = root.DescendantNodes().OfType<InvocationExpressionSyntax>().Single();
             var operation = (IInvocationOperation)model.GetOperation(call)!;
             Assert.That(SymbolEqualityComparer.Default.Equals(operation.TargetMethod, symbol), Is.True);
@@ -265,18 +414,18 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             public override OutputLibrary OutputLibrary => output;
         }
 
-        private sealed class Session(string directory, string source) : ITrustedCompilerBuildSession
+        private sealed class Session(string directory, string? source, string? core = null) : ITrustedCompilerBuildSession
         {
-            private readonly string _sourceHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(source)));
-            private readonly string _core = typeof(object).Assembly.Location;
-            private readonly string _coreHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(object).Assembly.Location)));
+            private readonly string? _sourceHash = source is null ? null : Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(source)));
+            private readonly string _core = core ?? typeof(object).Assembly.Location;
+            private readonly string _coreHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(core ?? typeof(object).Assembly.Location)));
             public CompilerBuildInputCapture Capture => new(directory, "native-cast-caller-line-output", "Debug|net10.0", "12.0", "Actual", [],
-                [new CapturedCompilerSource(source, _sourceHash)], [new CapturedCompilerReference(_core, _coreHash, [], false)], false, false,
+                source is null ? [] : [new CapturedCompilerSource(source, _sourceHash!)], [new CapturedCompilerReference(_core, _coreHash, [], false)], false, false,
                 new CSharpParseOptions(LanguageVersion.CSharp12), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary), null);
             public bool IsCurrent() => true;
         }
 
-        private sealed class Clock(string? compactEnding) : TypeProvider
+        private sealed class Clock(string? compactEnding, int lineDefault, string? mode) : TypeProvider
         {
             internal ValueExpression? CastNode { get; private set; }
             internal VariableExpression? CastOperand { get; private set; }
@@ -287,7 +436,7 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
             protected internal override MethodProvider[] BuildMethods()
             {
                 var value = new ParameterProvider("value", $"", typeof(int));
-                var line = new ParameterProvider("line", $"", typeof(int), defaultValue: Literal(0),
+                var line = new ParameterProvider("line", $"", typeof(int), defaultValue: Literal(lineDefault),
                     attributes: new AttributeStatement[] { new(typeof(CallerLineNumberAttribute), Array.Empty<ValueExpression>()) });
                 var local = new VariableExpression(typeof(int), "result");
                 VariableExpression operand = value;
@@ -304,12 +453,13 @@ namespace Microsoft.TypeSpec.Generator.Tests.Writers
                 }
                 else
                 {
-                    var cast = new AuthoredBareIntCastExpression(operand);
+                    var cast = new AuthoredBareIntCastExpression(mode == "null-operand" ? null! : operand);
                     CastNode = cast;
-                    var inner = new AuthoredCompactCastLineExpression(cast, compactEnding == "\r\n", 'b');
-                    var outer = new AuthoredCompactCastTriviaExpression(inner, 'a');
-                    body = new AuthoredCompactCastLocalStatement(new InferredLocalDeclarationExpression(local), outer,
-                        new AuthoredCompactLocalAdditionExpression(local, call));
+                    var inner = new AuthoredCompactCastLineExpression(mode == "null-cast" ? null! : cast, compactEnding == "\r\n", 'b');
+                    var outer = new AuthoredCompactCastTriviaExpression(mode == "null-line-wrapper" ? null! : inner, 'a');
+                    var declaration = new InferredLocalDeclarationExpression(mode == "null-local" ? null! : local);
+                    body = new AuthoredCompactCastLocalStatement(mode == "null-declaration" ? null! : declaration,
+                        mode == "null-initializer" ? null! : outer, new AuthoredCompactLocalAdditionExpression(local, call));
                 }
                 return [new MethodProvider(new MethodSignature("M", null, MethodSignatureModifiers.Public, typeof(int), null, [value]), body, this),
                     new MethodProvider(new MethodSignature("Line", null, MethodSignatureModifiers.Private | MethodSignatureModifiers.Static, typeof(int), null, [line]), (VariableExpression)line, this)];

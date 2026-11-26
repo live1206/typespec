@@ -68,7 +68,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
 
         private bool NativePocDataIsCurrent(PreparedSourceFile file) =>
             _nativePocFiles.Contains(file) && CachedPocFormals(file) && NativePocContextDataIsCurrent() && file.IsCurrent() &&
-            (!ReferenceEquals(file, _nativePocFileRequiringNoImports) || InferredLocalOwnerIsUnsplit(file));
+            (!ReferenceEquals(file, _nativePocFileRequiringNoImports) && !ReferenceEquals(file, _compactCallerLineFile) || InferredLocalOwnerIsUnsplit(file));
 
         private bool ObserveNativePocSource(PreparedSourceFile file)
         {

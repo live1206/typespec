@@ -46,6 +46,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 Func<bool>? argumentCurrent = null;
                 (SourceOccurrenceId Member, SourceOccurrenceId Receiver)? qualifiedMember = null;
                 bool requiresNoImports = false;
+                MethodProvider? compactCallerLine = null;
+                var compactNodes = new HashSet<SourceOccurrenceId>();
                 if (binaryCatalogKnown)
                 {
                     CaptureBinaryParentRoles(file, nativeMethods, nativeSignatures, nativeNodes, choices);
@@ -62,6 +64,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     CaptureUsedLocalInitializers(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     requiresNoImports = CaptureInferredLocalGrouping(file, nativeMethods, nativeSignatures, nativeNodes, choices) ||
                         CaptureInferredWideningCastGrouping(file, nativeMethods, nativeSignatures, nativeNodes, choices);
+                    if (!requiresNoImports) { compactCallerLine = CaptureCompactCallerLineGrouping(file, compactNodes, choices); }
                     if (files.Length == 1)
                     {
                         argumentCurrent = CaptureOrdinaryArguments(file, nativeMethods, nativeSignatures, nativeNodes, choices) ??
@@ -71,7 +74,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                         CaptureSourceNumberCasts(file, nativeMethods, nativeSignatures, nativeNodes, choices);
                     }
                 }
-                var envelope = CapturePocEnvelope(file, nativeMethods, out var finalData);
+                var envelope = CapturePocEnvelope(file, nativeMethods, out var finalData, compactCallerLine is not null ? compactNodes : null);
                 if (argumentCurrent is not null && envelope is { } fileEnvelope && finalData is { } fileData)
                 {
                     envelope = () => fileEnvelope() && argumentCurrent();
@@ -79,7 +82,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 }
                 var nodes = file.Roots.Where(r => r.Id.RootRole != "type-documentation").SelectMany(r => r.DescendantsAndSelf()).ToArray();
                 if (envelope is null || finalData is null || nodes.Any(n => !PocKnown(n, nativeSignatures, nativeNodes) &&
-                    (n.IsOpaque || qualifiedMember is not { } exact || n.Id != exact.Member && n.Id != exact.Receiver)))
+                    (n.IsOpaque || !compactNodes.Contains(n.Id) && (qualifiedMember is not { } exact || n.Id != exact.Member && n.Id != exact.Receiver))))
                 { continue; }
                 // Compatibility is the OLD whole-file admission, not merely the
                 // shape of one equality inside a newly admitted arithmetic file.
@@ -109,6 +112,7 @@ namespace Microsoft.TypeSpec.Generator.Providers
                     file.UsesNativeWrittenIdentity = true;
                     _nativePocFiles.Add(file);
                     if (requiresNoImports) { _nativePocFileRequiringNoImports = file; }
+                    if (compactCallerLine is not null) { _compactCallerLineFile = file; }
                 }
                 foreach (var choice in choices)
                 { _pocGrouping.Add(choice.Id, (file, choice, envelope, finalData)); }
@@ -929,7 +933,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
             return true;
         }
 
-        private Func<bool>? CapturePocEnvelope(PreparedSourceFile file, HashSet<MethodProvider> nativeMethods, out Func<bool>? finalData)
+        private Func<bool>? CapturePocEnvelope(PreparedSourceFile file, HashSet<MethodProvider> nativeMethods, out Func<bool>? finalData,
+            HashSet<SourceOccurrenceId>? compactNodes = null)
         {
             finalData = null;
             var owner = file.FileOwner;
@@ -947,7 +952,8 @@ namespace Microsoft.TypeSpec.Generator.Providers
                 if (root.Producer is MethodProvider method)
                 {
                     if (method.GetType() != typeof(MethodProvider) ||
-                        !PocSignature(method.Signature) && !(nativeMethods.Contains(method) && PocNativeSignature(method.Signature)))
+                        !PocSignature(method.Signature) && !(nativeMethods.Contains(method) && PocNativeSignature(method.Signature)) &&
+                        compactNodes?.Contains(root.Id) != true)
                     { return null; }
                     var suppressions = method.Suppressions;
                     if (!ContractCollections.TryCopy(suppressions, out var ownedSuppressions) ||

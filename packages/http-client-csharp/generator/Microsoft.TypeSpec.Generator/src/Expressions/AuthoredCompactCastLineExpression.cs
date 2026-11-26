@@ -19,9 +19,12 @@ namespace Microsoft.TypeSpec.Generator.Expressions
         internal override void WriteCore(CodeWriter writer)
         {
             string ending = CrLf ? "\r\n" : "\n";
-            writer.AppendRaw("(" + ending);
+            bool omit = writer.TryBeginPocGrouping(this);
+            if (omit) { writer.AppendPocGroupingDelimiter('('); writer.PocAfterGroupingOpening(); }
+            else { writer.AppendRaw("("); }
+            writer.AppendRaw(ending);
             writer.WriteAuthoredIntCastAtColumnZero(Operand);
-            writer.AppendRaw(ending + ")" + After);
+            writer.AppendAuthoredCompactCastTail(ending, After, omit);
         }
     }
 }
